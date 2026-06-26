@@ -629,6 +629,16 @@ pub fn types_compat(want: *Type, got: *Type) -> bool {
     if type_eq(want, got) {
         return true;
     }
+    // A bare generic-struct literal (`Box { … }` / `Json { … }`) infers as the
+    // un-parameterized name (`Box` / `Json`), but its declared/return/field type
+    // is `Box<T>` / `Json<T>`. Same base name => compatible; the literal's type
+    // args are inferred from its field values, not a real mismatch.
+    if want.kind == TY_GENERIC && got.kind == TY_NAMED && want.name.eq(got.name) {
+        return true;
+    }
+    if want.kind == TY_NAMED && got.kind == TY_GENERIC && want.name.eq(got.name) {
+        return true;
+    }
     if is_int_type(want) && is_int_type(got) {
         return true;
     }
@@ -668,6 +678,29 @@ pub fn types_compat(want: *Type, got: *Type) -> bool {
         return true;
     }
     return false;
+}
+
+// True when `ty` is a "plain" named type, or a pointer/borrow chain ending in
+// one — excluding generics (`Vector<T>`), tuples, option/result wrappers,
+// fn-pointers, and the typer's placeholder names. Struct-literal field-value
+// checking compares ONLY these, so it never false-positives on a `Vector<T>`,
+// a `?T`, an unresolved (`__unknown__`) value, or a `Self`/generic field.
+fn _struct_field_checkable(ty: *Type) -> bool {
+    if ty == null {
+        return false;
+    }
+    let mut b: *Type = ty;
+    while b != null && (b.kind == TY_POINTER || b.kind == TY_BORROW || b.kind == TY_BORROW_MUT) {
+        b = b.inner;
+    }
+    if b == null || b.kind != TY_NAMED {
+        return false;
+    }
+    let n: string = b.name;
+    if n.eq("__unknown__") || n.eq("__fn__") || n.eq("__error__") || n.eq("Self") || n.eq("void") {
+        return false;
+    }
+    return true;
 }
 
 // ---- function signatures -------------------------------------------------
@@ -760,6 +793,13 @@ pub struct Typer {
     // `<StructName>::<field>` -> true for every declared field. Drives
     // "no field" detection for `obj.field` reads on known structs.
     pub struct_fields_all: *HashMap<bool>,
+    // `<StructName>::<field>` -> declared field Type. Drives struct-literal
+    // field-value type checking (pointer-vs-value, wrong-struct mismatches).
+    pub struct_field_types: *HashMap<Type>,
+    // Struct names that declare `<T, ...>` type params. Their field types can
+    // reference those params, so literal field-value checking is skipped for
+    // them (no monomorphization at this stage) to avoid false positives.
+    pub struct_generic: *HashMap<bool>,
     pub scope: *HashMap<Type>, // current scope: name -> Type (heap-alloc'd)
     pub module_scope: *HashMap<Type>, // top-level consts (visible inside any fn body)
     // Freestanding / kernel build: also register top-level `let` globals in
@@ -1298,6 +1338,8 @@ impl Typer {
         t.structs = structs;
         t.method_names = method_names;
         t.struct_fields_all = struct_fields_all;
+        t.struct_field_types = HashMap::new();
+        t.struct_generic = HashMap::new();
         t.scope = scope;
         t.module_scope = mscope;
         t.freestanding = false;
@@ -1531,6 +1573,8 @@ impl Typer {
         self.structs.free();
         self.method_names.free();
         self.struct_fields_all.free();
+        self.struct_field_types.free();
+        self.struct_generic.free();
         self.scope.free();
         self.module_scope.free();
         self.owned_locals.free();
@@ -1855,12 +1899,20 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
         }
         if s.kind == ST_STRUCT {
             t.structs.insert(s.name, true);
+            // Generic structs (`struct Box<T>`) have field types that may name a
+            // type param, so their literal field-value checking is skipped.
+            if s.type_params != null && s.type_params.len() > 0 {
+                t.struct_generic.insert(s.name, true);
+            }
             // Borrow rule: reject `&T` / `&mut T` in struct fields. They would
             // require lifetimes to be sound; Glide's design picks `*T` instead.
             if s.struct_fields != null {
                 for let j: i32 = 0; j < s.struct_fields.len(); j++ {
                     let f: Field = s.struct_fields.get(j);
                     t.struct_fields_all.insert(s.name.concat("::").concat(f.name), true);
+                    if f.ty != null {
+                        t.struct_field_types.insert(s.name.concat("::").concat(f.name), *f.ty);
+                    }
                     if f.ty != null && (f.ty.kind == TY_BORROW || f.ty.kind == TY_BORROW_MUT) {
                         t.err_code(s.line, s.column, "borrow-in-field", "borrow `".concat(type_to_string(f.ty)).concat("` not allowed in struct field `").concat(f.name).concat("` (use `*T` instead)"));
                     }
@@ -4514,6 +4566,36 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         return infer_expr(t, e.lhs);
     }
     if e.kind == EX_STRUCT_LIT {
+        // Type-check every field VALUE expression. Without this an unknown name
+        // in a literal slips past the typer and only surfaces at codegen as an
+        // undeclared-C-variable ICE — most easily hit through field shorthand
+        // (`T { a }` is sugar for `T { a: a }`, so a bare `a` with no local `a`
+        // in scope must error `unknown name a`, exactly like `T { a: a }` does).
+        // Also compare each value's type against the declared FIELD type so a
+        // wrong-struct or pointer-vs-value field (`client: HttpClient::new()`
+        // into a `*HttpResponse` field, or `*T` into a `T` field) is reported
+        // here instead of silently miscompiling. Gated hard: skipped for
+        // generic structs, and only "plain named / pointer" type pairs are
+        // compared (see `_struct_field_checkable`) so unresolved / generic /
+        // wrapper values never produce a false positive.
+        if e.args != null {
+            let _sl_sn: string = if e.str_val != null { t._strip_mod_prefix(e.str_val) } else { "" };
+            let _sl_check: bool = !_sl_sn.eq("") && !t.struct_generic.contains(_sl_sn);
+            for let i: i32 = 0; i < e.args.len(); i++ {
+                let fv: Expr = e.args.get(i);
+                let _vt: *Type = infer_expr(t, &fv);
+                if _sl_check && e.field_names != null && i < e.field_names.len() {
+                    let _fn: string = e.field_names.get(i);
+                    let _key: string = _sl_sn.concat("::").concat(_fn);
+                    if t.struct_field_types.contains(_key) {
+                        let _ft: Type = t.struct_field_types.get(_key);
+                        if _struct_field_checkable(&_ft) && _struct_field_checkable(_vt) && !types_compat(&_ft, _vt) {
+                            t.err_code_range(fv.line, fv.column, _arg_span(&fv), "field-type-mismatch", "field `".concat(_fn).concat("` of `").concat(_sl_sn).concat("` expects `").concat(type_to_string(&_ft)).concat("`, got `").concat(type_to_string(_vt)).concat("`"));
+                        }
+                    }
+                }
+            }
+        }
         // The struct type must be in scope. A sibling file's struct used
         // WITHOUT an import type-checks fine here but fails at codegen
         // ('unknown type name'); flag it using the same registry the

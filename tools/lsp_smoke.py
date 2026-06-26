@@ -2119,6 +2119,44 @@ case_completion_absent("Self {} user-struct shadow hides builtin fields",
   'struct Pair {\n    a: i32,\n    b: i32,\n}\nimpl Pair {\n    fn make() -> Self {\n        return Self {\n\n        };\n    }\n}\n',
   {"line":7,"character":0}, ["first", "second"])
 
+# A struct-literal field value referencing an unknown name must be flagged by
+# the typer, not slip through to a codegen ICE. Field shorthand `Self { a }`
+# (sugar for `Self { a: a }`) with no local `a` is the easy way to hit it.
+case_diagnostics('struct-literal field shorthand with unknown name errors',
+    'pub struct Github {\n    a: string,\n}\nimpl Github {\n    pub fn new() -> Self {\n        return Self {\n             a\n        };\n    }\n}\nfn main() -> i32 { return 0; }\n',
+    expect_codes_present=['unknown-name'])
+case_diagnostics('struct-literal field shorthand with a real local is fine',
+    'struct G {\n    a: string,\n    b: i32,\n}\nfn main() -> i32 {\n    let a: string = "x";\n    let b: i32 = 1;\n    let g: G = G { a, b };\n    let _ = g.a;\n    let _ = g.b;\n    return 0;\n}\n',
+    expect_codes_absent=['unknown-name'])
+
+# A struct-literal field whose value type doesn't match the declared field type
+# (wrong struct, or pointer-vs-value) is a `field-type-mismatch`. Covers the
+# `Self { client: HttpClient::new() }` shape (Self resolves to the implementor).
+case_diagnostics('struct-literal field value wrong-struct / pointer mismatch errors',
+    'struct HttpResponse { code: i32 }\n'
+    'struct HttpClientRequest { url: string }\n'
+    'impl HttpClient { pub fn new() -> *HttpClient { return malloc(sizeof(HttpClient)) as *HttpClient; } }\n'
+    'struct HttpClient { id: i32 }\n'
+    'impl HttpClientRequest { pub fn new(u: string) -> *HttpClientRequest { return malloc(sizeof(HttpClientRequest)) as *HttpClientRequest; } }\n'
+    'struct GithubRequest { client: *HttpResponse, req: HttpClientRequest }\n'
+    'impl GithubRequest {\n'
+    '    pub fn new() -> Self {\n'
+    '        return Self { client: HttpClient::new(), req: HttpClientRequest::new("u") };\n'
+    '    }\n'
+    '}\n',
+    expect_codes_present=['field-type-mismatch'])
+case_diagnostics('struct-literal with matching field value types is fine',
+    'struct A { x: i32 }\n'
+    'impl A { pub fn new() -> *A { return malloc(sizeof(A)) as *A; } }\n'
+    'struct W { a: *A, n: i32 }\n'
+    'fn main() -> i32 {\n    let w: W = W { a: A::new(), n: 1 };\n    let _ = w.n;\n    return 0;\n}\n',
+    expect_codes_absent=['field-type-mismatch'])
+case_diagnostics('generic struct literal is never field-type-checked (no false positive)',
+    'struct Box<T> { value: T, count: i32 }\n'
+    'impl Box<T> {\n    pub fn make(v: T) -> Self {\n        return Self { value: v, count: 0 };\n    }\n}\n',
+    expect_codes_absent=['field-type-mismatch'])
+
+
 # ---- workflow-authored 'unused / dead / redundant' lint cases ----
 # unused-struct / unused-enum / unused-const / unused-variant / redundant-import.
 
