@@ -19,10 +19,21 @@
 // s.write_all("hello\n");
 // s.close();
 // ```
+//
+// A `TcpStream` also introspects its endpoints and tunes the socket, so a
+// server can tell exactly who dialed in and shape the connection:
+//
+// ```glide
+// let conn: *TcpStream = listener.accept()?;
+// println!("connection from {}", conn.peer_addr()?.to_string());
+// conn.set_nodelay(true)?;       // low latency for request/response
+// conn.set_keepalive(true)?;     // notice a dead peer
+// ```
 
 import stdlib::net::ip::*;
 import stdlib::net::dns::*;
 import stdlib::net::sys::*;
+import stdlib::net::sockopt::*;
 import stdlib::bytes::*;
 
 pub struct TcpStream {
@@ -194,6 +205,105 @@ impl TcpStream {
     /// SO_RCVTIMEO / SO_SNDTIMEO. Keep the fd blocking for this to bite.
     pub fn set_timeout_ms(self: *TcpStream, ms: i32) {
         let _r: i64 = gnet_set_timeout(self.fd, ms);
+    }
+
+    /// The connected peer's address — who is on the other end. On a
+    /// server-side stream (from `TcpListener::accept`) this is the client
+    /// that dialed in; on a client stream it is the server you connected to.
+    ///
+    /// ```glide
+    /// let conn: *TcpStream = listener.accept()?;
+    /// let who: *SocketAddr = conn.peer_addr()?;
+    /// println!("connection from {}", who.to_string());   // "203.0.113.7:54233"
+    /// ```
+    pub fn peer_addr(self: *TcpStream) -> !*SocketAddr {
+        let mut f: i32 = 0;
+        let mut v4: i64 = 0;
+        let mut hi: i64 = 0;
+        let mut lo: i64 = 0;
+        let mut p: i32 = 0;
+        if gnet_getpeername(self.fd, &f, &v4, &hi, &lo, &p) < 0 {
+            return err("tcp: getpeername: ".concat(gnet_last_error()));
+        }
+        return ok(socketaddr_from_abi(f, v4, hi, lo, p));
+    }
+
+    /// The locally-bound address of this stream (resolves the ephemeral port
+    /// the kernel picked for an outbound `connect`).
+    pub fn local_addr(self: *TcpStream) -> !*SocketAddr {
+        let mut f: i32 = 0;
+        let mut v4: i64 = 0;
+        let mut hi: i64 = 0;
+        let mut lo: i64 = 0;
+        let mut p: i32 = 0;
+        if gnet_getsockname(self.fd, &f, &v4, &hi, &lo, &p) < 0 {
+            return err("tcp: getsockname: ".concat(gnet_last_error()));
+        }
+        return ok(socketaddr_from_abi(f, v4, hi, lo, p));
+    }
+
+    /// Just the peer's IP, dropping the port — a shortcut over `peer_addr`
+    /// for logging / allow-listing.
+    ///
+    /// ```glide
+    /// let ip: *IpAddr = conn.peer_ip()?;
+    /// if ip.is_loopback() { println!("local caller"); }
+    /// ```
+    pub fn peer_ip(self: *TcpStream) -> !*IpAddr {
+        let addr: *SocketAddr = self.peer_addr()?;
+        return ok(addr.ip);
+    }
+
+    /// Half-close the connection with `SHUT_RD` / `SHUT_WR` / `SHUT_RDWR`.
+    /// `shutdown(SHUT_WR)` signals EOF to the peer while still letting you
+    /// drain its reply — unlike `close`, the fd stays open.
+    pub fn shutdown(self: *TcpStream, how: i32) -> !i32 {
+        if gnet_shutdown(self.fd, how) < 0 {
+            return err("tcp: shutdown: ".concat(gnet_last_error()));
+        }
+        return ok(0);
+    }
+
+    /// TCP_NODELAY — disable Nagle so small writes flush without waiting to
+    /// coalesce. Worth it for latency-sensitive, request/response protocols.
+    pub fn set_nodelay(self: *TcpStream, on: bool) -> !i32 {
+        return sock_set_nodelay(self.fd, on);
+    }
+
+    /// SO_KEEPALIVE — probe an idle connection so a dead peer eventually
+    /// surfaces as a read/write error instead of a silently-wedged socket.
+    pub fn set_keepalive(self: *TcpStream, on: bool) -> !i32 {
+        return sock_set_keepalive(self.fd, on);
+    }
+
+    /// SO_RCVBUF — receive-buffer size hint in bytes (the kernel may round it).
+    pub fn set_recv_buf(self: *TcpStream, bytes: i32) -> !i32 {
+        return sock_set_recv_buf(self.fd, bytes);
+    }
+
+    /// SO_SNDBUF — send-buffer size hint in bytes (the kernel may round it).
+    pub fn set_send_buf(self: *TcpStream, bytes: i32) -> !i32 {
+        return sock_set_send_buf(self.fd, bytes);
+    }
+
+    /// Read exactly `n` bytes into `buf`, looping until the count is met.
+    /// Returns `n` on success, or an error if the peer closes early — use
+    /// this for fixed-size framing where a short read is a protocol error.
+    ///
+    /// ```glide
+    /// let hdr: *u8 = malloc(4) as *u8;
+    /// conn.read_exact(hdr, 4)?;   // block until all 4 header bytes arrive
+    /// ```
+    pub fn read_exact(self: *TcpStream, buf: *u8, n: i32) -> !i32 {
+        let mut got: i32 = 0;
+        while got < n {
+            let r: i32 = self.read_bytes(&buf[got], n - got)?;
+            if r == 0 {
+                return err("tcp: read_exact: unexpected EOF");
+            }
+            got = got + r;
+        }
+        return ok(got);
     }
 
     // `close` is the Stream trait method (impl below).

@@ -147,7 +147,7 @@ impl Socket {
         if gnet_getsockname(self.fd, &f, &v4, &hi, &lo, &p) < 0 {
             return err("getsockname: ".concat(gnet_last_error()));
         }
-        return ok(_make_addr(f, v4, hi, lo, p));
+        return ok(socketaddr_from_abi(f, v4, hi, lo, p));
     }
 
     /// The connected peer's address.
@@ -160,7 +160,7 @@ impl Socket {
         if gnet_getpeername(self.fd, &f, &v4, &hi, &lo, &p) < 0 {
             return err("getpeername: ".concat(gnet_last_error()));
         }
-        return ok(_make_addr(f, v4, hi, lo, p));
+        return ok(socketaddr_from_abi(f, v4, hi, lo, p));
     }
 
     /// Set an int-valued socket option. `level`/`opt` come from `gnet_const`.
@@ -202,8 +202,10 @@ impl Socket {
     // and a second inherent `close` would collide on the emitted symbol.
 }
 
-// Build a SocketAddr from the unpacked flat ABI.
-fn _make_addr(family: i32, v4: i64, hi: i64, lo: i64, port: i32) -> *SocketAddr {
+// Build a SocketAddr from the unpacked flat ABI. Public so any `.fd`-bearing
+// type (TcpStream, UdpSocket, …) can decode the out-params of
+// gnet_getpeername / gnet_getsockname / gnet_recvfrom without re-deriving it.
+pub fn socketaddr_from_abi(family: i32, v4: i64, hi: i64, lo: i64, port: i32) -> *SocketAddr {
     let ip: *IpAddr = malloc(sizeof(IpAddr)) as *IpAddr;
     if family == AF_V6 {
         ip.kind = 6; ip.v4 = 0; ip.v6_hi = hi; ip.v6_lo = lo;
