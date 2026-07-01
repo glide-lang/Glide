@@ -1420,18 +1420,45 @@ fn _local_type_node_d(stmts: *Vector<Stmt>, line0: i32, var: string, path: strin
         }
     }
     let host: *Stmt = fn_containing(stmts, line0, path);
-    if host == null {
-        return null;
-    }
-    if host.fn_params != null {
-        for let i: i32 = 0; i < host.fn_params.len(); i++ {
-            let p: Param = host.fn_params.get(i);
-            if p.name.eq(var) && p.ty != null {
-                return p.ty;
+    if host != null {
+        if host.fn_params != null {
+            for let i: i32 = 0; i < host.fn_params.len(); i++ {
+                let p: Param = host.fn_params.get(i);
+                if p.name.eq(var) && p.ty != null {
+                    return p.ty;
+                }
             }
         }
+        let sv: *Type = _scope_var_node(host.fn_body, line0, var, stmts, path, depth);
+        if sv != null {
+            return sv;
+        }
     }
-    return _scope_var_node(host.fn_body, line0, var, stmts, path, depth);
+    // Module-level `const` / `let` — locals and params shadow these, so this
+    // is the fallback. Without it, `res.<member>` on a top-level const showed
+    // no methods.
+    return _toplevel_const_type(stmts, var);
+}
+
+// Resolve a module-level `const` / `let` (top-level stmt) by name to its
+// declared type, inferring from the initializer when unannotated.
+fn _toplevel_const_type(stmts: *Vector<Stmt>, var: string) -> *Type {
+    if stmts == null {
+        return null;
+    }
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if (s.kind == ST_CONST || s.kind == ST_LET) && s.name.eq(var) {
+            if s.let_ty != null {
+                return s.let_ty;
+            }
+            if s.let_value != null {
+                return lsp_infer_expr(stmts, null, s.let_value);
+            }
+            return null;
+        }
+    }
+    return null;
 }
 
 fn _scope_var_node(body: *Vector<Stmt>, line0: i32, var: string, root: *Vector<Stmt>, path: string, depth: i32) -> *Type {
