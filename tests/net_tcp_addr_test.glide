@@ -1,0 +1,91 @@
+import stdlib::testing::*;
+import stdlib::net::listener::*;
+import stdlib::net::tcp::*;
+import stdlib::net::ip::*;
+
+// One-shot server for the address / socket-option coverage: accept a single
+// connection, tune it from the server side (nodelay + keepalive), send a
+// known 8-byte payload for the read_exact test, then linger so the client
+// has time to introspect the still-open connection before it closes.
+fn _addr_server(port: i32) {
+    let l: *TcpListener = TcpListener::bind(port).val;
+    let c: *TcpStream = l.accept().val;
+    let _n: !i32 = c.set_nodelay(true);
+    let _k: !i32 = c.set_keepalive(true);
+    let _w: !i32 = c.write_all("exactly!");
+    sleep_ms(200);
+    c.close();
+    l.close();
+}
+
+// peer_addr / local_addr / peer_ip on a live loopback connection.
+fn test_peer_and_local_addr() -> i32 {
+    spawn_thread _addr_server(42410);
+    sleep_ms(300);
+    let r: !*TcpStream = TcpStream::connect_host("127.0.0.1", 42410);
+    assert!(r.ok);
+    let s: *TcpStream = r.val;
+
+    // The peer is the server we dialed: loopback, on the port we bound.
+    let peer: !*SocketAddr = s.peer_addr();
+    assert!(peer.ok);
+    assert!(peer.val.ip.is_loopback());
+    assert_eq!(peer.val.port, 42410);
+
+    // The local end resolves the ephemeral port the kernel handed us.
+    let local: !*SocketAddr = s.local_addr();
+    assert!(local.ok);
+    assert!(local.val.ip.is_loopback());
+    assert!(local.val.port > 0);
+
+    // peer_ip is the port-less shortcut over peer_addr.
+    let ip: !*IpAddr = s.peer_ip();
+    assert!(ip.ok);
+    assert!(ip.val.is_loopback());
+
+    s.close();
+    return 0;
+}
+
+// The tuning setters succeed on a real stream fd.
+fn test_stream_socket_options() -> i32 {
+    spawn_thread _addr_server(42411);
+    sleep_ms(300);
+    let r: !*TcpStream = TcpStream::connect_host("127.0.0.1", 42411);
+    assert!(r.ok);
+    let s: *TcpStream = r.val;
+
+    assert!(s.set_nodelay(true).ok);
+    assert!(s.set_keepalive(true).ok);
+    assert!(s.set_recv_buf(65536).ok);
+    assert!(s.set_send_buf(65536).ok);
+
+    s.close();
+    return 0;
+}
+
+// read_exact fills the whole buffer, returning the full count, and the bytes
+// match what the server sent.
+fn test_read_exact_roundtrip() -> i32 {
+    spawn_thread _addr_server(42412);
+    sleep_ms(300);
+    let r: !*TcpStream = TcpStream::connect_host("127.0.0.1", 42412);
+    assert!(r.ok);
+    let s: *TcpStream = r.val;
+
+    let exp: string = "exactly!";
+    let buf: *u8 = malloc(8) as *u8;
+    let got: !i32 = s.read_exact(buf, 8);
+    assert!(got.ok);
+    assert_eq!(got.val, 8);
+
+    let mut same: bool = true;
+    for let i: i32 = 0; i < 8; i++ {
+        if buf[i] as i32 != exp.at(i).to_int() { same = false; }
+    }
+    assert!(same);
+
+    free(buf as *void);
+    s.close();
+    return 0;
+}
