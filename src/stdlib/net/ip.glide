@@ -463,7 +463,7 @@ impl SocketAddr {
 
 // ---- shared int-to-string ----
 
-fn _itos(n: i32) -> string {
+pub fn _itos(n: i32) -> string {
     if n == 0 { return "0"; }
     let mut x: i32 = n;
     let mut neg: bool = false;

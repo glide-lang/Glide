@@ -29,6 +29,7 @@
 
 import stdlib::net::sys::*;
 import stdlib::net::tcp::*;
+import stdlib::net::ip::*;
 
 pub struct TcpListener {
     pub fd: i64,
@@ -85,12 +86,39 @@ impl TcpListener {
     }
 }
 
+// Drop the leading "<errno>:" that gnet_last_error() prepends, so a message
+// reads "Address already in use" instead of "98:Address already in use".
+fn _strip_errno(raw: string) -> string {
+    let mut i: i32 = 0;
+    while i < raw.len() && raw.at(i).to_int() >= 48 && raw.at(i).to_int() <= 57 {
+        i = i + 1;
+    }
+    if i > 0 && i < raw.len() && raw.at(i).to_int() == 58 {
+        return raw.substring(i + 1, raw.len());
+    }
+    return raw;
+}
+
+// A friendly bind failure: name the port and, for the two everyday causes
+// (address already in use / missing privileges), add an actionable hint.
+fn _bind_error(port: i32, raw: string) -> string {
+    let msg: string = _strip_errno(raw);
+    let low: string = msg.to_lower();
+    if low.contains("in use") {
+        return "tcp: bind: port ".concat(_itos(port)).concat(" is already in use — another process is bound to it (or it is in TIME_WAIT; retry shortly)");
+    }
+    if low.contains("permission") || low.contains("denied") || low.contains("access") {
+        return "tcp: bind: permission denied for port ".concat(_itos(port)).concat(" — ports below 1024 need elevated privileges");
+    }
+    return "tcp: bind: ".concat(msg).concat(" (port ").concat(_itos(port)).concat(")");
+}
+
 // Shared bind+listen path. `reuseport` adds SO_REUSEPORT when the platform
 // exposes it (gnet_const returns -1 where it doesn't). 0 as the v4 address
 // is INADDR_ANY in the flat ABI (htonl(0) in netcore).
 fn _listen(port: i32, reuseport: bool) -> !*TcpListener {
     let fd: i64 = gnet_socket(AF_V4, SOCK_STREAM, 0);
-    if fd < 0 { return err("tcp: socket: ".concat(gnet_last_error())); }
+    if fd < 0 { return err("tcp: socket: ".concat(_strip_errno(gnet_last_error()))); }
     let _ra: i64 = gnet_setsockopt_int(fd, gnet_const(OPT_SOL_SOCKET),
                                        gnet_const(OPT_SO_REUSEADDR), 1);
     if reuseport {
@@ -102,12 +130,12 @@ fn _listen(port: i32, reuseport: bool) -> !*TcpListener {
     if gnet_bind(fd, AF_V4, 0, 0, 0, port) < 0 {
         let e: string = gnet_last_error();
         gnet_close(fd);
-        return err("tcp: bind: ".concat(e));
+        return err(_bind_error(port, e));
     }
     if gnet_listen(fd, 128) < 0 {
         let e: string = gnet_last_error();
         gnet_close(fd);
-        return err("tcp: listen: ".concat(e));
+        return err("tcp: listen: ".concat(_strip_errno(e)));
     }
     let l: *TcpListener = malloc(sizeof(TcpListener)) as *TcpListener;
     l.fd = fd;
