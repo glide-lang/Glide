@@ -873,7 +873,24 @@ pub fn lsp_infer_expr(stmts: *Vector<Stmt>, host: *Stmt, e: *Expr) -> *Type {
         }
         if e.lhs.kind == EX_MEMBER && e.lhs.lhs != null {
             let recv: *Type = lsp_infer_expr(stmts, host, e.lhs.lhs);
-            return _method_ret_subst(stmts, recv, e.lhs.field);
+            let m: string = e.lhs.field;
+            // Intrinsic wrapper methods on !T / ?T / ?!T aren't declared impls,
+            // so the impl resolver can't see them — resolve here, mirroring the
+            // typer. `unwrap` / `expect` / `unwrap_or(_else)` yield the inner T,
+            // the `is_*` predicates bool, and `unwrap_err` the error string.
+            let w: *Type = _strip_ptr_borrow(recv);
+            if w != null && (w.kind == TY_RESULT || w.kind == TY_OPTION || w.kind == TY_OPT_RESULT) {
+                if m.eq("unwrap") || m.eq("expect") || m.eq("unwrap_or") || m.eq("unwrap_or_else") {
+                    return w.inner;
+                }
+                if m.eq("is_some") || m.eq("is_none") || m.eq("is_ok") || m.eq("is_err") {
+                    return ty_named("bool");
+                }
+                if m.eq("unwrap_err") {
+                    return ty_named("string");
+                }
+            }
+            return _method_ret_subst(stmts, recv, m);
         }
         return null;
     }
