@@ -2697,10 +2697,14 @@ fn parse_expr(p: *Parser, min_bp: i32) -> *Expr {
             left = expr_postdec(left);
             continue;
         }
-        // postfix ?  (Result error propagation)
+        // postfix ?  (Result error propagation). Anchor the node at the `?`
+        // token itself, not the operand's start, so diagnostics (e.g. the
+        // "can only propagate in a fn returning !T" error) point at the `?`.
         if p.at_op("?") {
+            let ql: i32 = p.current.line;
+            let qc: i32 = p.current.column;
             p.advance();
-            left = expr_unary(UN_TRY, left, left.line, left.column);
+            left = expr_unary(UN_TRY, left, ql, qc);
             continue;
         }
         // cast: as Type
