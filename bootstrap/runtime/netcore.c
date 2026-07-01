@@ -236,6 +236,7 @@ int gnet_const(int which) {
         case 9:  return IP_TTL;
         case 10: return IP_MULTICAST_TTL;
         case 11: return IP_MULTICAST_LOOP;
+        case 12: return SO_KEEPALIVE;
         default: return -1;
     }
 }

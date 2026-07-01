@@ -66,6 +66,7 @@ pub const OPT_IPPROTO_IP:  i32 = 8;
 pub const OPT_IP_TTL:      i32 = 9;
 pub const OPT_IP_MULTICAST_TTL:  i32 = 10;
 pub const OPT_IP_MULTICAST_LOOP: i32 = 11;
+pub const OPT_SO_KEEPALIVE: i32 = 12;
 
 // shutdown(how) values are uniform across platforms.
 pub const SHUT_RD: i32 = 0;

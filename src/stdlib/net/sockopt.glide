@@ -45,6 +45,12 @@ pub fn sock_set_nodelay(fd: i64, on: bool) -> !i32 {
     return _set(fd, OPT_IPPROTO_TCP, OPT_TCP_NODELAY, _bool(on));
 }
 
+/// SO_KEEPALIVE — send periodic keepalive probes so a dead peer eventually
+/// surfaces as an error instead of a silently-wedged connection.
+pub fn sock_set_keepalive(fd: i64, on: bool) -> !i32 {
+    return _set(fd, OPT_SOL_SOCKET, OPT_SO_KEEPALIVE, _bool(on));
+}
+
 /// SO_BROADCAST — allow sending to a broadcast address (UDP).
 pub fn sock_set_broadcast(fd: i64, on: bool) -> !i32 {
     return _set(fd, OPT_SOL_SOCKET, OPT_SO_BROADCAST, _bool(on));
