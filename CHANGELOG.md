@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Tooling
+
+- **`glide upgrade`** self-updates the toolchain to the latest published
+  release — no more manual GitHub downloads on every version bump.
+  `glide upgrade --check` reports whether a newer version is available without
+  installing it. Linux/macOS for now.
+
+### LSP / diagnostics
+
+- Diagnostics now underline the exact operator. The `?`-propagation error, and
+  binary / assignment type-mismatch errors (plus the string-`==` and tuple-`==`
+  checks), no longer point at the left operand.
+- Hover infers the type of a `let` bound to a method / function call, `?`
+  propagation, unary / binary expressions, `as` casts, indexing, tuple literals
+  and `format!` — cases that previously showed the name with no type.
+
 ## 0.6.1 — 2026-07-01
 
 A networking point release: `TcpStream` can finally see who is on the other end
