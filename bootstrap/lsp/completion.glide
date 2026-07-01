@@ -4256,8 +4256,35 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
     _ctor_completion(items, seen, "err", "err(message) -> !T", "err($0)");
     _ctor_completion(items, seen, "some", "some(value) -> ?T", "some($0)");
     _ctor_completion(items, seen, "none", "none() -> ?T", "none()");
+    // 6. Always-available builtin macros. User macros come from ST_MACRO_DEF;
+    //    these are codegen-level (no import), so surface them explicitly.
+    _push_builtin_macros(items, seen);
     seen.free();
     lsp_send_response(id, items);
+}
+
+// Codegen builtin macros offered on the bare-ident path. `format!` and friends
+// aren't ST_MACRO_DEF nodes, so without this they never show up in completion.
+fn _push_builtin_macros(items: *JsonValue, seen: *HashMap<bool>) {
+    _builtin_macro(items, seen, "println", "println!(fmt, args...)  — print a line", "println!(\"".concat(_tab("1")).concat("\")").concat(_tab("0")));
+    _builtin_macro(items, seen, "print", "print!(fmt, args...)  — print, no newline", "print!(\"".concat(_tab("1")).concat("\")").concat(_tab("0")));
+    _builtin_macro(items, seen, "format", "format!(fmt, args...) -> string", "format!(\"".concat(_tab("1")).concat("\")").concat(_tab("0")));
+    _builtin_macro(items, seen, "panic", "panic!(msg)  — abort with a message", "panic!(\"".concat(_tab("1")).concat("\")"));
+    _builtin_macro(items, seen, "assert", "assert!(cond)  — abort if false", "assert!(".concat(_tab("1")).concat(")"));
+    _builtin_macro(items, seen, "dbg", "dbg!(expr)  — print then return expr", "dbg!(".concat(_tab("1")).concat(")"));
+    _builtin_macro(items, seen, "vec_of", "vec_of!(a, b, ...) -> *Vector<T>", "vec_of!(".concat(_tab("1")).concat(")"));
+}
+
+// One builtin-macro completion: label carries the `!`; snippet inserts the
+// full call. kind 2 (Method) is what the LSP path uses for macros.
+fn _builtin_macro(items: *JsonValue, seen: *HashMap<bool>, name: string, sig: string, snip: string) {
+    let label: string = name.concat("!");
+    if seen.contains(label) {
+        return;
+    }
+    seen.insert(label, true);
+    let no_edit: *JsonValue = null;
+    json_arr_push(items, rich_completion_item(label, "", 2, sig, "", "", snip, true, no_edit));
 }
 
 // One Option/Result constructor completion: kind=Function, snippet insert,
