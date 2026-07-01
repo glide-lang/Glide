@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.6.1 — 2026-07-01
+
+A networking point release: `TcpStream` can finally see who is on the other end
+and tune the socket, instead of only reading and writing bytes.
 
 ### Networking
 
