@@ -445,6 +445,7 @@ fn print_usage() {
     println!("  glide clean                (drop build/ + glide.lock)");
     println!("  glide install <path>");
     println!("  glide install <git-url> <rev>");
+    println!("  glide upgrade [--check]    (self-update to the latest release)");
     println!("  glide target <list|add|remove|dir>  (cross-compile sysroots)");
     println!("  glide doc [--open] [--serve[=<port>]] [--ai] [--stdlib]");
     println!("  glide bench [path]         (run *_bench.glide microbenchmarks)");
@@ -1192,6 +1193,126 @@ fn _advance_after(body: string, key: string, from: i32) -> i32 {
 // when that directory isn't on PATH. Local installs build in place;
 // git installs pull through the same fetch + cache path as `glide
 // fetch`.
+// Everything in `p` before the last '/', or "." when there is none.
+fn _parent_dir(p: string) -> string {
+    let mut i: i32 = p.len() - 1;
+    while i >= 0 {
+        if p.at(i).to_int() == 47 {
+            return p.substring(0, i);
+        }
+        i = i - 1;
+    }
+    return ".";
+}
+
+// `glide upgrade [--check]` — self-update the toolchain to the latest
+// published release, so a new version is one command away instead of a
+// manual GitHub download. Reads the GitHub "latest release" tag; unless
+// `--check`, downloads the platform bundle and swaps it into the install
+// dir. POSIX only: replacing a running `.exe` fails on Windows.
+fn run_upgrade(argc: i32) -> i32 {
+    let mut check_only: bool = false;
+    for let i: i32 = 2; i < argc; i++ {
+        if args_at(i).eq("--check") {
+            check_only = true;
+        }
+    }
+    let os: string = __glide_os_name();
+    let arch: string = __glide_os_arch();
+    if os.eq("windows") {
+        println!("upgrade: not supported on Windows yet — re-run the installer from");
+        println!("         https://github.com/glide-lang/Glide/releases/latest");
+        return 1;
+    }
+    let mut tmp: string = __glide_getenv("TMPDIR");
+    if tmp.eq("") {
+        tmp = "/tmp";
+    }
+    // Ask GitHub for the newest published tag.
+    let meta: string = tmp.concat("/glide_upgrade_latest.json");
+    let api: string = "https://api.github.com/repos/glide-lang/Glide/releases/latest";
+    if __glide_shell("curl -fsSL -o \"".concat(meta).concat("\" \"").concat(api).concat("\"")) != 0 {
+        println!("upgrade: could not reach GitHub to check for updates.");
+        return 1;
+    }
+    let mut mlen: i32 = 0;
+    let body: string = fs_read_bytes(meta, &mlen);
+    fs_remove_file(meta);
+    let tag: string = _extract_str_field(body, "tag_name", 0);
+    let mut latest: string = tag;
+    if tag.starts_with("v") {
+        latest = tag.substring(1, tag.len());
+    }
+    if latest.eq("") {
+        println!("upgrade: could not read the latest version from GitHub.");
+        return 1;
+    }
+    if latest.eq(GLIDE_VERSION) {
+        println!("Already up to date:", GLIDE_VERSION);
+        return 0;
+    }
+    if check_only {
+        println!(GLIDE_VERSION.concat(" -> ").concat(latest).concat(" available (run `glide upgrade`)"));
+        return 0;
+    }
+    println!("  current:", GLIDE_VERSION);
+    println!("  latest: ", latest);
+    // Install dir matches tools/install.sh; override with $GLIDE_INSTALL_DIR.
+    let mut install_dir: string = __glide_getenv("GLIDE_INSTALL_DIR");
+    if install_dir.eq("") {
+        let home: !string = os_home_dir();
+        if !home.ok {
+            println!("upgrade: could not resolve HOME; set GLIDE_INSTALL_DIR and retry.");
+            return 1;
+        }
+        install_dir = home.val.concat("/.local/share/glide");
+    }
+    let name: string = "glide-".concat(os).concat("-").concat(arch).concat("-").concat(latest);
+    let url: string = "https://github.com/glide-lang/Glide/releases/download/v".concat(latest).concat("/").concat(name).concat(".tar.gz");
+    let tgz: string = tmp.concat("/").concat(name).concat(".tar.gz");
+    println!(">> downloading", name.concat(".tar.gz"));
+    if __glide_shell("curl -fL -o \"".concat(tgz).concat("\" \"").concat(url).concat("\"")) != 0 {
+        println!("upgrade: download failed:", url);
+        return 1;
+    }
+    let exdir: string = tmp.concat("/glide_upgrade_extract");
+    fs_remove_dir_rec(exdir);
+    if !fs_mkdir_p(exdir) {
+        println!("upgrade: could not create staging dir", exdir);
+        fs_remove_file(tgz);
+        return 1;
+    }
+    println!(">> extracting");
+    if __glide_shell("tar -xzf \"".concat(tgz).concat("\" -C \"").concat(exdir).concat("\"")) != 0 {
+        println!("upgrade: extraction failed.");
+        fs_remove_file(tgz);
+        fs_remove_dir_rec(exdir);
+        return 1;
+    }
+    let src: string = exdir.concat("/").concat(name);
+    if !fs_is_dir(src) {
+        println!("upgrade: unexpected archive layout (missing", name.concat(")."));
+        fs_remove_file(tgz);
+        fs_remove_dir_rec(exdir);
+        return 1;
+    }
+    // Swap into place. Removing the running binary's file is safe on POSIX
+    // (the process keeps its open image); the wrapper re-execs the new one.
+    fs_remove_dir_rec(install_dir);
+    __glide_shell("mkdir -p \"".concat(_parent_dir(install_dir)).concat("\""));
+    if __glide_shell("mv \"".concat(src).concat("\" \"").concat(install_dir).concat("\"")) != 0 {
+        println!("upgrade: could not install into", install_dir);
+        fs_remove_file(tgz);
+        fs_remove_dir_rec(exdir);
+        return 1;
+    }
+    __glide_shell("chmod +x \"".concat(install_dir).concat("/glide\""));
+    fs_remove_file(tgz);
+    fs_remove_dir_rec(exdir);
+    println!(">> installed. now on", latest);
+    return 0;
+}
+
 fn run_install(argc: i32) -> i32 {
     if argc < 3 {
         println!("usage: glide install <path>");
@@ -4432,6 +4553,10 @@ fn main() -> i32 {
     // and copy its binary into ~/.glide/bin.
     if cmd.eq("install") {
         return run_install(argc);
+    }
+    // `upgrade [--check]` — self-update the toolchain to the latest release.
+    if cmd.eq("upgrade") {
+        return run_upgrade(argc);
     }
     // `bench [path]` — run *_bench.glide microbenchmarks. Each
     // `bench_*` fn gets auto-tuned iterations until ≥500ms then
