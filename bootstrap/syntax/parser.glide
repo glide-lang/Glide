@@ -1722,10 +1722,17 @@ fn parse_maybe_assign(p: *Parser, lhs: *Expr) -> *Expr {
     if op == 0 {
         return lhs;
     }
+    // Anchor the node at the assignment operator so an assignment-type-mismatch
+    // diagnostic underlines the `=` (or `+=`, …), not the target variable.
+    let op_line: i32 = p.current.line;
+    let op_col: i32 = p.current.column;
     p.advance();
     let rhs_raw: *Expr = parse_expr(p, 0);
     let rhs: *Expr = parse_maybe_assign(p, rhs_raw);
-    return expr_assign(op, lhs, rhs);
+    let a: *Expr = expr_assign(op, lhs, rhs);
+    a.line = op_line;
+    a.column = op_col;
+    return a;
 }
 
 fn parse_let(p: *Parser) -> *Stmt {
@@ -2728,6 +2735,10 @@ fn parse_expr(p: *Parser, min_bp: i32) -> *Expr {
         // wrapped `||` chain) rides on the operator token's lead; keep it so fmt
         // can re-emit the chain multi-line.
         let op_lead: string = p.current.lead;
+        // Anchor the node at the operator token so type-mismatch / string-eq /
+        // tuple-eq diagnostics underline the operator, not the left operand.
+        let op_line: i32 = p.current.line;
+        let op_col: i32 = p.current.column;
         p.advance();
         let rbp: i32 = lbp + 1;
         let right: *Expr = parse_expr(p, rbp);
@@ -2735,6 +2746,8 @@ fn parse_expr(p: *Parser, min_bp: i32) -> *Expr {
             break;
         }
         left = expr_binary(op, left, right);
+        left.line = op_line;
+        left.column = op_col;
         if op_lead != null && !op_lead.eq("") {
             left.lead = op_lead;
         }

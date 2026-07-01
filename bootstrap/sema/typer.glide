@@ -3837,11 +3837,9 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                     if op == OP_NE {
                         msg = "comparing strings with `!=` checks pointer identity";
                     }
-                    let mut _seq_sp: i32 = 1;
-                    if e.lhs != null && e.lhs.kind == EX_IDENT && e.lhs.str_val != null {
-                        _seq_sp = e.lhs.str_val.len();
-                    }
-                    t.warn_range(e.line, e.column, _seq_sp, "string-pointer-eq", msg.concat("; use `.eq()` (or `!a.eq(b)` for inequality) instead"));
+                    // The node anchors at the operator, so underline the `==`
+                    // / `!=` itself (both two chars).
+                    t.warn_range(e.line, e.column, 2, "string-pointer-eq", msg.concat("; use `.eq()` (or `!a.eq(b)` for inequality) instead"));
                 }
                 // Tuples lower to C structs; `struct == struct` is not valid C,
                 // and structural tuple equality isn't implemented. Reject it at
