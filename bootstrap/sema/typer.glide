@@ -3908,20 +3908,41 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             return ty_pointer(inner);
         }
         if e.op_code == UN_TRY {
-            // `expr?` polymorphic by inner type: !T / ?T / ?!T all propagate
-            // and yield the underlying T to the caller. The enclosing fn's
-            // return type decides whether None can coerce to Err — that
-            // dispatch lives in codegen; the typer just unwraps.
-            if inner != null && inner.kind == TY_RESULT {
-                return inner.inner;
+            // `expr?` is polymorphic by inner type: !T / ?T / ?!T all propagate
+            // and yield the underlying T to the caller. The None→Err coercion
+            // matrix lives in codegen, but two well-formedness rules must hold
+            // for that lowering to be valid — codegen assumes both and falls
+            // back to `/* invalid ? */` when they don't (emit_expr), so the
+            // typer is the only place they can actually be reported.
+            //   1. the operand must be propagatable (!T / ?T / ?!T);
+            //   2. the enclosing fn must return a type that can carry what is
+            //      propagated.
+            // A null `inner` means the operand type wasn't inferable here (e.g.
+            // a `*dyn Trait` method whose return only codegen recovers), not
+            // that it is wrong — stay quiet on rule 1 in that case.
+            if inner != null && inner.kind != TY_RESULT && inner.kind != TY_OPTION && inner.kind != TY_OPT_RESULT {
+                t.err(e.line, e.column, "`?` expects a `!T`, `?T`, or `?!T` value, got ".concat(type_to_string(inner)));
+                return inner;
             }
-            if inner != null && inner.kind == TY_OPTION {
-                return inner.inner;
+            // Rule 2 holds regardless of whether the operand was inferable.
+            let ret: *Type = t.current_ret;
+            if ret == null || (ret.kind != TY_RESULT && ret.kind != TY_OPTION && ret.kind != TY_OPT_RESULT) {
+                let mut rd: string = "nothing (void)";
+                if ret != null {
+                    rd = "`".concat(type_to_string(ret)).concat("`");
+                }
+                t.err(e.line, e.column, "`?` can only propagate inside a function that returns `!T`, `?T`, or `?!T`, but this function returns ".concat(rd));
+            } else if inner != null && inner.kind == TY_RESULT && ret.kind == TY_OPTION {
+                // A plain `?U` return cannot hold an Err, so propagating a pure
+                // `!T` there would silently drop the error. (`?!T` in a `?U` fn
+                // is fine: the caller kept only the None arm on purpose.)
+                let u: string = type_to_string(ret.inner);
+                t.err(e.line, e.column, "`?` here propagates an error, but this function returns `".concat(type_to_string(ret)).concat("` which cannot carry one; return `!").concat(u).concat("` or `?!").concat(u).concat("` instead"));
             }
-            if inner != null && inner.kind == TY_OPT_RESULT {
-                return inner.inner;
+            if inner == null {
+                return inner;
             }
-            return inner;
+            return inner.inner;
         }
         return inner;
     }
