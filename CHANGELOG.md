@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Networking
+
+- **`TcpStream` learns its endpoints.** `peer_addr()` / `local_addr()` return a
+  `*SocketAddr`, so a server can finally see who dialed in — the peer address
+  the `accept` path used to discard. `peer_ip()` is the port-less shortcut.
+
+  ```glide
+  let conn: *TcpStream = listener.accept()?;
+  println!("connection from {}", conn.peer_addr()?.to_string());
+  ```
+
+- **`TcpStream` socket tuning + half-close.** `set_nodelay`, `set_keepalive`
+  (new `SO_KEEPALIVE`), `set_recv_buf`, `set_send_buf`, and `shutdown(how)`
+  (`SHUT_RD` / `SHUT_WR` / `SHUT_RDWR`) round out the stream so you no longer
+  reach for `sockopt::*` free functions on `conn.fd`.
+
+- **`TcpStream::read_exact(buf, n)`** loops until `n` bytes arrive, erroring on
+  an early EOF — for fixed-size framing where a short read is a protocol error.
+
 ## 0.6.0 — 2026-06-25
 
 The memory-model release. Glide now manages memory automatically without a GC
