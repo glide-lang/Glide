@@ -1296,7 +1296,7 @@ pub fn _strip_ptr_borrow(t: *Type) -> *Type {
 
 // Find an impl method named `method_name` on `type_name`, return its
 // declared return type. null if not found.
-fn _impl_method_ret(stmts: *Vector<Stmt>, type_name: string, method_name: string) -> *Type {
+pub fn _impl_method_ret(stmts: *Vector<Stmt>, type_name: string, method_name: string) -> *Type {
     if stmts == null {
         return null;
     }
@@ -1335,7 +1335,7 @@ fn _method_ret_type(stmts: *Vector<Stmt>, recv: *Type, method_name: string) -> *
 }
 
 // Look up a struct field type by struct + field name.
-fn _struct_field_type(stmts: *Vector<Stmt>, recv: *Type, field_name: string) -> *Type {
+pub fn _struct_field_type(stmts: *Vector<Stmt>, recv: *Type, field_name: string) -> *Type {
     let x: *Type = _strip_ptr_borrow(recv);
     if x == null {
         return null;
@@ -1381,7 +1381,7 @@ fn _struct_field_type(stmts: *Vector<Stmt>, recv: *Type, field_name: string) -> 
 }
 
 // Look up a top-level fn's return type by name.
-fn _fn_ret_type(stmts: *Vector<Stmt>, fn_name: string) -> *Type {
+pub fn _fn_ret_type(stmts: *Vector<Stmt>, fn_name: string) -> *Type {
     if stmts == null {
         return null;
     }
@@ -1752,7 +1752,7 @@ fn _impl_method_ret_subst(root: *Vector<Stmt>, type_name: string, method: string
     return null;
 }
 
-fn _method_ret_subst(root: *Vector<Stmt>, recv: *Type, method: string) -> *Type {
+pub fn _method_ret_subst(root: *Vector<Stmt>, recv: *Type, method: string) -> *Type {
     let x: *Type = _strip_ptr_borrow(recv);
     if x != null && x.kind == TY_GENERIC && x.args != null && x.args.len() >= 1 {
         let a: Type = x.args.get(0);

@@ -853,6 +853,35 @@ pub fn lsp_infer_expr(stmts: *Vector<Stmt>, host: *Stmt, e: *Expr) -> *Type {
             }
         }
     }
+    // Postfix `?` unwraps !T / ?T / ?!T to the underlying T, mirroring the
+    // typer — so `let r = call()?` hovers as the inner type, not nothing.
+    if e.kind == EX_UNARY && e.op_code == UN_TRY {
+        let inner: *Type = lsp_infer_expr(stmts, host, e.operand);
+        if inner != null && (inner.kind == TY_RESULT || inner.kind == TY_OPTION || inner.kind == TY_OPT_RESULT) {
+            return inner.inner;
+        }
+        return inner;
+    }
+    // Calls: free fn `f(...)`, static `T::m(...)`, or method `recv.m(...)`.
+    // Reuses the completion resolvers so hover matches what autocomplete sees.
+    if e.kind == EX_CALL && e.lhs != null {
+        if e.lhs.kind == EX_IDENT {
+            return _fn_ret_type(stmts, e.lhs.str_val);
+        }
+        if e.lhs.kind == EX_PATH {
+            return _impl_method_ret(stmts, e.lhs.str_val, e.lhs.field);
+        }
+        if e.lhs.kind == EX_MEMBER && e.lhs.lhs != null {
+            let recv: *Type = lsp_infer_expr(stmts, host, e.lhs.lhs);
+            return _method_ret_subst(stmts, recv, e.lhs.field);
+        }
+        return null;
+    }
+    // Field access `recv.field`.
+    if e.kind == EX_MEMBER && e.lhs != null {
+        let recv: *Type = lsp_infer_expr(stmts, host, e.lhs);
+        return _struct_field_type(stmts, recv, e.field);
+    }
     return null;
 }
 
@@ -1131,6 +1160,16 @@ fn render_hover_for_let(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt) -> string {
                         }
                     }
                 }
+            }
+        }
+        // Fallback for anything the literal/constructor branches don't cover —
+        // method calls, `?` propagation, field access — via the shared
+        // Expr inferencer, so `let r = stream.read_str(1024)?` shows `string`.
+        if !inferred && s.let_value != null {
+            let it: *Type = lsp_infer_expr(stmts, host, s.let_value);
+            if it != null {
+                header = header.concat(": ").concat(type_to_string_pretty(it));
+                inferred = true;
             }
         }
     }
