@@ -882,6 +882,102 @@ pub fn lsp_infer_expr(stmts: *Vector<Stmt>, host: *Stmt, e: *Expr) -> *Type {
         let recv: *Type = lsp_infer_expr(stmts, host, e.lhs);
         return _struct_field_type(stmts, recv, e.field);
     }
+    // Prefix / bitwise unary (postfix `?` is handled above). Mirrors the typer.
+    if e.kind == EX_UNARY {
+        if e.op_code == UN_NOT {
+            return ty_named("bool");
+        }
+        let inner: *Type = lsp_infer_expr(stmts, host, e.operand);
+        if e.op_code == UN_DEREF {
+            if inner != null && (inner.kind == TY_POINTER || inner.kind == TY_BORROW || inner.kind == TY_BORROW_MUT) {
+                return inner.inner;
+            }
+            return inner;
+        }
+        if e.op_code == UN_ADDR || e.op_code == UN_ADDR_MUT {
+            if inner == null {
+                return null;
+            }
+            return ty_pointer(inner);
+        }
+        // UN_NEG / UN_BIT_NOT keep the operand's type.
+        return inner;
+    }
+    // Binary: comparison / logical -> bool; `??` -> the LHS inner; otherwise the
+    // width-promoted operand type, mirroring the typer.
+    if e.kind == EX_BINARY {
+        let op: i32 = e.op_code;
+        if op == OP_EQ || op == OP_NE || op == OP_LT || op == OP_LE || op == OP_GT || op == OP_GE || op == OP_AND || op == OP_OR {
+            return ty_named("bool");
+        }
+        let lt: *Type = lsp_infer_expr(stmts, host, e.lhs);
+        if op == OP_COALESCE {
+            if lt != null && (lt.kind == TY_OPTION || lt.kind == TY_RESULT) {
+                return lt.inner;
+            }
+            return lt;
+        }
+        let rt: *Type = lsp_infer_expr(stmts, host, e.rhs);
+        let mut lname: string = "";
+        let mut rname: string = "";
+        if lt != null && lt.kind == TY_NAMED {
+            lname = lt.name;
+        }
+        if rt != null && rt.kind == TY_NAMED {
+            rname = rt.name;
+        }
+        if lname.eq("f64") || rname.eq("f64") {
+            return ty_named("f64");
+        }
+        if lname.eq("i64") || rname.eq("i64") {
+            return ty_named("i64");
+        }
+        return lt;
+    }
+    // Cast: the target type is written explicitly.
+    if e.kind == EX_CAST {
+        return e.cast_to;
+    }
+    // Index: `Vector<T>[i]` -> T; `*T` / `[]T` -> the pointee/element.
+    if e.kind == EX_INDEX && e.lhs != null {
+        let recv: *Type = lsp_infer_expr(stmts, host, e.lhs);
+        let x: *Type = _strip_ptr_borrow(recv);
+        if x != null {
+            if x.kind == TY_GENERIC && x.args != null && x.args.len() > 0 {
+                let a: Type = x.args.get(0);
+                let p: *Type = malloc(sizeof(Type)) as *Type;
+                *p = a;
+                return p;
+            }
+            if x.kind == TY_POINTER || x.kind == TY_SLICE {
+                return x.inner;
+            }
+        }
+        return null;
+    }
+    // Tuple literal: infer each element; bail if any element is unknown.
+    if e.kind == EX_TUPLE {
+        if e.args == null {
+            return null;
+        }
+        let elems: *Vector<Type> = Vector::new();
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            let at: *Type = lsp_infer_expr(stmts, host, &a);
+            if at == null {
+                return null;
+            }
+            elems.push(*at);
+        }
+        return ty_tuple(elems);
+    }
+    // Macros with a statically-known result type.
+    if e.kind == EX_MACRO {
+        if e.str_val != null && e.str_val.eq("format") {
+            return ty_named("string");
+        }
+        return null;
+    }
     return null;
 }
 
