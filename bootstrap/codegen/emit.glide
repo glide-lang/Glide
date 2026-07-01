@@ -2633,6 +2633,10 @@ fn _is_dyn_ptr(t: *Type) -> bool {
     return t.inner.kind == TY_DYN;
 }
 
+fn _is_string_ty(t: *Type) -> bool {
+    return t != null && t.kind == TY_NAMED && t.name.eq("string");
+}
+
 // Emit a "null" appropriate for the expected type. For `*dyn Trait`
 // the fat-pointer struct gets zero-initialised (vtable=NULL,
 // data=NULL); for everything else, plain `NULL`.
@@ -3107,6 +3111,22 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 print!(", ");
                 emit_expr(g, e.rhs);
                 print!(")");
+                return;
+            }
+        }
+        // String value equality: `==` / `!=` compare CONTENTS (byte compare via
+        // the runtime), not the underlying char* pointers. `!=` negates.
+        if e.op_code == OP_EQ || e.op_code == OP_NE {
+            if _is_string_ty(infer_for_codegen(g, e.lhs)) && _is_string_ty(infer_for_codegen(g, e.rhs)) {
+                print!("(");
+                if e.op_code == OP_NE {
+                    print!("!");
+                }
+                print!("__glide_string_eq(");
+                emit_expr(g, e.lhs);
+                print!(", ");
+                emit_expr(g, e.rhs);
+                print!("))");
                 return;
             }
         }

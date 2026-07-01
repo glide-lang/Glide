@@ -3829,21 +3829,11 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         // comparison ops -> bool
         let op: i32 = e.op_code;
         if op == OP_EQ || op == OP_NE || op == OP_LT || op == OP_LE || op == OP_GT || op == OP_GE {
-            // `==` / `!=` between two `string`s compares pointers in C, not
-            // contents — almost always a bug. Suggest `.eq()` instead.
+            // `==` / `!=` on strings now compares CONTENTS — codegen routes to
+            // the byte-compare runtime, so the old pointer-identity footgun is
+            // gone. (Structural struct/tuple equality lands in a later slice;
+            // until then tuple `==` still gets a clear message, not a cc error.)
             if op == OP_EQ || op == OP_NE {
-                if lt != null && rt != null && lt.kind == TY_NAMED && lt.name.eq("string") && rt.kind == TY_NAMED && rt.name.eq("string") {
-                    let mut msg: string = "comparing strings with `==` checks pointer identity";
-                    if op == OP_NE {
-                        msg = "comparing strings with `!=` checks pointer identity";
-                    }
-                    // The node anchors at the operator, so underline the `==`
-                    // / `!=` itself (both two chars).
-                    t.warn_range(e.line, e.column, 2, "string-pointer-eq", msg.concat("; use `.eq()` (or `!a.eq(b)` for inequality) instead"));
-                }
-                // Tuples lower to C structs; `struct == struct` is not valid C,
-                // and structural tuple equality isn't implemented. Reject it at
-                // the typer with a clear message instead of leaking a cc error.
                 if lt != null && lt.kind == TY_TUPLE || rt != null && rt.kind == TY_TUPLE {
                     t.err_code(e.line, e.column, "tuple-eq", "tuples can't be compared with `==`/`!=` yet; compare the elements (e.g. `a.0 == b.0 && a.1 == b.1`)");
                 }

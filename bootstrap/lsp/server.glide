@@ -1687,7 +1687,7 @@ pub fn run_extra_analyses(t: *Typer, stmts: *Vector<Stmt>) {
     analysis_custom_lints(t, stmts);
     analysis_null_deref(t, stmts);
     analysis_bad_free(t, stmts);
-    analysis_string_eq_op(t, stmts);
+    // `string-eq-op` retired: `==` / `!=` on strings now compares bytes.
     analysis_unused_import(t, stmts);
     analysis_arena_set_unbalanced(t, stmts);
     analysis_coro_blocking(t, stmts);
