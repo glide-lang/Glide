@@ -2637,6 +2637,101 @@ fn _is_string_ty(t: *Type) -> bool {
     return t != null && t.kind == TY_NAMED && t.name.eq("string");
 }
 
+// Emit a C bool expression comparing two same-typed values, given as C-expr
+// strings `a` / `b`. Recurses structurally: strings via the byte-compare
+// runtime, structs/tuples field-by-field (null-safe behind a pointer), and
+// everything else via C `==`. Powers value equality for structs and tuples.
+//
+// `seen` holds the struct names on the current recursion PATH. A self-
+// referential struct (e.g. `Node { next: *Node }`) would otherwise recurse
+// forever at emit time and blow up RAM — when a struct type reappears on the
+// path we stop and compare that field by pointer identity instead. `depth` is
+// a hard backstop.
+fn _emit_eq_of(g: *CG, ty: *Type, a: string, b: string, seen: *Vector<string>, depth: i32) {
+    if depth > 64 {
+        print!("(".concat(a).concat(" == ").concat(b).concat(")"));
+        return;
+    }
+    let s: *Type = strip_ptr(ty);
+    if _is_string_ty(s) {
+        print!("__glide_string_eq(".concat(a).concat(", ").concat(b).concat(")"));
+        return;
+    }
+    let is_ptr: bool = ty != null && (ty.kind == TY_POINTER || ty.kind == TY_BORROW || ty.kind == TY_BORROW_MUT);
+    if s != null && s.kind == TY_NAMED && g.structs.contains(s.name) {
+        // Cycle guard: this struct is already being compared up the path, so
+        // recursing again would never terminate. Fall back to pointer identity.
+        if seen.contains(s.name) {
+            print!("(".concat(a).concat(" == ").concat(b).concat(")"));
+            return;
+        }
+        let sd: Stmt = g.structs.get(s.name);
+        seen.push(s.name);
+        _emit_agg_eq(g, sd.struct_fields, a, b, is_ptr, seen, depth + 1);
+        let _p: string = seen.pop();
+        return;
+    }
+    if s != null && s.kind == TY_TUPLE {
+        _emit_tuple_eq(g, s.args, a, b, is_ptr, seen, depth + 1);
+        return;
+    }
+    // Primitive / pointer / enum: identity compare is the value compare.
+    print!("(".concat(a).concat(" == ").concat(b).concat(")"));
+}
+
+// AND together the per-field comparisons of a struct. When the values are
+// behind a pointer, guard nulls: equal if pointer-equal (covers both-null),
+// unequal if exactly one is null, else compare fields.
+fn _emit_agg_eq(g: *CG, fields: *Vector<Field>, a: string, b: string, is_ptr: bool, seen: *Vector<string>, depth: i32) {
+    let acc: string = if is_ptr { "->" } else { "." };
+    if is_ptr {
+        print!("((".concat(a).concat(" == ").concat(b).concat(") || (").concat(a).concat(" && ").concat(b).concat(" && "));
+    }
+    print!("(");
+    if fields == null || fields.len() == 0 {
+        print!("1");
+    } else {
+        for let i: i32 = 0; i < fields.len(); i++ {
+            if i > 0 {
+                print!(" && ");
+            }
+            let f: Field = fields.get(i);
+            let fc: string = c_safe_ident(f.name);
+            _emit_eq_of(g, f.ty, a.concat(acc).concat(fc), b.concat(acc).concat(fc), seen, depth);
+        }
+    }
+    print!(")");
+    if is_ptr {
+        print!("))");
+    }
+}
+
+// Same, for anonymous tuples: fields are `_0`, `_1`, … with element types in
+// `elems`.
+fn _emit_tuple_eq(g: *CG, elems: *Vector<Type>, a: string, b: string, is_ptr: bool, seen: *Vector<string>, depth: i32) {
+    let acc: string = if is_ptr { "->" } else { "." };
+    if is_ptr {
+        print!("((".concat(a).concat(" == ").concat(b).concat(") || (").concat(a).concat(" && ").concat(b).concat(" && "));
+    }
+    print!("(");
+    if elems == null || elems.len() == 0 {
+        print!("1");
+    } else {
+        for let i: i32 = 0; i < elems.len(); i++ {
+            if i > 0 {
+                print!(" && ");
+            }
+            let et: Type = elems.get(i);
+            let fld: string = "_".concat(int_to_str(i));
+            _emit_eq_of(g, &et, a.concat(acc).concat(fld), b.concat(acc).concat(fld), seen, depth);
+        }
+    }
+    print!(")");
+    if is_ptr {
+        print!("))");
+    }
+}
+
 // Emit a "null" appropriate for the expected type. For `*dyn Trait`
 // the fat-pointer struct gets zero-initialised (vtable=NULL,
 // data=NULL); for everything else, plain `NULL`.
@@ -3127,6 +3222,28 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 print!(", ");
                 emit_expr(g, e.rhs);
                 print!("))");
+                return;
+            }
+            // Struct / tuple value equality: compare field-by-field. Bind both
+            // operands to temps first so a non-trivial operand is evaluated
+            // once. `!=` negates the whole comparison.
+            let elt: *Type = infer_for_codegen(g, e.lhs);
+            let est: *Type = strip_ptr(elt);
+            if est != null && ((est.kind == TY_NAMED && g.structs.contains(est.name)) || est.kind == TY_TUPLE) {
+                let tc: string = type_to_c(elt);
+                print!("(");
+                if e.op_code == OP_NE {
+                    print!("!");
+                }
+                print!("({ ".concat(tc).concat(" __eqa = ("));
+                emit_expr(g, e.lhs);
+                print!("); ".concat(tc).concat(" __eqb = ("));
+                emit_expr(g, e.rhs);
+                print!("); ");
+                let eq_seen: *Vector<string> = Vector::new();
+                _emit_eq_of(g, elt, "__eqa", "__eqb", eq_seen, 0);
+                eq_seen.free();
+                print!("; }))");
                 return;
             }
         }
