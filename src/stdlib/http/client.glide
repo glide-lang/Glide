@@ -22,6 +22,7 @@ import stdlib::http::cookies::*;
 import stdlib::http::h2::*;
 import stdlib::http::hpack::*;
 import stdlib::bytes::*;
+import stdlib::env::*;
 
 /// A request being assembled — mutable holder; not the same shape as
 /// the server-side `HttpRequest` (which is parsed-from-wire).
@@ -269,7 +270,15 @@ impl HttpClient {
             return err("http_client: scheme must be http or https (got `".concat(url.scheme).concat("`)"));
         }
 
-        let mut wire: string = method.concat(" ").concat(url.path).concat(" HTTP/1.1\r\n");
+        // Forward-proxy routing. An http request through a proxy uses the
+        // absolute-form request-target; an https request tunnels via CONNECT
+        // (see the connect branch below). Empty = direct connection.
+        let proxy: string = _hcli_proxy_for(url.scheme, url.host);
+        let mut target: string = url.path;
+        if proxy.len() > 0 && url.scheme.eq("http") {
+            target = "http://".concat(url.host_header()).concat(url.path);
+        }
+        let mut wire: string = method.concat(" ").concat(target).concat(" HTTP/1.1\r\n");
         wire = wire.concat("Host: ").concat(url.host_header()).concat("\r\n");
         wire = wire.concat("User-Agent: ").concat(self.user_agent).concat("\r\n");
         wire = wire.concat("Accept: */*\r\n");
@@ -291,11 +300,21 @@ impl HttpClient {
             if self.tls_insecure { cfg = TlsConfig::client_insecure(); }
             else                  { cfg = TlsConfig::client(); }
             if self.http2 { cfg.alpn = "h2,http/1.1"; }
-            let s: !*TlsStream = TlsStream::connect(url.host, url.port, cfg);
-            cfg.free();
-            if !s.ok { return err(s.err); }
-            let stream: *TlsStream = s.val;
-            if self.timeout_ms > 0 { stream.set_timeout_ms(self.timeout_ms); }
+            let stream: *TlsStream;
+            if proxy.len() > 0 {
+                // CONNECT tunnel to the origin through the proxy, then TLS.
+                let ts: !*TlsStream = _hcli_tls_via_proxy(proxy, url.host,
+                                                           url.port, cfg,
+                                                           self.timeout_ms);
+                if !ts.ok { return err(ts.err); }
+                stream = ts.val;
+            } else {
+                let s: !*TlsStream = TlsStream::connect(url.host, url.port, cfg);
+                cfg.free();
+                if !s.ok { return err(s.err); }
+                stream = s.val;
+                if self.timeout_ms > 0 { stream.set_timeout_ms(self.timeout_ms); }
+            }
 
             // ALPN agreed on h2? Use the binary frame transport instead.
             let alpn: string = stream.alpn();
@@ -312,7 +331,16 @@ impl HttpClient {
             if !raw.ok { return err(raw.err); }
             raw_body = raw.val;
         } else {
-            let s: !*TcpStream = TcpStream::connect_host(url.host, url.port);
+            // Direct, or to the proxy for an absolute-form request.
+            let mut conn_host: string = url.host;
+            let mut conn_port: i32 = url.port;
+            if proxy.len() > 0 {
+                let pa: *ParsedUrl = _hcli_hostport(proxy, 8080);
+                conn_host = pa.host;
+                conn_port = pa.port;
+                free(pa as *void);
+            }
+            let s: !*TcpStream = TcpStream::connect_host(conn_host, conn_port);
             if !s.ok { return err(s.err); }
             let stream: *TcpStream = s.val;
             if self.timeout_ms > 0 { stream.set_timeout_ms(self.timeout_ms); }
@@ -465,6 +493,106 @@ impl ParsedUrl {
         if self.port == default_port { return self.host; }
         return self.host.concat(":").concat(_hcli_itos(self.port));
     }
+}
+
+// The proxy authority ("host:port") to route `host` through for `scheme`,
+// or "" for a direct connection. Reads HTTP(S)_PROXY (and lowercase), and
+// honors NO_PROXY host suffixes (and "*").
+fn _hcli_proxy_for(scheme: string, host: string) -> string {
+    let mut pv: string = "";
+    if scheme.eq("https") {
+        pv = env_get("HTTPS_PROXY");
+        if pv.len() == 0 { pv = env_get("https_proxy"); }
+    } else {
+        pv = env_get("HTTP_PROXY");
+        if pv.len() == 0 { pv = env_get("http_proxy"); }
+    }
+    if pv.len() == 0 { return ""; }
+    let mut np: string = env_get("NO_PROXY");
+    if np.len() == 0 { np = env_get("no_proxy"); }
+    if np.len() > 0 {
+        let parts: *Vector<string> = np.split(",");
+        for let i: i32 = 0; i < parts.len(); i++ {
+            let mut e: string = parts.get(i).trim();
+            if e.len() == 0 { continue; }
+            if e.eq("*") { return ""; }
+            if e.starts_with(".") { e = e.substring(1, e.len()); }
+            if host.eq(e) || host.ends_with(".".concat(e)) { return ""; }
+        }
+    }
+    // Reduce the proxy URL to a bare host:port authority.
+    let mut a: string = pv;
+    let si: i32 = a.index_of("://");
+    if si >= 0 { a = a.substring(si + 3, a.len()); }
+    let sl: i32 = a.index_of("/");
+    if sl >= 0 { a = a.substring(0, sl); }
+    let at: i32 = a.index_of("@");
+    if at >= 0 { a = a.substring(at + 1, a.len()); }
+    return a;
+}
+
+// Split an "host:port" authority; `def_port` fills a missing port.
+fn _hcli_hostport(auth: string, def_port: i32) -> *ParsedUrl {
+    let p: *ParsedUrl = malloc(sizeof(ParsedUrl)) as *ParsedUrl;
+    p.scheme = "";
+    p.path = "";
+    p.port = def_port;
+    let colon: i32 = _last_index_of(auth, ":");
+    if colon >= 0 {
+        p.host = auth.substring(0, colon);
+        let ps: string = auth.substring(colon + 1, auth.len());
+        let pr: !i32 = ps.try_parse_int();
+        if pr.ok { p.port = pr.val; }
+    } else {
+        p.host = auth;
+    }
+    return p;
+}
+
+// Read a peer's response headers (up to and including CRLFCRLF) without
+// consuming the body — used for the proxy CONNECT reply, after which the
+// same fd carries the TLS handshake.
+fn _hcli_read_headers(tcp: *TcpStream) -> !string {
+    let bb: *ByteBuffer = ByteBuffer::new();
+    while true {
+        let r: !string = tcp.read_str(1024);
+        if !r.ok { bb.free(); return err(r.err); }
+        if r.val.len() == 0 { bb.free(); return err("http_client: proxy closed before CONNECT reply"); }
+        bb.push_str(r.val);
+        let acc: string = bb.to_string();
+        if acc.index_of("\r\n\r\n") >= 0 { bb.free(); return ok(acc); }
+        if acc.len() > 65536 { bb.free(); return err("http_client: proxy CONNECT header too large"); }
+    }
+    bb.free();
+    return err("http_client: proxy CONNECT read failed");
+}
+
+// Open a CONNECT tunnel through `proxy` to `host:port`, then run the TLS
+// handshake to the origin over it. `cfg` is consumed by the attach.
+fn _hcli_tls_via_proxy(proxy: string, host: string, port: i32,
+                       cfg: *TlsConfig, timeout_ms: i32) -> !*TlsStream {
+    let pa: *ParsedUrl = _hcli_hostport(proxy, 8080);
+    let ts: !*TcpStream = TcpStream::connect_host(pa.host, pa.port);
+    free(pa as *void);
+    if !ts.ok { cfg.free(); return err(ts.err); }
+    let tcp: *TcpStream = ts.val;
+    if timeout_ms > 0 { tcp.set_timeout_ms(timeout_ms); }
+    let auth: string = host.concat(":").concat(_hcli_itos(port));
+    let creq: string = "CONNECT ".concat(auth).concat(" HTTP/1.1\r\nHost: ").concat(auth).concat("\r\n\r\n");
+    let w: !i32 = tcp.write_all(creq);
+    if !w.ok { tcp.close(); cfg.free(); return err(w.err); }
+    let hdr: !string = _hcli_read_headers(tcp);
+    if !hdr.ok { tcp.close(); cfg.free(); return err(hdr.err); }
+    // The CONNECT status line is "HTTP/1.1 200 ...". Accept any 2xx.
+    let line_end: i32 = hdr.val.index_of("\r\n");
+    let mut status_line: string = hdr.val;
+    if line_end >= 0 { status_line = hdr.val.substring(0, line_end); }
+    if status_line.index_of(" 2") < 0 {
+        tcp.close(); cfg.free();
+        return err("http_client: proxy CONNECT rejected: ".concat(status_line));
+    }
+    // Hand the tunneled fd to TLS (attach consumes cfg's verify/alpn).
+    return TlsStream::attach(tcp, host, cfg);
 }
 
 fn _hcli_parse_url(s: string) -> !*ParsedUrl {
