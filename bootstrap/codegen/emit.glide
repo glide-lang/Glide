@@ -2652,6 +2652,16 @@ fn _emit_arith_method(op: i32) -> string {
     return "";
 }
 
+// Method a compound arithmetic assignment dispatches to (`+=`->add …), or "".
+fn _compound_arith_method(op: i32) -> string {
+    if op == OP_PLUS_ASSIGN { return "add"; }
+    if op == OP_MINUS_ASSIGN { return "sub"; }
+    if op == OP_STAR_ASSIGN { return "mul"; }
+    if op == OP_SLASH_ASSIGN { return "div"; }
+    if op == OP_PERCENT_ASSIGN { return "rem"; }
+    return "";
+}
+
 // Emit a C bool expression comparing two same-typed values, given as C-expr
 // strings `a` / `b`. Recurses structurally: strings via the byte-compare
 // runtime, structs/tuples field-by-field (null-safe behind a pointer), and
@@ -3423,6 +3433,20 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         return;
     }
     if e.kind == EX_ASSIGN {
+        // Compound arithmetic assignment on a struct: `a += b` -> `a = a.add(b)`.
+        // Re-enters the plain-assign path below, which evaluates the RHS into a
+        // temp before freeing the old `a`, so reading `a` in `a.add(b)` is safe.
+        let ca_m: string = _compound_arith_method(e.op_code);
+        if !ca_m.eq("") && e.lhs != null && e.rhs != null {
+            let lty: *Type = strip_ptr(infer_for_codegen(g, e.lhs));
+            if lty != null && lty.kind == TY_NAMED && g.structs.contains(lty.name) {
+                let cargs: *Vector<Expr> = Vector::new();
+                cargs.push(*e.rhs);
+                let mc: *Expr = expr_call(expr_member(e.lhs, ca_m), cargs);
+                emit_expr(g, expr_assign(OP_ASSIGN, e.lhs, mc));
+                return;
+            }
+        }
         // Destination overwrite: `c = ...` where c is an owned local that still
         // holds its value frees that old value first (so it does not leak),
         // unless c was already moved away (then someone else owns it).

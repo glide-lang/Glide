@@ -81,6 +81,15 @@ fn test_struct_ordering() -> i32 {
     return 0;
 }
 
+fn test_compound_assignment() -> i32 {
+    let mut a: *Vec2 = Vec2 { x: 1, y: 2 };
+    let b: *Vec2 = Vec2 { x: 10, y: 20 };
+    a += b;                 // a = a.add(b); reads old `a` before it is freed
+    assert_eq!(a.x, 11);
+    assert_eq!(a.y, 22);
+    return 0;
+}
+
 fn test_generic_ord_bound() -> i32 {
     let a: *Score = Score { v: 5 };
     let b: *Score = Score { v: 9 };
