@@ -59,31 +59,31 @@ fn _b(s: string, i: i32) -> i32 { return s.at(i).to_int() & 255; }
 
 // Parse UTCTime / GeneralizedTime into epoch seconds. UTC uses a 2-digit
 // year (>=50 => 19xx, else 20xx); Generalized uses 4 digits. Both end in Z.
-fn _parse_time(tag: i32, s: string) -> !i64 {
+fn _x509_parse_time(tag: i32, s: string) -> !i64 {
     let mut p: i32 = 0;
     let mut year: i32 = 0;
     if tag == ASN1_UTCTIME {
         if s.len() < 13 { return err("x509: short UTCTime"); }
-        let yy: i32 = _num2(s, 0);
+        let yy: i32 = _x509_num2(s, 0);
         year = if yy >= 50 { 1900 + yy } else { 2000 + yy };
         p = 2;
     } else {
         if s.len() < 15 { return err("x509: short GeneralizedTime"); }
-        year = _num2(s, 0) * 100 + _num2(s, 2);
+        year = _x509_num2(s, 0) * 100 + _x509_num2(s, 2);
         p = 4;
     }
-    let mon: i32 = _num2(s, p);
-    let day: i32 = _num2(s, p + 2);
-    let hh: i32 = _num2(s, p + 4);
-    let mm: i32 = _num2(s, p + 6);
-    let ss: i32 = _num2(s, p + 8);
-    return ok(_days_from_civil(year, mon, day) * 86400 + (hh as i64) * 3600 + (mm as i64) * 60 + (ss as i64));
+    let mon: i32 = _x509_num2(s, p);
+    let day: i32 = _x509_num2(s, p + 2);
+    let hh: i32 = _x509_num2(s, p + 4);
+    let mm: i32 = _x509_num2(s, p + 6);
+    let ss: i32 = _x509_num2(s, p + 8);
+    return ok(_x509_days_civil(year, mon, day) * 86400 + (hh as i64) * 3600 + (mm as i64) * 60 + (ss as i64));
 }
-fn _num2(s: string, i: i32) -> i32 {
+fn _x509_num2(s: string, i: i32) -> i32 {
     return (_b(s, i) - 48) * 10 + (_b(s, i + 1) - 48);
 }
 // Days since 1970-01-01 (Howard Hinnant's civil algorithm).
-fn _days_from_civil(y0: i32, m: i32, d: i32) -> i64 {
+fn _x509_days_civil(y0: i32, m: i32, d: i32) -> i64 {
     let mut y: i64 = y0 as i64;
     if m <= 2 { y = y - 1; }
     let era: i64 = (if y >= 0 { y } else { y - 399 }) / 400;
@@ -206,8 +206,8 @@ pub fn cert_parse(der: string) -> !*Cert {
     let nb: !*Tlv = der_read(vd);
     let na: !*Tlv = der_read(vd);
     if !nb.ok || !na.ok { return err("x509: bad validity"); }
-    let nbt: !i64 = _parse_time(nb.val.tag, der_content(nb.val));
-    let nat: !i64 = _parse_time(na.val.tag, der_content(na.val));
+    let nbt: !i64 = _x509_parse_time(nb.val.tag, der_content(nb.val));
+    let nat: !i64 = _x509_parse_time(na.val.tag, der_content(na.val));
     if !nbt.ok || !nat.ok { return err("x509: bad time"); }
 
     // subject Name.

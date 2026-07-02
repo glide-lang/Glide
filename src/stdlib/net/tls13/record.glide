@@ -28,7 +28,7 @@ pub const CT_ALERT: i32 = 21;
 pub const CT_HANDSHAKE: i32 = 22;
 pub const CT_APPLICATION_DATA: i32 = 23;
 
-fn _byte(s: string, i: i32) -> i32 { return s.at(i).to_int() & 255; }
+fn _recb(s: string, i: i32) -> i32 { return s.at(i).to_int() & 255; }
 
 /// The per-record AEAD nonce: the 12-byte write IV XOR the 64-bit record
 /// sequence number, right-aligned (RFC 8446 §5.3).
@@ -38,7 +38,7 @@ pub fn tls13_record_nonce(iv: string, seq: u64) -> string {
         // sequence number occupies the low 8 bytes of the 12-byte field.
         let shift: i32 = (iv.len() - 1 - i) * 8;
         let sbyte: i32 = if shift < 64 { ((seq >> shift) & (255 as u64)) as i32 } else { 0 };
-        bb.push((_byte(iv, i) ^ sbyte) as u8);
+        bb.push((_recb(iv, i) ^ sbyte) as u8);
     }
     let n: string = bb.to_string();
     bb.free();
@@ -118,9 +118,9 @@ pub fn tls13_open(aead: i32, key: string, iv: string, seq: u64, record: string) 
     let plaintext: string = pt.val;
     // strip trailing zero padding, then the last non-zero byte is the type.
     let mut end: i32 = plaintext.len();
-    while end > 0 && _byte(plaintext, end - 1) == 0 { end = end - 1; }
+    while end > 0 && _recb(plaintext, end - 1) == 0 { end = end - 1; }
     if end == 0 { return err("tls13: record has no content type"); }
-    let ct_byte: i32 = _byte(plaintext, end - 1);
+    let ct_byte: i32 = _recb(plaintext, end - 1);
     let out: *RecordPlain = malloc(sizeof(RecordPlain)) as *RecordPlain;
     out.content_type = ct_byte;
     out.content = plaintext.substring(0, end - 1);

@@ -1,0 +1,444 @@
+// TLS 1.3 client connection driver (RFC 8446), pure Glide. Performs a full
+// 1-RTT handshake against a real server: ClientHello, key derivation from
+// the X25519 ECDHE, decryption of the server's encrypted flight,
+// certificate-chain verification (via crypto::x509 against the OS trust
+// store), CertificateVerify and Finished checks, the client Finished, and
+// then application-data read/write over protected records.
+//
+// Cipher suites: TLS_AES_128_GCM_SHA256 and TLS_CHACHA20_POLY1305_SHA256.
+// Server auth: ECDSA (P-256/P-384) certificates today; RSA-PSS is a
+// follow-up. Fails closed — any verification failure aborts the handshake.
+//
+// ```glide
+// import stdlib::net::tls13::client::*;
+//
+// let c: !*TlsConn = tls13_connect("example.com", 443, Vector::new());
+// tls_write(c.unwrap(), "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n");
+// let resp: !string = tls_read(c.unwrap(), 4096);
+// ```
+
+import stdlib::net::tls13::handshake::*;
+import stdlib::net::tls13::schedule::*;
+import stdlib::net::tls13::record::*;
+import stdlib::net::tcp::*;
+import stdlib::net::ip::*;
+import stdlib::net::dns::*;
+import stdlib::crypto::x25519::*;
+import stdlib::crypto::p256::*;
+import stdlib::crypto::p384::*;
+import stdlib::crypto::x509::*;
+import stdlib::crypto::asn1::*;
+import stdlib::crypto::*;          // sha256, hmac_sha256
+import stdlib::crypto::sha512::*;  // sha384
+import stdlib::time::*;
+import stdlib::bytes::*;
+
+// Signature schemes (CertificateVerify).
+const SIG_ECDSA_P256_SHA256: i32 = 0x0403;
+const SIG_ECDSA_P384_SHA384: i32 = 0x0503;
+
+pub struct TlsConn {
+    pub stream: *TcpStream,
+    pub aead: i32,
+    pub c_key: string, pub c_iv: string, pub c_seq: u64,
+    pub s_key: string, pub s_iv: string, pub s_seq: u64,
+    pub inbuf: string,          // leftover decrypted application data
+    pub rbuf: string,           // unconsumed raw record bytes
+    pub alpn: string,           // negotiated ALPN protocol, or ""
+    pub closed: bool,
+}
+
+fn _clb(s: string, i: i32) -> i32 { return s.at(i).to_int() & 255; }
+fn _clu16v(n: i32) -> string {
+    let bb: *ByteBuffer = ByteBuffer::new();
+    bb.push(((n >> 8) & 255) as u8); bb.push((n & 255) as u8);
+    let s: string = bb.to_string(); bb.free(); return s;
+}
+
+// ---- raw record reading over the TCP stream ---------------------------
+
+// Ensure at least `n` bytes are buffered, reading from the socket as needed.
+fn _clfill(conn: *TlsConn, n: i32) -> !bool {
+    while conn.rbuf.len() < n {
+        let r: !*ByteBuffer = conn.stream.read(16384);
+        if !r.ok { return err(r.err); }
+        let chunk: string = r.val.to_string();
+        if chunk.len() == 0 { return err("tls13: connection closed by peer"); }
+        conn.rbuf = conn.rbuf.concat(chunk);
+    }
+    return ok(true);
+}
+
+// Read one TLS record: returns [type, version-ignored, payload]. Advances rbuf.
+pub struct RawRecord { pub rtype: i32, pub payload: string, pub raw: string }
+fn _clnext(conn: *TlsConn) -> !*RawRecord {
+    let e1: !bool = _clfill(conn, 5);
+    if !e1.ok { return err(e1.err); }
+    let rtype: i32 = _clb(conn.rbuf, 0);
+    let len: i32 = (_clb(conn.rbuf, 3) << 8) | _clb(conn.rbuf, 4);
+    let e2: !bool = _clfill(conn, 5 + len);
+    if !e2.ok { return err(e2.err); }
+    let rec: *RawRecord = malloc(sizeof(RawRecord)) as *RawRecord;
+    rec.rtype = rtype;
+    rec.payload = conn.rbuf.substring(5, 5 + len);
+    rec.raw = conn.rbuf.substring(0, 5 + len);        // full record incl. header (AEAD AAD)
+    conn.rbuf = conn.rbuf.substring(5 + len, conn.rbuf.len());
+    return ok(rec);
+}
+
+// Send a plaintext record (used for ClientHello + ChangeCipherSpec).
+fn _clsend(conn: *TlsConn, rtype: i32, payload: string) -> !bool {
+    let hdr: string = ((rtype & 255) as char).to_string().concat(_clu16v(0x0303)).concat(_clu16v(payload.len()));
+    let w: !i32 = conn.stream.write(hdr.concat(payload));
+    if !w.ok { return err(w.err); }
+    return ok(true);
+}
+
+// ---- Certificate message + CertificateVerify --------------------------
+
+// Parse a TLS 1.3 Certificate message body into DER certs (leaf first).
+fn _clparsecert(body: string) -> !*Vector<string> {
+    let ctx_len: i32 = _clb(body, 0);
+    let mut p: i32 = 1 + ctx_len;
+    if p + 3 > body.len() { return err("tls13: bad Certificate message"); }
+    let list_len: i32 = (_clb(body, p) << 16) | (_clb(body, p + 1) << 8) | _clb(body, p + 2);
+    p = p + 3;
+    let list_end: i32 = p + list_len;
+    let out: *Vector<string> = Vector::new();
+    while p + 3 <= list_end {
+        let clen: i32 = (_clb(body, p) << 16) | (_clb(body, p + 1) << 8) | _clb(body, p + 2);
+        p = p + 3;
+        if p + clen > list_end { break; }
+        out.push(body.substring(p, p + clen));
+        p = p + clen;
+        if p + 2 > list_end { break; }
+        let extlen: i32 = (_clb(body, p) << 8) | _clb(body, p + 1);
+        p = p + 2 + extlen;                 // skip per-cert extensions
+    }
+    return ok(out);
+}
+
+// Verify a CertificateVerify signature over the handshake transcript.
+fn _clcertverify(scheme: i32, leaf: *Cert, transcript_hash: string, signature: string) -> !bool {
+    // signed content = 64 * 0x20 || context string || 0x00 || transcript_hash
+    let sp: *ByteBuffer = ByteBuffer::new();
+    for let i: i32 = 0; i < 64; i++ { sp.push(0x20 as u8); }
+    sp.push_str("TLS 1.3, server CertificateVerify");
+    sp.push(0 as u8);
+    sp.push_str(transcript_hash);
+    let content: string = sp.to_string();
+    sp.free();
+
+    if scheme == SIG_ECDSA_P256_SHA256 {
+        let raw: !string = _clecdsaraw(signature, 32);
+        if !raw.ok { return err(raw.err); }
+        let v: !i32 = ecdsa_verify(leaf.pubkey, sha256(content), raw.val);
+        if !v.ok { return err(v.err); }
+        return ok(v.val == 1);
+    } else if scheme == SIG_ECDSA_P384_SHA384 {
+        let raw: !string = _clecdsaraw(signature, 48);
+        if !raw.ok { return err(raw.err); }
+        let v: !i32 = ecdsa_p384_verify(leaf.pubkey, sha384(content), raw.val);
+        if !v.ok { return err(v.err); }
+        return ok(v.val == 1);
+    }
+    return err("tls13: unsupported CertificateVerify scheme (RSA-PSS not yet implemented)");
+}
+
+// DER ECDSA-Sig-Value {r,s} -> raw r||s, each `size` bytes.
+fn _clecdsaraw(sig_der: string, size: i32) -> !string {
+    let d: *Der = der_new(sig_der);
+    let seq: !*Tlv = der_expect(d, ASN1_SEQUENCE);
+    if !seq.ok { return err(seq.err); }
+    let sd: *Der = der_into(seq.val);
+    let r: !*Tlv = der_expect(sd, ASN1_INTEGER);
+    if !r.ok { return err(r.err); }
+    let s: !*Tlv = der_expect(sd, ASN1_INTEGER);
+    if !s.ok { return err(s.err); }
+    return ok(_cllpad(der_int_bytes(r.val), size).concat(_cllpad(der_int_bytes(s.val), size)));
+}
+fn _cllpad(mag: string, n: i32) -> string {
+    let m: i32 = mag.len();
+    if m == n { return mag; }
+    if m > n { return mag.substring(m - n, m); }
+    let bb: *ByteBuffer = ByteBuffer::new();
+    for let i: i32 = 0; i < n - m; i++ { bb.push(0 as u8); }
+    bb.push_str(mag);
+    let s: string = bb.to_string(); bb.free(); return s;
+}
+
+// ---- handshake driver -------------------------------------------------
+
+/// Open a TLS 1.3 connection to `host`:`port`, offering the given ALPN
+/// protocol ids (may be empty). Performs and verifies the full handshake.
+pub fn tls13_connect(host: string, port: i32, alpn: *Vector<string>) -> !*TlsConn {
+    // 1. TCP connect.
+    let addrs: !*Vector<*IpAddr> = resolve(host);
+    if !addrs.ok { return err("tls13: DNS resolution failed for ".concat(host)); }
+    if addrs.val.len() == 0 { return err("tls13: no addresses for ".concat(host)); }
+    let sa: *SocketAddr = SocketAddr::new(addrs.val.get(0), port);
+    let st: !*TcpStream = TcpStream::connect(sa);
+    if !st.ok { return err(st.err); }
+
+    let conn: *TlsConn = malloc(sizeof(TlsConn)) as *TlsConn;
+    conn.stream = st.val;
+    conn.rbuf = "";
+    conn.inbuf = "";
+    conn.alpn = "";
+    conn.closed = false;
+
+    // 2. X25519 keypair + ClientHello.
+    let skr: !string = x25519_generate();
+    if !skr.ok { return err(skr.err); }
+    let sk: string = skr.val;
+    let pk: string = x25519_base(sk);
+    let chr: !string = build_client_hello(host, pk, alpn, "");
+    if !chr.ok { return err(chr.err); }
+    let ch: string = chr.val;
+
+    let transcript: *ByteBuffer = ByteBuffer::new();
+    transcript.push_str(ch);
+    let e1: !bool = _clsend(conn, 22, ch);
+    if !e1.ok { return err(e1.err); }
+
+    // 3. Read ServerHello (plaintext handshake record).
+    let shrec: !*RawRecord = _clnext(conn);
+    if !shrec.ok { return err(shrec.err); }
+    if shrec.val.rtype != 22 { return err("tls13: expected ServerHello record"); }
+    let shm: !*HsMessage = read_handshake(shrec.val.payload, 0);
+    if !shm.ok { return err(shm.err); }
+    if shm.val.msg_type != HS_SERVER_HELLO { return err("tls13: expected ServerHello"); }
+    transcript.push_str(shrec.val.payload.substring(0, shm.val.next));
+    let sh: !*ServerHello = parse_server_hello(shm.val.body);
+    if !sh.ok { return err(sh.err); }
+    if sh.val.is_hello_retry { return err("tls13: HelloRetryRequest not supported"); }
+    if sh.val.key_share_group != GROUP_X25519 || sh.val.server_key_share.len() != 32 {
+        return err("tls13: server did not select X25519");
+    }
+
+    // 4. ECDHE + handshake secrets.
+    let ecdhe: !string = x25519(sk, sh.val.server_key_share);
+    if !ecdhe.ok { return err(ecdhe.err); }
+    let cipher: i32 = sh.val.cipher_suite;
+    let keylen: i32 = 16;
+    conn.aead = AEAD_AES128_GCM;
+    if cipher == TLS_CHACHA20_POLY1305_SHA256 { conn.aead = AEAD_CHACHA20_POLY1305; keylen = 32; }
+    else if cipher != TLS_AES_128_GCM_SHA256 { return err("tls13: unsupported cipher suite"); }
+
+    let early: string = tls13_early_secret("");
+    let hsr: !string = tls13_handshake_secret(early, ecdhe.val);
+    if !hsr.ok { return err(hsr.err); }
+    let handshake_secret: string = hsr.val;
+    let th_sh: string = sha256(transcript.to_string());
+    let s_hs: !string = derive_secret_r(handshake_secret, "s hs traffic", th_sh);
+    let c_hs: !string = derive_secret_r(handshake_secret, "c hs traffic", th_sh);
+    if !s_hs.ok || !c_hs.ok { return err("tls13: hs traffic derivation failed"); }
+    let s_keys: !*TrafficKeys = tls13_traffic_keys(s_hs.val, keylen);
+    let c_keys: !*TrafficKeys = tls13_traffic_keys(c_hs.val, keylen);
+    if !s_keys.ok || !c_keys.ok { return err("tls13: traffic key derivation failed"); }
+
+    // 5. Read + decrypt the server's encrypted flight, reassembling
+    //    handshake messages. Skip a ChangeCipherSpec if present.
+    let mut s_seq: u64 = 0;
+    let hs_buf: *ByteBuffer = ByteBuffer::new();
+    let mut certs: *Vector<string> = Vector::new();
+    let mut th_before_certverify: string = "";
+    let mut th_before_serverfin: string = "";
+    let mut cv_scheme: i32 = 0;
+    let mut cv_sig: string = "";
+    let mut server_finished: string = "";
+    let mut got_finished: bool = false;
+
+    while !got_finished {
+        let rec: !*RawRecord = _clnext(conn);
+        if !rec.ok { return err(rec.err); }
+        if rec.val.rtype == 20 { continue; }            // ChangeCipherSpec: ignore
+        if rec.val.rtype != 23 { return err("tls13: unexpected record during flight"); }
+        let dec: !*RecordPlain = tls13_open(conn.aead, s_keys.val.key, s_keys.val.iv, s_seq, rec.val.raw);
+        if !dec.ok { return err(dec.err); }
+        s_seq = s_seq + 1;
+        if dec.val.content_type == 21 { return err("tls13: server sent an alert"); }
+        if dec.val.content_type != 22 { return err("tls13: expected handshake content"); }
+        hs_buf.push_str(dec.val.content);
+
+        // parse all complete handshake messages currently buffered
+        let mut avail: string = hs_buf.to_string();
+        let mut off: i32 = 0;
+        while off + 4 <= avail.len() {
+            let mlen: i32 = (_clb(avail, off + 1) << 16) | (_clb(avail, off + 2) << 8) | _clb(avail, off + 3);
+            if off + 4 + mlen > avail.len() { break; }   // incomplete; wait for more
+            let mtype: i32 = _clb(avail, off);
+            let mfull: string = avail.substring(off, off + 4 + mlen);
+            let mbody: string = avail.substring(off + 4, off + 4 + mlen);
+            transcript.push_str(mfull);
+            if mtype == HS_ENCRYPTED_EXTENSIONS {
+                conn.alpn = _clalpn(mbody);
+            } else if mtype == HS_CERTIFICATE {
+                let cs: !*Vector<string> = _clparsecert(mbody);
+                if !cs.ok { return err(cs.err); }
+                certs = cs.val;
+            } else if mtype == HS_CERTIFICATE_VERIFY {
+                th_before_certverify = sha256(_clupto(transcript, mfull));   // CH..Certificate
+                cv_scheme = (_clb(mbody, 0) << 8) | _clb(mbody, 1);
+                let siglen: i32 = (_clb(mbody, 2) << 8) | _clb(mbody, 3);
+                cv_sig = mbody.substring(4, 4 + siglen);
+            } else if mtype == HS_FINISHED {
+                th_before_serverfin = sha256(_clupto(transcript, mfull));    // CH..CertificateVerify
+                server_finished = mbody;
+                got_finished = true;
+                off = off + 4 + mlen;
+                break;
+            }
+            off = off + 4 + mlen;
+        }
+        // keep the unconsumed tail
+        hs_buf.clear();
+        if off < avail.len() { hs_buf.push_str(avail.substring(off, avail.len())); }
+    }
+
+    // 6. Verify the certificate chain against the OS trust store + hostname.
+    if certs.len() == 0 { return err("tls13: server sent no certificate"); }
+    let leafr: !*Cert = cert_parse(certs.get(0));
+    if !leafr.ok { return err(leafr.err); }
+    let leaf: *Cert = leafr.val;
+    let inters: *Vector<*Cert> = Vector::new();
+    for let i: i32 = 1; i < certs.len(); i++ {
+        let ic: !*Cert = cert_parse(certs.get(i));
+        if ic.ok { inters.push(ic.val); }
+    }
+    let roots: !*Vector<*Cert> = load_system_roots();
+    if !roots.ok { return err(roots.err); }
+    let now: i64 = Time::now().unix();
+    let chain: !bool = verify_chain(leaf, inters, roots.val, host, now);
+    if !chain.ok { return err(chain.err); }
+    if !chain.val { return err("tls13: certificate chain verification failed"); }
+
+    // 7. Verify CertificateVerify (leaf key signed the transcript).
+    let cv: !bool = _clcertverify(cv_scheme, leaf, th_before_certverify, cv_sig);
+    if !cv.ok { return err(cv.err); }
+    if !cv.val { return err("tls13: CertificateVerify signature invalid"); }
+
+    // 8. Verify server Finished.
+    let s_fin_key: !string = tls13_finished_key(s_hs.val);
+    if !s_fin_key.ok { return err(s_fin_key.err); }
+    let expect_sfin: string = hmac_sha256(s_fin_key.val, th_before_serverfin);
+    if !expect_sfin.eq(server_finished) { return err("tls13: server Finished mismatch"); }
+
+    // 9. Client Finished over CH..serverFinished, sent with client hs keys.
+    let th_client_fin: string = sha256(transcript.to_string());
+    let c_fin_key: !string = tls13_finished_key(c_hs.val);
+    if !c_fin_key.ok { return err(c_fin_key.err); }
+    let cfin_data: string = hmac_sha256(c_fin_key.val, th_client_fin);
+    let cfin_msg: string = ((HS_FINISHED & 255) as char).to_string()
+        .concat(_clu24s(cfin_data.len())).concat(cfin_data);
+    // ChangeCipherSpec for middlebox compat, then the encrypted Finished.
+    let _ccs: !bool = _clsend(conn, 20, (1 as char).to_string());
+    let cfin_rec: !string = tls13_seal(conn.aead, c_keys.val.key, c_keys.val.iv, 0, CT_HANDSHAKE, cfin_msg);
+    if !cfin_rec.ok { return err(cfin_rec.err); }
+    let w: !i32 = conn.stream.write(cfin_rec.val);
+    if !w.ok { return err(w.err); }
+
+    // 10. Application traffic keys — derived over Transcript-Hash(CH..server
+    //     Finished), the same transcript the client Finished signs.
+    let masterr: !string = tls13_master_secret(handshake_secret);
+    if !masterr.ok { return err(masterr.err); }
+    let c_ap: !string = derive_secret_r(masterr.val, "c ap traffic", th_client_fin);
+    let s_ap: !string = derive_secret_r(masterr.val, "s ap traffic", th_client_fin);
+    if !c_ap.ok || !s_ap.ok { return err("tls13: app traffic derivation failed"); }
+    let cak: !*TrafficKeys = tls13_traffic_keys(c_ap.val, keylen);
+    let sak: !*TrafficKeys = tls13_traffic_keys(s_ap.val, keylen);
+    if !cak.ok || !sak.ok { return err("tls13: app key derivation failed"); }
+    conn.c_key = cak.val.key; conn.c_iv = cak.val.iv; conn.c_seq = 0;
+    conn.s_key = sak.val.key; conn.s_iv = sak.val.iv; conn.s_seq = 0;
+
+    transcript.free();
+    return ok(conn);
+}
+
+fn _clu24s(n: i32) -> string {
+    let bb: *ByteBuffer = ByteBuffer::new();
+    bb.push(((n >> 16) & 255) as u8); bb.push(((n >> 8) & 255) as u8); bb.push((n & 255) as u8);
+    let s: string = bb.to_string(); bb.free(); return s;
+}
+
+// The transcript bytes up to (but not including) the last-appended message.
+fn _clupto(transcript: *ByteBuffer, last_msg: string) -> string {
+    let full: string = transcript.to_string();
+    return full.substring(0, full.len() - last_msg.len());
+}
+
+// ALPN from EncryptedExtensions: find extension type 16.
+fn _clalpn(body: string) -> string {
+    if body.len() < 2 { return ""; }
+    let ext_len: i32 = (_clb(body, 0) << 8) | _clb(body, 1);
+    let mut p: i32 = 2;
+    let end: i32 = 2 + ext_len;
+    while p + 4 <= end && p + 4 <= body.len() {
+        let etype: i32 = (_clb(body, p) << 8) | _clb(body, p + 1);
+        let elen: i32 = (_clb(body, p + 2) << 8) | _clb(body, p + 3);
+        p = p + 4;
+        if etype == 16 && elen >= 3 {
+            // ALPNProtocolNameList: u16 list_len, then u8-len name
+            let nlen: i32 = _clb(body, p + 2);
+            if p + 3 + nlen <= body.len() { return body.substring(p + 3, p + 3 + nlen); }
+        }
+        p = p + elen;
+    }
+    return "";
+}
+
+// ---- application data -------------------------------------------------
+
+/// Send application data over the connection.
+pub fn tls_write(conn: *TlsConn, data: string) -> !i32 {
+    if conn.closed { return err("tls13: connection closed"); }
+    let rec: !string = tls13_seal(conn.aead, conn.c_key, conn.c_iv, conn.c_seq, CT_APPLICATION_DATA, data);
+    if !rec.ok { return err(rec.err); }
+    conn.c_seq = conn.c_seq + 1;
+    let w: !i32 = conn.stream.write(rec.val);
+    if !w.ok { return err(w.err); }
+    return ok(data.len());
+}
+
+/// Read up to `max` bytes of application data. Post-handshake handshake
+/// messages (NewSessionTicket, key update requests) and empty records are
+/// skipped; a close_notify alert ends the stream (returns "").
+pub fn tls_read(conn: *TlsConn, max: i32) -> !string {
+    if conn.inbuf.len() > 0 {
+        let take: i32 = if conn.inbuf.len() < max { conn.inbuf.len() } else { max };
+        let out: string = conn.inbuf.substring(0, take);
+        conn.inbuf = conn.inbuf.substring(take, conn.inbuf.len());
+        return ok(out);
+    }
+    if conn.closed { return ok(""); }
+    while true {
+        let rec: !*RawRecord = _clnext(conn);
+        if !rec.ok { return err(rec.err); }
+        if rec.val.rtype == 20 { continue; }
+        let dec: !*RecordPlain = tls13_open(conn.aead, conn.s_key, conn.s_iv, conn.s_seq, rec.val.raw);
+        if !dec.ok { return err(dec.err); }
+        conn.s_seq = conn.s_seq + 1;
+        if dec.val.content_type == 23 {
+            let data: string = dec.val.content;
+            let take: i32 = if data.len() < max { data.len() } else { max };
+            if take < data.len() { conn.inbuf = data.substring(take, data.len()); }
+            return ok(data.substring(0, take));
+        } else if dec.val.content_type == 21 {
+            conn.closed = true;                         // alert (close_notify)
+            return ok("");
+        }
+        // handshake (NewSessionTicket / KeyUpdate): ignore, read next.
+    }
+    return ok("");
+}
+
+/// Close the connection (best-effort close_notify then TCP close).
+pub fn tls_close(conn: *TlsConn) {
+    if !conn.closed {
+        let alert: string = (1 as char).to_string().concat((0 as char).to_string());   // warning, close_notify
+        let rec: !string = tls13_seal(conn.aead, conn.c_key, conn.c_iv, conn.c_seq, CT_ALERT, alert);
+        if rec.ok { let _w: !i32 = conn.stream.write(rec.val); }
+        conn.closed = true;
+    }
+    conn.stream.close();
+}

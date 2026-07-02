@@ -29,32 +29,32 @@ pub const GROUP_SECP256R1: i32 = 0x0017;
 pub const TLS_AES_128_GCM_SHA256: i32 = 0x1301;
 pub const TLS_CHACHA20_POLY1305_SHA256: i32 = 0x1303;
 
-fn _byte(s: string, i: i32) -> i32 { return s.at(i).to_int() & 255; }
+fn _hsb(s: string, i: i32) -> i32 { return s.at(i).to_int() & 255; }
 
 // ---- wire-format helpers ----------------------------------------------
 
-fn _u16(n: i32) -> string {
+fn _hsu16(n: i32) -> string {
     let bb: *ByteBuffer = ByteBuffer::new();
     bb.push(((n >> 8) & 255) as u8); bb.push((n & 255) as u8);
     let s: string = bb.to_string(); bb.free(); return s;
 }
-fn _u24(n: i32) -> string {
+fn _hsu24(n: i32) -> string {
     let bb: *ByteBuffer = ByteBuffer::new();
     bb.push(((n >> 16) & 255) as u8); bb.push(((n >> 8) & 255) as u8); bb.push((n & 255) as u8);
     let s: string = bb.to_string(); bb.free(); return s;
 }
 // length-prefixed vectors (1/2/3-byte length header)
-fn _vec8(body: string) -> string {
+fn _hsvec8(body: string) -> string {
     let bb: *ByteBuffer = ByteBuffer::new();
     bb.push((body.len() & 255) as u8); bb.push_str(body);
     let s: string = bb.to_string(); bb.free(); return s;
 }
-fn _vec16(body: string) -> string { return _u16(body.len()).concat(body); }
-fn _vec24(body: string) -> string { return _u24(body.len()).concat(body); }
+fn _hsvec16(body: string) -> string { return _hsu16(body.len()).concat(body); }
+fn _hsvec24(body: string) -> string { return _hsu24(body.len()).concat(body); }
 
 // A single extension: type(2) || vec16(body).
-fn _extension(ext_type: i32, body: string) -> string {
-    return _u16(ext_type).concat(_vec16(body));
+fn _hsext(ext_type: i32, body: string) -> string {
+    return _hsu16(ext_type).concat(_hsvec16(body));
 }
 
 // ---- ClientHello ------------------------------------------------------
@@ -72,45 +72,45 @@ pub fn build_client_hello(hostname: string, x25519_pub: string,
         rnd = r.val;
     }
     let body: *ByteBuffer = ByteBuffer::new();
-    body.push_str(_u16(0x0303));                 // legacy_version TLS 1.2
+    body.push_str(_hsu16(0x0303));                 // legacy_version TLS 1.2
     body.push_str(rnd);                           // random
-    body.push_str(_vec8(""));                     // legacy_session_id (empty)
+    body.push_str(_hsvec8(""));                     // legacy_session_id (empty)
     // cipher_suites
-    body.push_str(_vec16(_u16(TLS_AES_128_GCM_SHA256).concat(_u16(TLS_CHACHA20_POLY1305_SHA256))));
+    body.push_str(_hsvec16(_hsu16(TLS_AES_128_GCM_SHA256).concat(_hsu16(TLS_CHACHA20_POLY1305_SHA256))));
     // legacy_compression_methods = { null }
-    body.push_str(_vec8((0 as char).to_string()));
+    body.push_str(_hsvec8((0 as char).to_string()));
 
     // extensions
     let ext: *ByteBuffer = ByteBuffer::new();
     // server_name (SNI): list of host_name(0) entries
     if hostname.len() > 0 {
-        let sni_entry: string = (0 as char).to_string().concat(_vec16(hostname));
-        ext.push_str(_extension(0, _vec16(sni_entry)));
+        let sni_entry: string = (0 as char).to_string().concat(_hsvec16(hostname));
+        ext.push_str(_hsext(0, _hsvec16(sni_entry)));
     }
     // supported_groups: x25519, secp256r1
-    ext.push_str(_extension(10, _vec16(_u16(GROUP_X25519).concat(_u16(GROUP_SECP256R1)))));
+    ext.push_str(_hsext(10, _hsvec16(_hsu16(GROUP_X25519).concat(_hsu16(GROUP_SECP256R1)))));
     // signature_algorithms
-    let sigalgs: string = _u16(0x0403).concat(_u16(0x0503)).concat(_u16(0x0804))
-        .concat(_u16(0x0805)).concat(_u16(0x0401)).concat(_u16(0x0501));
-    ext.push_str(_extension(13, _vec16(sigalgs)));
+    let sigalgs: string = _hsu16(0x0403).concat(_hsu16(0x0503)).concat(_hsu16(0x0804))
+        .concat(_hsu16(0x0805)).concat(_hsu16(0x0401)).concat(_hsu16(0x0501));
+    ext.push_str(_hsext(13, _hsvec16(sigalgs)));
     // supported_versions: TLS 1.3 (client uses a 1-byte-length list)
-    ext.push_str(_extension(43, _vec8(_u16(0x0304))));
+    ext.push_str(_hsext(43, _hsvec8(_hsu16(0x0304))));
     // key_share: one X25519 entry
-    let ks_entry: string = _u16(GROUP_X25519).concat(_vec16(x25519_pub));
-    ext.push_str(_extension(51, _vec16(ks_entry)));
+    let ks_entry: string = _hsu16(GROUP_X25519).concat(_hsvec16(x25519_pub));
+    ext.push_str(_hsext(51, _hsvec16(ks_entry)));
     // ALPN (optional)
     if alpn.len() > 0 {
         let protos: *ByteBuffer = ByteBuffer::new();
-        for let i: i32 = 0; i < alpn.len(); i++ { protos.push_str(_vec8(alpn.get(i))); }
+        for let i: i32 = 0; i < alpn.len(); i++ { protos.push_str(_hsvec8(alpn.get(i))); }
         let plist: string = protos.to_string(); protos.free();
-        ext.push_str(_extension(16, _vec16(plist)));
+        ext.push_str(_hsext(16, _hsvec16(plist)));
     }
     let exts: string = ext.to_string(); ext.free();
-    body.push_str(_vec16(exts));
+    body.push_str(_hsvec16(exts));
 
     let ch: string = body.to_string(); body.free();
     // Handshake header: msg_type(1) || uint24 length || body
-    return ok(((HS_CLIENT_HELLO & 255) as char).to_string().concat(_vec24(ch)));
+    return ok(((HS_CLIENT_HELLO & 255) as char).to_string().concat(_hsvec24(ch)));
 }
 
 // ---- ServerHello ------------------------------------------------------
@@ -134,12 +134,12 @@ pub fn parse_server_hello(body: string) -> !*ServerHello {
     p = p + 2;                                    // legacy_version
     let random: string = body.substring(p, p + 32);
     p = p + 32;
-    let sid_len: i32 = _byte(body, p); p = p + 1; // legacy_session_id_echo
+    let sid_len: i32 = _hsb(body, p); p = p + 1; // legacy_session_id_echo
     p = p + sid_len;
     if p + 3 > body.len() { return err("tls13: truncated ServerHello"); }
-    let cipher: i32 = (_byte(body, p) << 8) | _byte(body, p + 1); p = p + 2;
+    let cipher: i32 = (_hsb(body, p) << 8) | _hsb(body, p + 1); p = p + 2;
     p = p + 1;                                    // legacy_compression_method
-    let ext_len: i32 = (_byte(body, p) << 8) | _byte(body, p + 1); p = p + 2;
+    let ext_len: i32 = (_hsb(body, p) << 8) | _hsb(body, p + 1); p = p + 2;
     let ext_end: i32 = p + ext_len;
     if ext_end > body.len() { return err("tls13: ServerHello extensions overflow"); }
 
@@ -150,14 +150,14 @@ pub fn parse_server_hello(body: string) -> !*ServerHello {
     sh.is_hello_retry = random.eq(HRR_RANDOM);
 
     while p + 4 <= ext_end {
-        let etype: i32 = (_byte(body, p) << 8) | _byte(body, p + 1);
-        let elen: i32 = (_byte(body, p + 2) << 8) | _byte(body, p + 3);
+        let etype: i32 = (_hsb(body, p) << 8) | _hsb(body, p + 1);
+        let elen: i32 = (_hsb(body, p + 2) << 8) | _hsb(body, p + 3);
         p = p + 4;
         if p + elen > ext_end { break; }
         let edata: string = body.substring(p, p + elen);
         if etype == 51 && elen >= 4 {             // key_share
-            sh.key_share_group = (_byte(edata, 0) << 8) | _byte(edata, 1);
-            let kslen: i32 = (_byte(edata, 2) << 8) | _byte(edata, 3);
+            sh.key_share_group = (_hsb(edata, 0) << 8) | _hsb(edata, 1);
+            let kslen: i32 = (_hsb(edata, 2) << 8) | _hsb(edata, 3);
             if 4 + kslen <= elen { sh.server_key_share = edata.substring(4, 4 + kslen); }
         }
         p = p + elen;
@@ -174,8 +174,8 @@ pub struct HsMessage {
 }
 pub fn read_handshake(buf: string, off: i32) -> !*HsMessage {
     if off + 4 > buf.len() { return err("tls13: incomplete handshake header"); }
-    let mtype: i32 = _byte(buf, off);
-    let len: i32 = (_byte(buf, off + 1) << 16) | (_byte(buf, off + 2) << 8) | _byte(buf, off + 3);
+    let mtype: i32 = _hsb(buf, off);
+    let len: i32 = (_hsb(buf, off + 1) << 16) | (_hsb(buf, off + 2) << 8) | _hsb(buf, off + 3);
     if off + 4 + len > buf.len() { return err("tls13: incomplete handshake body"); }
     let m: *HsMessage = malloc(sizeof(HsMessage)) as *HsMessage;
     m.msg_type = mtype;
