@@ -60,7 +60,6 @@ jobs:
           update: true
           install: >-
             mingw-w64-ucrt-x86_64-openssl
-            mingw-w64-ucrt-x86_64-zlib
             mingw-w64-ucrt-x86_64-ngtcp2
             mingw-w64-ucrt-x86_64-nghttp3
             tar gzip
@@ -70,7 +69,7 @@ jobs:
         run: |
           set -e
           brew update >/dev/null
-          brew install openssl@3 zlib
+          brew install openssl@3
           brew install nghttp3 ngtcp2 || true
 
       - name: Resolve version
@@ -125,7 +124,6 @@ jobs:
           update: true
           install: >-
             mingw-w64-ucrt-x86_64-gcc
-            mingw-w64-ucrt-x86_64-zlib
             zip unzip tar gzip
 
       - name: Resolve version
@@ -202,7 +200,7 @@ jobs:
         run: |
           set -e
           # Building the bundle binary compiles main.glide, which links
-          # openssl / zlib / ngtcp2 / nghttp3. The plug-and-play host-build
+          # openssl / ngtcp2 / nghttp3. The plug-and-play host-build
           # path needs the host triple's sysroot installed in
           # <home>/.glide/targets/ — otherwise it tries to fetch it from the
           # release page, which 404s because THIS workflow is what
