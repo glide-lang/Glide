@@ -37,7 +37,7 @@ pub struct SelfSigned {
 fn _der_utctime(epoch: i64) -> string {
     let days: i64 = _fdiv(epoch, 86400);
     let secs: i64 = epoch - days * 86400;
-    let ymd: *Vector<i32> = _civil_from_days(days);
+    let ymd: *Vector<i32> = _x509g_civil(days);
     let y: i32 = ymd.get(0);
     let yy: i32 = ((y % 100) + 100) % 100;
     let s: string = _2d(yy).concat(_2d(ymd.get(1))).concat(_2d(ymd.get(2)))
@@ -54,7 +54,7 @@ fn _2d(n: i32) -> string {
     return ((48 + (n / 10) % 10) as char).to_string().concat(((48 + n % 10) as char).to_string());
 }
 // Inverse of the civil-days algorithm: days-since-epoch -> [year, month, day].
-fn _civil_from_days(z0: i64) -> *Vector<i32> {
+fn _x509g_civil(z0: i64) -> *Vector<i32> {
     let z: i64 = z0 + 719468;
     let era: i64 = (if z >= 0 { z } else { z - 146096 }) / 146097;
     let doe: i64 = z - era * 146097;

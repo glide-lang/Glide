@@ -29,6 +29,7 @@
 import stdlib::net::ip::*;
 import stdlib::net::dns::*;
 import stdlib::net::tcp::*;
+import stdlib::net::listener::*;
 import stdlib::net::sys::*;   // Stream trait — TlsStream is a Stream
 import stdlib::bytes::*;      // ByteBuffer — O(n) read accumulation
 import stdlib::net::tls13::client::*;   // pure-Glide TLS 1.3 backend
@@ -1120,7 +1121,11 @@ impl Stream for TlsStream {
 /// underlying TCP listening socket. `accept` blocks for the next
 /// client and returns a TlsStream after the handshake succeeds.
 pub struct TlsListener {
-    handle: *void,
+    handle: *void,              // OpenSSL SSL_CTX + socket (backend 0)
+    backend: i32,               // 0 = OpenSSL, 1 = pure-Glide TLS 1.3
+    glisten: *TcpListener,      // backend 1
+    identity: *ServerIdentity,  // backend 1: cert chain + key
+    salpn: *Vector<string>,     // backend 1: offered ALPN protocols
 }
 
 impl TlsListener {
@@ -1140,11 +1145,7 @@ impl TlsListener {
     /// }
     /// ```
     pub fn bind(port: i32, cert_path: string, key_path: string) -> !*TlsListener {
-        let h: *void = __glide_tls_listen(port, cert_path, key_path, "");
-        if h == null { return err("tls_listener: bind/cert/key failure"); }
-        let l: *TlsListener = malloc(sizeof(TlsListener)) as *TlsListener;
-        l.handle = h;
-        return ok(l);
+        return TlsListener::bind_alpn(port, cert_path, key_path, "");
     }
 
     /// Same as `bind` but advertises ALPN protocols (CSV, server-pref
@@ -1162,10 +1163,27 @@ impl TlsListener {
     /// ```
     pub fn bind_alpn(port: i32, cert_path: string, key_path: string,
                      alpn_csv: string) -> !*TlsListener {
+        if _tls_use_glide() {
+            let idr: !*ServerIdentity = tls13_load_identity(cert_path, key_path);
+            if !idr.ok { return err(idr.err); }
+            let lr: !*TcpListener = TcpListener::bind(port);
+            if !lr.ok { return err(lr.err); }
+            let l: *TlsListener = malloc(sizeof(TlsListener)) as *TlsListener;
+            l.handle = null;
+            l.backend = 1;
+            l.glisten = lr.val;
+            l.identity = idr.val;
+            l.salpn = _tls_alpn_vec(alpn_csv);
+            return ok(l);
+        }
         let h: *void = __glide_tls_listen(port, cert_path, key_path, alpn_csv);
         if h == null { return err("tls_listener: bind/cert/key failure"); }
         let l: *TlsListener = malloc(sizeof(TlsListener)) as *TlsListener;
         l.handle = h;
+        l.backend = 0;
+        l.glisten = null as *TcpListener;
+        l.identity = null as *ServerIdentity;
+        l.salpn = null as *Vector<string>;
         return ok(l);
     }
 
@@ -1180,6 +1198,14 @@ impl TlsListener {
     /// }
     /// ```
     pub fn accept(self: *TlsListener) -> !*TlsStream {
+        if self.backend == 1 {
+            let tr: !*TcpStream = self.glisten.accept();
+            if !tr.ok { return err(tr.err); }
+            let g: !*TlsConn = tls13_server_handshake(tr.val, self.identity.cert_chain,
+                                                      self.identity.key, self.salpn);
+            if !g.ok { return err(g.err); }
+            return ok(_tls_wrap_glide(g.val));
+        }
         let h: *void = __glide_tls_accept(self.handle);
         if h == null { return err("tls_listener: accept/handshake failure"); }
         let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
