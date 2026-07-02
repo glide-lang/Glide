@@ -527,11 +527,11 @@ fn run_new(name: string, is_lib: bool, emit_ai: bool, init_vcs: bool) -> i32 {
         let mut dir: string = name;
         if name.eq(".") || name.eq("./") {
             let r: !string = os_cwd();
-            if !r.ok {
+            if !r.is_ok() {
                 println!("new: could not resolve current directory");
                 return 1;
             }
-            dir = r.val;
+            dir = r.unwrap();
         }
         target_dir = name;
         proj_name = _basename(dir);
@@ -1261,11 +1261,11 @@ fn run_upgrade(argc: i32) -> i32 {
     let mut install_dir: string = __glide_getenv("GLIDE_INSTALL_DIR");
     if install_dir.eq("") {
         let home: !string = os_home_dir();
-        if !home.ok {
+        if !home.is_ok() {
             println!("upgrade: could not resolve HOME; set GLIDE_INSTALL_DIR and retry.");
             return 1;
         }
-        install_dir = home.val.concat("/.local/share/glide");
+        install_dir = home.unwrap().concat("/.local/share/glide");
     }
     let name: string = "glide-".concat(os).concat("-").concat(arch).concat("-").concat(latest);
     let url: string = "https://github.com/glide-lang/Glide/releases/download/v".concat(latest).concat("/").concat(name).concat(".tar.gz");
@@ -1404,14 +1404,14 @@ fn run_install(argc: i32) -> i32 {
 // `~/.glide/bin` — sits next to the dep cache. Created lazily.
 fn _bin_root() -> string {
     let home: !string = os_home_dir();
-    if !home.ok {
+    if !home.is_ok() {
         let tmp: string = __glide_getenv("TMP");
         if !tmp.eq("") {
             return tmp.concat("/.glide/bin");
         }
         return "./.glide_bin";
     }
-    return home.val.concat("/.glide/bin");
+    return home.unwrap().concat("/.glide/bin");
 }
 
 // Heuristic for `glide install` arg classification. Anything that
@@ -1829,7 +1829,7 @@ fn run_lint(target: string, argc: i32) -> i32 {
 // Diagnostics are printed inline (or JSON-emitted) as they come, so
 // the caller doesn't need to re-serialise.
 fn _lint_one_file(src_path: string, want_all: bool, json: bool) -> LintCounts {
-    let mut r: LintCounts = LintCounts { errors: 0, warnings: 0, promoted: 0, parse_failed: false };
+    let r: LintCounts = LintCounts { errors: 0, warnings: 0, promoted: 0, parse_failed: false };
     apply_lint_for(parent_dir(src_path));
     let stmts: *Vector<Stmt> = Vector::new();
     let pdiags: *Vector<ParseDiag> = Vector::new();
@@ -2126,8 +2126,8 @@ fn parse_program_into(stmts: *Vector<Stmt>, path: string, pdiags: *Vector<ParseD
         }
         if !found {
             let home: !string = os_home_dir();
-            if home.ok {
-                let home_bi: string = home.val.concat("/.glide/src/builtins");
+            if home.is_ok() {
+                let home_bi: string = home.unwrap().concat("/.glide/src/builtins");
                 if __glide_file_exists(home_bi.concat("/builtins.glide")) {
                     builtins_dir = home_bi;
                 }
@@ -2166,7 +2166,7 @@ fn parse_program_into(stmts: *Vector<Stmt>, path: string, pdiags: *Vector<ParseD
 // `cc` / `gcc` / `clang` on PATH (gcc / clang / MSYS2 / Apple CLT).
 // Returns "" when nothing usable is found, so the caller can print a
 // targeted per-platform install hint.
-fn pick_cc_host(needs_libs: bool) -> string {
+fn pick_cc_host(_needs_libs: bool) -> string {
     let env: string = __glide_getenv("CC");
     if !env.eq("") {
         return env;
@@ -2294,10 +2294,10 @@ fn _maybe_install_embedded_src() {
         return;
     }
     let home: !string = os_home_dir();
-    if !home.ok {
+    if !home.is_ok() {
         return;
     }
-    let dest_root: string = home.val.concat("/.glide");
+    let dest_root: string = home.unwrap().concat("/.glide");
     let dest_src: string = dest_root.concat("/src");
     let marker: string = dest_src.concat("/.glide_src_version");
     // Marker already matches → nothing to do.
@@ -2343,16 +2343,16 @@ fn _maybe_install_embedded_src() {
 // cc/clang now.
 fn _cleanup_legacy_zig() {
     let home: !string = os_home_dir();
-    if !home.ok {
+    if !home.is_ok() {
         return;
     }
-    let d1: string = home.val.concat("/.glide/runtime/zig");
+    let d1: string = home.unwrap().concat("/.glide/runtime/zig");
     if fs_is_dir(d1) {
         fs_remove_dir_rec(d1);
         println!("note: removed the legacy bundled zig toolchain at", d1);
         println!("      (the C backend is the system cc/clang now)");
     }
-    let d2: string = home.val.concat("/.glide/bin/runtime/zig");
+    let d2: string = home.unwrap().concat("/.glide/bin/runtime/zig");
     if fs_is_dir(d2) {
         fs_remove_dir_rec(d2);
     }
@@ -2369,14 +2369,14 @@ fn _have_on_path(prog: string) -> bool {
 // writes here; `--target=<triple>` reads). Mirrors `_bin_root()` shape.
 fn _target_root() -> string {
     let home: !string = os_home_dir();
-    if !home.ok {
+    if !home.is_ok() {
         let tmp: string = __glide_getenv("TMP");
         if !tmp.eq("") {
             return tmp.concat("/.glide/targets");
         }
         return "./.glide_targets";
     }
-    return home.val.concat("/.glide/targets");
+    return home.unwrap().concat("/.glide/targets");
 }
 
 // Directory holding the cached sysroot for `triple` (if installed).
@@ -3012,7 +3012,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
                 // Final say is the selector's: an old v1 sysroot without
                 // libc/ can't feed clang, so stay native.
                 let probe: !*CrossBackend = pick_cc_for_target(host_triple, needs_any_lib);
-                if probe.ok {
+                if probe.is_ok() {
                     eff_target = host_triple;
                 }
             }
@@ -3048,16 +3048,16 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     let mut cross_extra: string = "";
     if cross {
         let pick: !*CrossBackend = pick_cc_for_target(eff_target, needs_any_lib);
-        if !pick.ok {
+        if !pick.is_ok() {
             if !quiet {
                 spinner_finish(false, "");
             }
-            println!(col_red().concat("error").concat(col_reset()).concat(": ").concat(pick.err));
+            println!(col_red().concat("error").concat(col_reset()).concat(": ").concat(pick.unwrap_err()));
             return 1;
         }
-        cc = pick.val.cc;
-        cross_emit_target = pick.val.emit_target;
-        cross_extra = pick.val.extra;
+        cc = pick.unwrap().cc;
+        cross_emit_target = pick.unwrap().emit_target;
+        cross_extra = pick.unwrap().extra;
     } else {
         // Host backend: any system cc.
         cc = pick_cc_host(needs_any_lib);
@@ -3703,16 +3703,16 @@ fn _test_jobs() -> i32 {
         }
     }
     let cc: !i32 = os_cpu_count();
-    if !cc.ok {
+    if !cc.is_ok() {
         return 1;
     }
-    if cc.val <= 1 {
+    if cc.unwrap() <= 1 {
         return 1;
     }
     // Cap the default: past ~8 concurrent builds the shared scratch dir + the
     // C toolchain contend (more "file in use" retries) for little gain, since
     // the sequential run phase is the floor. Override with GLIDE_TEST_JOBS.
-    let mut j: i32 = cc.val - 1;
+    let mut j: i32 = cc.unwrap() - 1;
     if j > 8 {
         j = 8;
     }
@@ -4092,11 +4092,11 @@ fn _run_test_parallel(files: *Vector<string>, scratch: string, exe: string, jobs
     for let i: i32 = 0; i < n; i++ {
         let bc: string = _test_build_cmd(exe, tmps.get(i), outs.get(i), logs.get(i), true);
         let ch: !Child = _spawn_shell(bc);
-        if !ch.ok {
+        if !ch.is_ok() {
             brc.set(i, -1);
             continue;
         }
-        win_child.push(ch.val);
+        win_child.push(ch.unwrap());
         win_idx.push(i);
         let mut cap: i32 = jobs;
         if i == 0 {
@@ -4108,8 +4108,8 @@ fn _run_test_parallel(files: *Vector<string>, scratch: string, exe: string, jobs
             win_child.remove(0);
             win_idx.remove(0);
             let r: !ProcessResult = c0.wait();
-            if r.ok {
-                brc.set(idx0, r.val.exit_code);
+            if r.is_ok() {
+                brc.set(idx0, r.unwrap().exit_code);
             } else {
                 brc.set(idx0, -1);
             }
@@ -4121,8 +4121,8 @@ fn _run_test_parallel(files: *Vector<string>, scratch: string, exe: string, jobs
         win_child.remove(0);
         win_idx.remove(0);
         let r: !ProcessResult = c0.wait();
-        if r.ok {
-            brc.set(idx0, r.val.exit_code);
+        if r.is_ok() {
+            brc.set(idx0, r.unwrap().exit_code);
         } else {
             brc.set(idx0, -1);
         }

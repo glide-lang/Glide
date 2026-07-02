@@ -1451,7 +1451,7 @@ pub fn _find_call_context(text: string, line0: i32, col0: i32) -> SigCallCtx {
     if name_tok.kind != TOK_IDENT && name_tok.kind != TOK_KEYWORD {
         return none;
     }
-    let mut ctx: SigCallCtx = SigCallCtx { found: true, name: name_tok.lexeme, type_qual: "", is_method: false, active_param: commas };
+    let ctx: SigCallCtx = SigCallCtx { found: true, name: name_tok.lexeme, type_qual: "", is_method: false, active_param: commas };
     if open_idx - 2 >= 0 {
         let prev: Token = toks.get(open_idx - 2);
         if prev.kind == TOK_OP && prev.lexeme.eq("::") {

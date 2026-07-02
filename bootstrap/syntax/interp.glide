@@ -83,35 +83,35 @@ pub fn iv_null() -> IValue {
 }
 
 pub fn iv_int(n: i32) -> IValue {
-    let mut v: IValue = iv_null();
+    let v: IValue = iv_null();
     v.kind = IV_INT;
     v.i = n;
     return v;
 }
 
 pub fn iv_bool(b: bool) -> IValue {
-    let mut v: IValue = iv_null();
+    let v: IValue = iv_null();
     v.kind = IV_BOOL;
     v.b = b;
     return v;
 }
 
 pub fn iv_string(s: string) -> IValue {
-    let mut v: IValue = iv_null();
+    let v: IValue = iv_null();
     v.kind = IV_STRING;
     v.s = s;
     return v;
 }
 
 pub fn iv_char(c: char) -> IValue {
-    let mut v: IValue = iv_null();
+    let v: IValue = iv_null();
     v.kind = IV_CHAR;
     v.c = c;
     return v;
 }
 
 pub fn iv_ptr(p: *void, tag: string) -> IValue {
-    let mut v: IValue = iv_null();
+    let v: IValue = iv_null();
     v.kind = IV_PTR;
     v.p = p;
     v.ty_tag = tag;
@@ -119,14 +119,14 @@ pub fn iv_ptr(p: *void, tag: string) -> IValue {
 }
 
 pub fn iv_vector(vec: *Vector<IValue>) -> IValue {
-    let mut v: IValue = iv_null();
+    let v: IValue = iv_null();
     v.kind = IV_VECTOR;
     v.vec = vec;
     return v;
 }
 
 pub fn iv_hashmap(map: *HashMap<IValue>) -> IValue {
-    let mut v: IValue = iv_null();
+    let v: IValue = iv_null();
     v.kind = IV_HASHMAP;
     v.map = map;
     return v;
@@ -1013,7 +1013,7 @@ fn interp_assign(it: *Interp, e: *Expr) -> IValue {
     return iv_null();
 }
 
-fn interp_path(it: *Interp, e: *Expr) -> IValue {
+fn interp_path(it: *Interp, _e: *Expr) -> IValue {
     // EX_PATH without surrounding EX_CALL is an enum variant or a
     // bare const ref. The interpreter doesn't track enums, but the
     // compiler emits ast/stmt kind constants like `ST_FN` as ints,
@@ -1806,7 +1806,7 @@ fn attr_field(it: *Interp, a: *Attr, f: string) -> IValue {
     return iv_null();
 }
 
-fn ptr_method(it: *Interp, recv: IValue, name: string, args: *Vector<IValue>) -> IValue {
+fn ptr_method(it: *Interp, recv: IValue, name: string, _args: *Vector<IValue>) -> IValue {
     // Most ptr-targeted methods are field reads spelled with `()` in
     // user code (`s.kind()` etc); v1 doesn't surface any setters.
     return member_read(it, recv, name);
@@ -1856,7 +1856,7 @@ fn _arg_bool(it: *Interp, args: *Vector<IValue>, i: i32) -> bool {
 // the AST constructors can swallow. Items not matching the expected
 // tag are skipped (the macro author's mistake — surfaces as missing
 // stmts in the output).
-fn _vec_to_stmt_vec(it: *Interp, v: IValue) -> *Vector<Stmt> {
+fn _vec_to_stmt_vec(_it: *Interp, v: IValue) -> *Vector<Stmt> {
     let out: *Vector<Stmt> = Vector::new();
     if v.kind != IV_VECTOR {
         return out;
@@ -1871,7 +1871,7 @@ fn _vec_to_stmt_vec(it: *Interp, v: IValue) -> *Vector<Stmt> {
     return out;
 }
 
-fn _vec_to_expr_vec(it: *Interp, v: IValue) -> *Vector<Expr> {
+fn _vec_to_expr_vec(_it: *Interp, v: IValue) -> *Vector<Expr> {
     let out: *Vector<Expr> = Vector::new();
     if v.kind != IV_VECTOR {
         return out;
@@ -1886,7 +1886,7 @@ fn _vec_to_expr_vec(it: *Interp, v: IValue) -> *Vector<Expr> {
     return out;
 }
 
-fn _vec_to_param_vec(it: *Interp, v: IValue) -> *Vector<Param> {
+fn _vec_to_param_vec(_it: *Interp, v: IValue) -> *Vector<Param> {
     let out: *Vector<Param> = Vector::new();
     if v.kind != IV_VECTOR {
         return out;
@@ -1901,7 +1901,7 @@ fn _vec_to_param_vec(it: *Interp, v: IValue) -> *Vector<Param> {
     return out;
 }
 
-fn _vec_to_field_vec(it: *Interp, v: IValue) -> *Vector<Field> {
+fn _vec_to_field_vec(_it: *Interp, v: IValue) -> *Vector<Field> {
     let out: *Vector<Field> = Vector::new();
     if v.kind != IV_VECTOR {
         return out;
@@ -1916,7 +1916,7 @@ fn _vec_to_field_vec(it: *Interp, v: IValue) -> *Vector<Field> {
     return out;
 }
 
-fn _vec_to_string_vec(it: *Interp, v: IValue) -> *Vector<string> {
+fn _vec_to_string_vec(_it: *Interp, v: IValue) -> *Vector<string> {
     let out: *Vector<string> = Vector::new();
     if v.kind != IV_VECTOR {
         return out;

@@ -907,7 +907,7 @@ fn emit_impl(g: *CG, s: *Stmt) {
         let mangled: string = prefix.concat("_").concat(m.name);
         g.emit_line_dir(m.line, g.current_origin);
         // Emit a fn with mangled name.
-        let mut saved_name: string = m.name;
+        let _saved_name: string = m.name;
         // We can't mutate the Stmt easily here; emit signature inline then body.
         print!(type_to_c(m.fn_ret_ty), " ", mangled, "(");
         if m.fn_params == null || m.fn_params.len() == 0 {
@@ -975,7 +975,7 @@ fn emit_impl(g: *CG, s: *Stmt) {
 // Emit forward declarations for an `impl T { ... }` block's methods. Same
 // mangling rule as emit_impl. Lets methods reference each other (and free
 // fns reference impl methods) regardless of source order.
-fn emit_impl_fwd_decls(g: *CG, s: *Stmt) {
+fn emit_impl_fwd_decls(_g: *CG, s: *Stmt) {
     if s.impl_methods == null {
         return;
     }
@@ -1921,7 +1921,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
             // add e.g. `red()` to string without colliding. Bare `impl T` keeps
             // the unprefixed `T_method` name for back-compat.
             let mut is_namespaced: bool = false;
-            let mut bare_prefix: string = prefix;
+            let bare_prefix: string = prefix;
             if s.import_path != null && !s.import_path.eq("") {
                 prefix = s.import_path.concat("_").concat(prefix);
                 is_namespaced = true;

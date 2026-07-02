@@ -66,7 +66,7 @@ fn expand_trait_defaults(stmts: *Vector<Stmt>) {
         }
     }
     for let i: i32 = 0; i < stmts.len(); i++ {
-        let mut imp: Stmt = stmts.get(i);
+        let imp: Stmt = stmts.get(i);
         if imp.kind != ST_IMPL {
             continue;
         }

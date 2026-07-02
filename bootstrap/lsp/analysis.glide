@@ -393,7 +393,7 @@ pub fn analysis_trait_conformance(t: *Typer, stmts: *Vector<Stmt>) {
     }
 }
 
-fn check_method_signature(t: *Typer, impl_stmt: Stmt, req: Stmt, got: Stmt, target_name: string, trait_origin: string) {
+fn check_method_signature(t: *Typer, impl_stmt: Stmt, req: Stmt, got: Stmt, _target_name: string, trait_origin: string) {
     let req_arity: i32 = if_param_count(req);
     let got_arity: i32 = if_param_count(got);
     if req_arity != got_arity {
@@ -1545,7 +1545,7 @@ pub fn analysis_expect_fulfillment(t: *Typer, program: *Vector<Stmt>) {
                 if pe.pe_done {
                     continue;
                 }
-                let mut updated: ExpectPending = pe;
+                let updated: ExpectPending = pe;
                 updated.pe_done = true;
                 pending.set(idx, updated);
                 matched = true;
@@ -1568,7 +1568,7 @@ pub fn analysis_expect_fulfillment(t: *Typer, program: *Vector<Stmt>) {
                 if d.line < pe.pe_line || d.line > pe.pe_end_line {
                     continue;
                 }
-                let mut updated: ExpectPending = pe;
+                let updated: ExpectPending = pe;
                 updated.pe_done = true;
                 pending.set(idx, updated);
                 matched = true;
@@ -1597,7 +1597,7 @@ pub fn analysis_expect_fulfillment(t: *Typer, program: *Vector<Stmt>) {
             }
             let kept_rel: *Vector<DiagRelated> = Vector::new();
             for let r_i: i32 = 0; r_i < t.related.len(); r_i++ {
-                let mut r: DiagRelated = t.related.get(r_i);
+                let r: DiagRelated = t.related.get(r_i);
                 if r.diag_index < 0 || r.diag_index >= remap.len() {
                     continue;
                 }
@@ -2971,7 +2971,7 @@ pub fn analysis_arena_set_unbalanced(t: *Typer, program: *Vector<Stmt>) {
     }
 }
 
-fn _asu_check_fn(t: *Typer, body: *Vector<Stmt>, fn_line: i32, fn_col: i32) {
+fn _asu_check_fn(t: *Typer, body: *Vector<Stmt>, _fn_line: i32, _fn_col: i32) {
     let mut sets: i32 = 0;
     let mut defer_sets: i32 = 0;
     let mut first_set_line: i32 = 0;
@@ -4154,7 +4154,7 @@ fn _mu_merge_into(src: *HashMap<i32>, src_col: *HashMap<i32>, dst: *HashMap<i32>
     }
 }
 
-fn _mu_flag_held(t: *Typer, held: *HashMap<i32>, held_col: *HashMap<i32>, warned: *HashMap<bool>, exit_line: i32, exit_kind: string) {
+fn _mu_flag_held(t: *Typer, held: *HashMap<i32>, held_col: *HashMap<i32>, warned: *HashMap<bool>, _exit_line: i32, exit_kind: string) {
     let names: *Vector<string> = held.keys();
     for let i: i32 = 0; i < names.len(); i++ {
         let nm: string = names.get(i);

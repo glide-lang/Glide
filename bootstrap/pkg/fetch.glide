@@ -455,8 +455,8 @@ fn _resolve_one(url: string, urls: *Vector<string>, revs: *Vector<string>) -> st
         return "";
     }
     // Sort candidates into semver / opaque buckets.
-    let mut semvers: *Vector<SemVer> = Vector::new();
-    let mut opaque: *Vector<string> = Vector::new();
+    let semvers: *Vector<SemVer> = Vector::new();
+    let opaque: *Vector<string> = Vector::new();
     for let i: i32 = 0; i < candidates.len(); i++ {
         let s: string = candidates.get(i);
         let v: SemVer = parse_semver(s);

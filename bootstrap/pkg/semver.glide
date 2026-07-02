@@ -33,7 +33,7 @@ pub struct SemVer {
 // // v.major=1 v.minor=2 v.patch=3 v.prerelease="beta.1"
 // ```
 pub fn parse_semver(s: string) -> SemVer {
-    let mut v: SemVer;
+    let v: SemVer;
     v.major = 0;
     v.minor = 0;
     v.patch = 0;

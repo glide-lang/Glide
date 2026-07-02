@@ -4032,7 +4032,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
             }
         }
         if _is_enum_ctor {
-            let mut ename: string = _ec_ename;
+            let ename: string = _ec_ename;
             let vname: string = e.lhs.field;
             print!("((");
             print!(ename);
@@ -4253,7 +4253,7 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 }
             }
             if stripped != null && stripped.kind == TY_NAMED {
-                let mut prefix: string = stripped.name;
+                let prefix: string = stripped.name;
                 let mut fn_name: string = "";
                 // Qualified call `s.NS::method(...)` — encoded as `NS::method` in `field`.
                 // Skip the dispatch search and go straight to `NS_<type>_method`.

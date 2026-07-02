@@ -937,14 +937,14 @@ fn _drop_dep_line(src: string, name: string) -> string {
 // when HOME isn't set (CI envs without a home dir).
 pub fn cache_root() -> string {
     let home: !string = os_home_dir();
-    if !home.ok {
+    if !home.is_ok() {
         let tmp: string = __glide_getenv("TMP");
         if !tmp.eq("") {
             return tmp.concat("/.glide/cache");
         }
         return "./.glide_cache";
     }
-    return home.val.concat("/.glide/cache");
+    return home.unwrap().concat("/.glide/cache");
 }
 
 // Where a given dep lives (or would live) on disk. Path deps resolve
