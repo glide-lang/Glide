@@ -1390,7 +1390,7 @@ fn _manifest_hover_doc(word: string) -> string {
 // false) when the enclosing bracket is `[`/`{` (indexing / block, not a
 // call) or when a `;` at depth 0 proves we're at statement level.
 pub fn _find_call_context(text: string, line0: i32, col0: i32) -> SigCallCtx {
-    let none: SigCallCtx = SigCallCtx { found: false, name: "", type_qual: "", is_method: false, active_param: 0 };
+    let none: SigCallCtx = SigCallCtx { found: false, name: "", type_qual: "", is_method: false, active_param: 0, recv_end: 0 };
     let toks: *Vector<Token> = Vector::new();
     let lex: *Lexer = Lexer::new(text);
     while true {
@@ -1459,7 +1459,7 @@ pub fn _find_call_context(text: string, line0: i32, col0: i32) -> SigCallCtx {
     if name_tok.kind != TOK_IDENT && name_tok.kind != TOK_KEYWORD {
         return none;
     }
-    let ctx: SigCallCtx = SigCallCtx { found: true, name: name_tok.lexeme, type_qual: "", is_method: false, active_param: commas };
+    let ctx: SigCallCtx = SigCallCtx { found: true, name: name_tok.lexeme, type_qual: "", is_method: false, active_param: commas, recv_end: 0 };
     if open_idx - 2 >= 0 {
         let prev: Token = toks.get(open_idx - 2);
         if prev.kind == TOK_OP && prev.lexeme.eq("::") {
@@ -1472,6 +1472,10 @@ pub fn _find_call_context(text: string, line0: i32, col0: i32) -> SigCallCtx {
         } else {
             if prev.kind == TOK_OP && prev.lexeme.eq(".") {
                 ctx.is_method = true;
+                // The receiver ends at the `.`; record its byte offset so the
+                // method can be resolved against the receiver's TYPE (the right
+                // overload), not merely by name.
+                ctx.recv_end = _line_col_offset(text, prev.line - 1, prev.column - 1);
             }
         }
     }

@@ -1350,6 +1350,23 @@ case_completion_has("if condition offers true/false",
     {"line":2,"character":7},
     ["true","false"])
 
+# Method argument resolves against the RECEIVER's type (correct overload):
+# `p.set(|)` where `Pen::set(self, c: Color)` -> Color's variants, even though a
+# builtin `Vector::set(i, x)` shares the method name.
+case_completion_has("method arg resolves the receiver-type overload",
+    'enum Color { Red, Green, Blue }\n'
+    'struct Pen { c: i32 }\n'
+    'impl Pen {\n'
+    '    pub fn set(self: *Pen, c: Color) {}\n'
+    '}\n'
+    'fn main() -> i32 {\n'
+    '    let p: *Pen = malloc(8) as *Pen;\n'
+    '    p.set();\n'
+    '    return 0;\n'
+    '}',
+    {"line":7,"character":10},
+    ["Color::Red","Color::Green","Color::Blue"])
+
 # ---- struct hover (fields) + outline (field children) ----
 
 def _hover_val(r):

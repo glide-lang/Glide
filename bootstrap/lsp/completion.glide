@@ -3055,8 +3055,21 @@ fn _push_pkg_fields(items: *JsonValue, doc_path: string) {
 
 // Resolve the callee declaration of a call context. Free fn or `Type::static`
 // only -- a `recv.method(` call needs the receiver's type (handled later).
-fn _callee_decl(stmts: *Vector<Stmt>, ctx: SigCallCtx) -> *Stmt {
+fn _callee_decl(stmts: *Vector<Stmt>, ctx: SigCallCtx, text: string, line0: i32, path: string) -> *Stmt {
     if ctx.is_method {
+        // Resolve the method against the RECEIVER's type so overloads sharing a
+        // name (`Vector::set` vs `Pen::set`) don't collide. Fall back to the
+        // name-only lookup when the receiver type can't be resolved.
+        if ctx.recv_end > 0 {
+            let rt: *Type = _chain_resolve_type(text, ctx.recv_end, stmts, line0, path);
+            let st: *Type = _strip_ptr_borrow(rt);
+            if st != null && st.kind == TY_NAMED && st.name != null {
+                let m: *Stmt = find_method_in_impl(stmts, st.name, ctx.name);
+                if m != null {
+                    return m;
+                }
+            }
+        }
         let hit: ImplMethodHit = find_method_anywhere(stmts, ctx.name);
         return hit.method;
     }
@@ -3084,8 +3097,8 @@ fn _callee_param_idx(callee: *Stmt, ctx: SigCallCtx) -> i32 {
 // the callee, for the call's active argument. A referenced enum contributes
 // its variant names. Returns true when the active param is annotated (so the
 // caller stops instead of falling through to generic completion).
-fn _push_suggest_for_arg(stmts: *Vector<Stmt>, ctx: SigCallCtx, items: *JsonValue) -> bool {
-    let callee: *Stmt = _callee_decl(stmts, ctx);
+fn _push_suggest_for_arg(stmts: *Vector<Stmt>, ctx: SigCallCtx, text: string, line0: i32, path: string, items: *JsonValue) -> bool {
+    let callee: *Stmt = _callee_decl(stmts, ctx, text, line0, path);
     if callee == null || callee.kind != ST_FN {
         return false;
     }
@@ -3196,8 +3209,8 @@ fn _fnptr_snippet(ty: *Type) -> string {
 // Type-aware argument completion: for the call's active parameter, float the
 // values its declared type wants -- enum variants, a struct literal / its
 // constructors, ok/err/some/none, or a callback closure snippet.
-fn _push_arg_type_items(stmts: *Vector<Stmt>, ctx: SigCallCtx, items: *JsonValue, seen: *HashMap<bool>) {
-    let callee: *Stmt = _callee_decl(stmts, ctx);
+fn _push_arg_type_items(stmts: *Vector<Stmt>, ctx: SigCallCtx, text: string, line0: i32, path: string, items: *JsonValue, seen: *HashMap<bool>) {
+    let callee: *Stmt = _callee_decl(stmts, ctx, text, line0, path);
     if callee == null || callee.kind != ST_FN || callee.fn_params == null {
         return;
     }
@@ -3210,8 +3223,8 @@ fn _push_arg_type_items(stmts: *Vector<Stmt>, ctx: SigCallCtx, items: *JsonValue
 }
 
 // The declared type of the active argument slot (for boosting matching locals).
-fn _arg_expected_type(stmts: *Vector<Stmt>, ctx: SigCallCtx) -> *Type {
-    let callee: *Stmt = _callee_decl(stmts, ctx);
+fn _arg_expected_type(stmts: *Vector<Stmt>, ctx: SigCallCtx, text: string, line0: i32, path: string) -> *Type {
+    let callee: *Stmt = _callee_decl(stmts, ctx, text, line0, path);
     if callee == null || callee.kind != ST_FN || callee.fn_params == null {
         return null;
     }
@@ -4018,7 +4031,7 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
         let sctx: SigCallCtx = _find_call_context(doc.text, line0, col0);
         if sctx.found {
             let sit: *JsonValue = json_array();
-            if _push_suggest_for_arg(doc.stmts, sctx, sit) {
+            if _push_suggest_for_arg(doc.stmts, sctx, doc.text, line0, uri_to_path(uri), sit) {
                 lsp_send_response(id, sit);
                 return;
             }
@@ -4034,16 +4047,14 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
     // generic completion below so locals etc. still appear.
     let actx: SigCallCtx = _find_call_context(doc.text, line0, col0);
     if actx.found {
-        _push_arg_type_items(doc.stmts, actx, items, seen);
+        _push_arg_type_items(doc.stmts, actx, doc.text, line0, uri_to_path(uri), items, seen);
         // Also float in-scope values whose type matches the expected parameter.
-        // Free functions only: method-callee resolution is name-only today and
-        // would resolve the wrong overload's param type.
-        if !actx.is_method {
-            let _arg_ety: *Type = _arg_expected_type(doc.stmts, actx);
-            if _arg_ety != null {
-                let _arg_host: *Stmt = fn_containing(doc.stmts, line0, uri_to_path(uri));
-                _boost_matching_locals(doc.stmts, _arg_host, line0, uri_to_path(uri), _arg_ety, items, seen);
-            }
+        // Works for methods too now that the callee resolves against the
+        // receiver's type (`_callee_decl`), not merely by method name.
+        let _arg_ety: *Type = _arg_expected_type(doc.stmts, actx, doc.text, line0, uri_to_path(uri));
+        if _arg_ety != null {
+            let _arg_host: *Stmt = fn_containing(doc.stmts, line0, uri_to_path(uri));
+            _boost_matching_locals(doc.stmts, _arg_host, line0, uri_to_path(uri), _arg_ety, items, seen);
         }
     }
     // Struct-literal field completion: cursor at a field-name slot inside

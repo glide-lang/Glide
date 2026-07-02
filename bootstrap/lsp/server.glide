@@ -1829,6 +1829,7 @@ struct SigCallCtx {
     pub type_qual: string,
     pub is_method: bool,
     pub active_param: i32,
+    pub recv_end: i32, // byte offset just past the receiver in `recv.method(` (0 if none)
 }
 
 // ---- semanticTokens ----------------------------------------------------
