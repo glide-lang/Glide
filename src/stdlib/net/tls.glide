@@ -815,6 +815,14 @@ pub struct TlsStream {
 fn _tls_use_glide() -> bool {
     return !env_get("GLIDE_TLS_BACKEND").eq("openssl");
 }
+// Wrap a Glide TlsConn as a TlsStream (backend 1).
+fn _tls_wrap_glide(g: *TlsConn) -> *TlsStream {
+    let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
+    s.handle = null;
+    s.backend = 1;
+    s.gconn = g;
+    return s;
+}
 // Split a comma-separated ALPN string into a protocol list.
 fn _tls_alpn_vec(alpn: string) -> *Vector<string> {
     let out: *Vector<string> = Vector::new();
@@ -845,17 +853,19 @@ impl TlsStream {
     /// }
     /// ```
     pub fn connect(host: string, port: i32, cfg: *TlsConfig) -> !*TlsStream {
-        // Pure-Glide TLS 1.3 backend (opt-in). Only for verifying clients —
-        // the Glide backend always validates the chain, so insecure/dev
-        // connections fall through to OpenSSL.
-        if _tls_use_glide() && cfg.verify {
-            let g: !*TlsConn = tls13_connect(host, port, _tls_alpn_vec(cfg.alpn));
+        // Pure-Glide TLS 1.3 backend (default). Handles verifying and
+        // insecure clients; the handshake runs either way, only chain
+        // validation is gated by cfg.verify.
+        if _tls_use_glide() {
+            let ra: !*Vector<*IpAddr> = resolve(host);
+            if !ra.ok { return err(ra.err); }
+            if ra.val.len() == 0 { return err("tls: no addresses for ".concat(host)); }
+            let sa: *SocketAddr = SocketAddr::new(ra.val.get(0), port);
+            let st: !*TcpStream = TcpStream::connect(sa);
+            if !st.ok { return err(st.err); }
+            let g: !*TlsConn = tls13_attach(st.val, host, _tls_alpn_vec(cfg.alpn), cfg.verify);
             if !g.ok { return err(g.err); }
-            let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
-            s.handle = null;
-            s.backend = 1;
-            s.gconn = g.val;
-            return ok(s);
+            return ok(_tls_wrap_glide(g.val));
         }
         let r: !*Vector<*IpAddr> = resolve(host);
         if !r.ok { return err(r.err); }
@@ -913,6 +923,13 @@ impl TlsStream {
     /// ```
     pub fn attach(tcp: *TcpStream, hostname: string,
                   cfg: *TlsConfig) -> !*TlsStream {
+        if _tls_use_glide() {
+            // The Glide backend keeps the TcpStream wrapper (it reads/writes
+            // through it), unlike the OpenSSL path which surrenders the fd.
+            let g: !*TlsConn = tls13_attach(tcp, hostname, _tls_alpn_vec(cfg.alpn), cfg.verify);
+            if !g.ok { return err(g.err); }
+            return ok(_tls_wrap_glide(g.val));
+        }
         let fd: i64 = tcp.fd;
         // Hand the fd off to TLS. Free only the wrapper struct so the
         // socket isn't closed underneath us.

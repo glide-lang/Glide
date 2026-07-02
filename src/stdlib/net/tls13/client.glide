@@ -182,16 +182,27 @@ fn _cllpad(mag: string, n: i32) -> string {
 /// Open a TLS 1.3 connection to `host`:`port`, offering the given ALPN
 /// protocol ids (may be empty). Performs and verifies the full handshake.
 pub fn tls13_connect(host: string, port: i32, alpn: *Vector<string>) -> !*TlsConn {
-    // 1. TCP connect.
     let addrs: !*Vector<*IpAddr> = resolve(host);
     if !addrs.ok { return err("tls13: DNS resolution failed for ".concat(host)); }
     if addrs.val.len() == 0 { return err("tls13: no addresses for ".concat(host)); }
     let sa: *SocketAddr = SocketAddr::new(addrs.val.get(0), port);
     let st: !*TcpStream = TcpStream::connect(sa);
     if !st.ok { return err(st.err); }
+    return tls13_client_handshake(st.val, host, alpn, true);
+}
 
+/// Run the TLS 1.3 client handshake over an already-connected `stream`
+/// (STARTTLS-style upgrade). When `verify` is false the certificate chain
+/// is not validated (dev/self-signed only — the handshake still runs).
+pub fn tls13_attach(stream: *TcpStream, host: string, alpn: *Vector<string>, verify: bool) -> !*TlsConn {
+    return tls13_client_handshake(stream, host, alpn, verify);
+}
+
+/// The client handshake proper, over a connected `stream`.
+pub fn tls13_client_handshake(stream: *TcpStream, host: string,
+                              alpn: *Vector<string>, verify: bool) -> !*TlsConn {
     let conn: *TlsConn = malloc(sizeof(TlsConn)) as *TlsConn;
-    conn.stream = st.val;
+    conn.stream = stream;
     conn.rbuf = "";
     conn.inbuf = "";
     conn.alpn = "";
@@ -306,22 +317,25 @@ pub fn tls13_connect(host: string, port: i32, alpn: *Vector<string>) -> !*TlsCon
         if off < avail.len() { hs_buf.push_str(avail.substring(off, avail.len())); }
     }
 
-    // 6. Verify the certificate chain against the OS trust store + hostname.
+    // 6. Parse the leaf; verify the chain against the OS trust store +
+    //    hostname unless the caller opted out of verification.
     if certs.len() == 0 { return err("tls13: server sent no certificate"); }
     let leafr: !*Cert = cert_parse(certs.get(0));
     if !leafr.ok { return err(leafr.err); }
     let leaf: *Cert = leafr.val;
-    let inters: *Vector<*Cert> = Vector::new();
-    for let i: i32 = 1; i < certs.len(); i++ {
-        let ic: !*Cert = cert_parse(certs.get(i));
-        if ic.ok { inters.push(ic.val); }
+    if verify {
+        let inters: *Vector<*Cert> = Vector::new();
+        for let i: i32 = 1; i < certs.len(); i++ {
+            let ic: !*Cert = cert_parse(certs.get(i));
+            if ic.ok { inters.push(ic.val); }
+        }
+        let roots: !*Vector<*Cert> = load_system_roots();
+        if !roots.ok { return err(roots.err); }
+        let now: i64 = Time::now().unix();
+        let chain: !bool = verify_chain(leaf, inters, roots.val, host, now);
+        if !chain.ok { return err(chain.err); }
+        if !chain.val { return err("tls13: certificate chain verification failed"); }
     }
-    let roots: !*Vector<*Cert> = load_system_roots();
-    if !roots.ok { return err(roots.err); }
-    let now: i64 = Time::now().unix();
-    let chain: !bool = verify_chain(leaf, inters, roots.val, host, now);
-    if !chain.ok { return err(chain.err); }
-    if !chain.val { return err("tls13: certificate chain verification failed"); }
 
     // 7. Verify CertificateVerify (leaf key signed the transcript).
     let cv: !bool = _clcertverify(cv_scheme, leaf, th_before_certverify, cv_sig);
