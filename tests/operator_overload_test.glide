@@ -1,0 +1,91 @@
+import stdlib::testing::*;
+
+struct Point { x: i32, y: i32 }
+struct Tagged { p: Point, tag: string }
+
+// Ordering + arithmetic via operator methods.
+struct Vec2 { x: i32, y: i32 }
+impl Vec2 {
+    fn add(self: *Vec2, o: *Vec2) -> *Vec2 { let r: *Vec2 = Vec2 { x: self.x + o.x, y: self.y + o.y }; return r; }
+    fn mul(self: *Vec2, o: *Vec2) -> *Vec2 { let r: *Vec2 = Vec2 { x: self.x * o.x, y: self.y * o.y }; return r; }
+    // order by the coordinate sum
+    fn cmp(self: *Vec2, o: *Vec2) -> i32 { return (self.x + self.y) - (o.x + o.y); }
+}
+
+// Custom `eq` overrides the automatic field-by-field comparison: two Ids are
+// equal when their `n` matches, ignoring `note`.
+struct Id { n: i32, note: string }
+impl Id { fn eq(self: *Id, o: *Id) -> bool { return self.n == o.n; } }
+
+fn test_string_value_equality() -> i32 {
+    assert!("alelo" == "ale".concat("lo"));   // same bytes, different pointers
+    assert!("alelo" != "pinto");
+    assert!(!("a" == "b"));
+    return 0;
+}
+
+fn test_string_ordering_and_concat() -> i32 {
+    assert!("abc" < "abd");
+    assert!("abc" <= "abc");
+    assert!("b" > "a");
+    assert_str_eq!("foo" + "bar", "foobar");
+    return 0;
+}
+
+fn test_struct_auto_equality() -> i32 {
+    let a: *Point = Point { x: 1, y: 2 };
+    let b: *Point = Point { x: 1, y: 2 };
+    let c: *Point = Point { x: 9, y: 2 };
+    assert!(a == b);
+    assert!(a != c);
+    return 0;
+}
+
+fn test_struct_nested_and_string_field() -> i32 {
+    let a: *Tagged = Tagged { p: Point { x: 3, y: 4 }, tag: "hi" };
+    let b: *Tagged = Tagged { p: Point { x: 3, y: 4 }, tag: "h".concat("i") };
+    let c: *Tagged = Tagged { p: Point { x: 3, y: 4 }, tag: "bye" };
+    assert!(a == b);   // nested struct + string field compared by value
+    assert!(a != c);
+    return 0;
+}
+
+fn test_custom_eq_overrides_auto() -> i32 {
+    let a: *Id = Id { n: 7, note: "first" };
+    let b: *Id = Id { n: 7, note: "second" };
+    assert!(a == b);   // custom eq ignores `note`
+    return 0;
+}
+
+fn test_tuple_equality() -> i32 {
+    let a: (i32, string) = (5, "ok");
+    let b: (i32, string) = (5, "o".concat("k"));
+    let c: (i32, string) = (6, "ok");
+    assert!(a == b);
+    assert!(a != c);
+    return 0;
+}
+
+fn test_struct_ordering() -> i32 {
+    let a: *Vec2 = Vec2 { x: 1, y: 1 };
+    let b: *Vec2 = Vec2 { x: 3, y: 4 };
+    assert!(a < b);
+    assert!(b > a);
+    assert!(a >= a);
+    assert!(!(a > b));
+    return 0;
+}
+
+fn test_struct_arithmetic() -> i32 {
+    let a: *Vec2 = Vec2 { x: 1, y: 2 };
+    let b: *Vec2 = Vec2 { x: 3, y: 5 };
+    let sum: *Vec2 = a + b;
+    assert_eq!(sum.x, 4);
+    assert_eq!(sum.y, 7);
+    let p: *Vec2 = Vec2 { x: 2, y: 3 };
+    let q: *Vec2 = Vec2 { x: 4, y: 5 };
+    let prod: *Vec2 = p * q;
+    assert_eq!(prod.x, 8);
+    assert_eq!(prod.y, 15);
+    return 0;
+}
