@@ -3144,10 +3144,17 @@ fn parse_prefix(p: *Parser) -> *Expr {
         if p.at_op("::") {
             p.advance();
             let mut prefix: string = tok.lexeme;
+            // Track the position of the FINAL segment (the `field`), so
+            // references/rename on `Type::method` anchor at `method`, not at
+            // the qualifier — otherwise a rename overwrites the qualifier.
+            let mut last_line: i32 = p.current.line;
+            let mut last_col: i32 = p.current.column;
             let mut last: string = p.expect_ident();
             while p.at_op("::") {
                 p.advance();
                 prefix = prefix.concat("::").concat(last);
+                last_line = p.current.line;
+                last_col = p.current.column;
                 last = p.expect_ident();
             }
             if p.at_op("!") && p.peek_op("(") {
@@ -3196,7 +3203,10 @@ fn parse_prefix(p: *Parser) -> *Expr {
                 sl.field = prefix;
                 return sl;
             }
-            return expr_path(prefix, last, line, col);
+            let pe: *Expr = expr_path(prefix, last, line, col);
+            pe.field_line = last_line;
+            pe.field_col = last_col;
+            return pe;
         }
         // `name!(...)` macro call?
         if p.at_op("!") && p.peek_op("(") {

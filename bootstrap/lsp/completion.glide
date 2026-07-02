@@ -4409,20 +4409,23 @@ fn collect_uses_in_expr(e: *Expr, name: string, out: *Vector<UseSite>) {
         let u: UseSite = UseSite { line: e.line, col: e.column };
         out.push(u);
     }
-    if has_pos && e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_PATH && e.lhs.str_val.eq(name) {
-        let u: UseSite = UseSite { line: e.line, col: e.column };
-        out.push(u);
-    }
-    // `Type::method` outside an EX_CALL (function-pointer slot, enum
-    // variant ctor, ...). Without this `Router::new` typed standalone
-    // doesn't highlight.
+    // A called `Type::method(...)` reaches its qualifier and field through the
+    // EX_PATH branch below (via the e.lhs recursion), so no EX_CALL special
+    // case is needed — one here only produced a duplicate qualifier hit.
+    // `Type::method` (function-pointer slot, enum variant ctor, called or not).
     if has_pos && e.kind == EX_PATH {
         if e.str_val != null && e.str_val.eq(name) {
             let u: UseSite = UseSite { line: e.line, col: e.column };
             out.push(u);
         }
         if e.field != null && e.field.eq(name) {
-            let u: UseSite = UseSite { line: e.line, col: e.column };
+            // Anchor at the FIELD segment, not the qualifier — otherwise a
+            // rename of `method` in `Type::method` overwrites `Type`. The
+            // parser records field_line/col for `::` paths; fall back to the
+            // node position for anything synthesised.
+            let fl: i32 = if e.field_line > 0 { e.field_line } else { e.line };
+            let fc: i32 = if e.field_line > 0 { e.field_col } else { e.column };
+            let u: UseSite = UseSite { line: fl, col: fc };
             out.push(u);
         }
     }
@@ -4489,15 +4492,17 @@ fn _collect_type_uses(t: *Type, name: string, out: *Vector<UseSite>, carrier_lin
     if t == null {
         return;
     }
-    if carrier_line == 0 {
+    // Anchor at the type node's OWN position (parse_type records it), so
+    // references/rename on `TcpStream` in `fn h(s: *TcpStream)` land on the
+    // type token, not the enclosing param name. Fall back to the carrier
+    // (the decl/param/cast that holds it) for synthesised types.
+    let tl: i32 = if t.line > 0 { t.line } else { carrier_line };
+    let tc: i32 = if t.line > 0 { t.col } else { carrier_col };
+    if tl == 0 {
         return;
     }
-    if t.kind == TY_NAMED && t.name != null && t.name.eq(name) {
-        let u: UseSite = UseSite { line: carrier_line, col: carrier_col };
-        out.push(u);
-    }
-    if t.kind == TY_GENERIC && t.name != null && t.name.eq(name) {
-        let u: UseSite = UseSite { line: carrier_line, col: carrier_col };
+    if (t.kind == TY_NAMED || t.kind == TY_GENERIC) && t.name != null && t.name.eq(name) {
+        let u: UseSite = UseSite { line: tl, col: tc };
         out.push(u);
     }
     if t.inner != null {

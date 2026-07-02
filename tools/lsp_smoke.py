@@ -593,6 +593,21 @@ case_feature("references finds 2 sites",
         r and "result" in r and len(r["result"]) == 2,
         f"got {len(r['result']) if r and 'result' in r else 0}"))
 
+# A `Type::method` reference must anchor at the METHOD segment, never the
+# qualifier — a rename anchored at the qualifier silently overwrites the type
+# name (data loss). `Foo::make()` in main starts at col 27 (Foo), 32 (make).
+case_feature("references on Type::method anchor at the method (rename safety)",
+    'struct Foo {}\n'
+    'impl Foo { fn make() -> i32 { return 1; } }\n'
+    'fn main() -> i32 { let x = Foo::make(); return 0; }',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/references",
+     "params":{"position":{"line":2,"character":33},"context":{"includeDeclaration":True}}},
+    lambda r: check("use anchors at `make` (32), not `Foo` (27)",
+        r and "result" in r
+          and any(l["range"]["start"]["line"]==2 and l["range"]["start"]["character"]==32 for l in r["result"])
+          and not any(l["range"]["start"]["line"]==2 and l["range"]["start"]["character"]==27 for l in r["result"]),
+        f"got {[(l['range']['start']['line'], l['range']['start']['character']) for l in (r.get('result',[]) if r else [])]}"))
+
 case_feature("rename produces edits",
     'fn helper() -> i32 { return 1; }\n'
     'fn main() -> i32 { return helper(); }',
