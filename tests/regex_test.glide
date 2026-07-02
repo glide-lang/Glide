@@ -1,0 +1,239 @@
+import stdlib::testing::*;
+import stdlib::regex::*;
+
+// Small helper: compile a pattern, asserting it is valid, and return it.
+fn _re(pat: string) -> *Regex {
+    let r: !*Regex = Regex::compile(pat);
+    assert!(r.ok);
+    return r.val;
+}
+
+fn test_literal_match_and_find() -> i32 {
+    let re: *Regex = _re("abc");
+    assert!(re.matches("xxabcyy"));
+    assert!(!re.matches("ab_c"));
+    let m: ?*Match = re.find("__abc__");
+    assert!(m.has);
+    assert_eq!(m.val.start, 2);
+    assert_eq!(m.val.end, 5);
+    assert_str_eq!(m.val.full(), "abc");
+    return 0;
+}
+
+fn test_matches_full_anchored() -> i32 {
+    let re: *Regex = _re("a+");
+    assert!(re.matches_full("aaaa"));
+    assert!(!re.matches_full("aaab"));
+    assert!(re.matches("aaab"));   // partial still matches
+    return 0;
+}
+
+fn test_digit_class_and_groups() -> i32 {
+    let re: *Regex = _re("(\\d+)-(\\d+)");
+    let m: ?*Match = re.find("phone: 555-1234 end");
+    assert!(m.has);
+    assert_str_eq!(m.val.full(), "555-1234");
+    assert_str_eq!(m.val.group(1), "555");
+    assert_str_eq!(m.val.group(2), "1234");
+    assert_eq!(m.val.n_groups(), 2);
+    return 0;
+}
+
+fn test_char_class_ranges() -> i32 {
+    let lower: *Regex = _re("[a-z]+");
+    assert_str_eq!(lower.find("  hello  ").val.full(), "hello");
+    let neg: *Regex = _re("[^0-9]+");
+    assert_str_eq!(neg.find("42abc").val.full(), "abc");
+    let set: *Regex = _re("[aeiou]");
+    assert_str_eq!(set.find("xyzooo").val.full(), "o");
+    return 0;
+}
+
+fn test_predefined_classes() -> i32 {
+    assert!(_re("\\w+").matches("hello_1"));
+    assert!(_re("\\s").matches("a b"));
+    assert!(!_re("\\s").matches("abc"));
+    assert!(_re("\\D+").matches("abc"));
+    assert_str_eq!(_re("\\w+").find(" a_b9 ").val.full(), "a_b9");
+    return 0;
+}
+
+fn test_quantifiers() -> i32 {
+    assert!(_re("ab*c").matches("ac"));       // zero
+    assert!(_re("ab*c").matches("abbbc"));    // many
+    assert!(!_re("ab+c").matches("ac"));      // needs one
+    assert!(_re("ab?c").matches("abc"));
+    assert!(_re("ab?c").matches("ac"));
+    assert_str_eq!(_re("a{3}").find("aaaaa").val.full(), "aaa");
+    assert_str_eq!(_re("a{2,}").find("aaaa").val.full(), "aaaa");
+    assert_str_eq!(_re("a{2,3}").find("aaaaa").val.full(), "aaa");
+    return 0;
+}
+
+fn test_greedy_vs_lazy() -> i32 {
+    assert_str_eq!(_re("a.*b").find("axbxb").val.full(), "axbxb");
+    assert_str_eq!(_re("a.*?b").find("axbxb").val.full(), "axb");
+    return 0;
+}
+
+fn test_alternation() -> i32 {
+    let re: *Regex = _re("cat|dog|bird");
+    assert!(re.matches("I have a dog"));
+    assert_str_eq!(re.find("a bird here").val.full(), "bird");
+    assert!(!re.matches("a fish"));
+    return 0;
+}
+
+fn test_anchors_start_end() -> i32 {
+    assert!(_re("^abc").matches("abcdef"));
+    assert!(!_re("^abc").matches("xabc"));
+    assert!(_re("xyz$").matches("wwxyz"));
+    assert!(!_re("xyz$").matches("xyzw"));
+    assert!(_re("\\Aab").matches("abc"));
+    assert!(_re("yz\\z").matches("xyz"));
+    return 0;
+}
+
+fn test_word_boundaries() -> i32 {
+    let re: *Regex = _re("\\bcat\\b");
+    assert!(re.matches("the cat sat"));
+    assert!(!re.matches("category"));
+    let nb: *Regex = _re("\\Bcat");
+    assert!(nb.matches("scatter"));
+    assert!(!nb.matches("cat"));
+    return 0;
+}
+
+fn test_named_groups() -> i32 {
+    let re: *Regex = _re("(?<year>\\d{4})-(?<mon>\\d{2})");
+    let m: ?*Match = re.find("date 2026-07 done");
+    assert!(m.has);
+    assert_str_eq!(m.val.named("year"), "2026");
+    assert_str_eq!(m.val.named("mon"), "07");
+    let o: ?string = m.val.named_opt("year");
+    assert!(o.has);
+    assert_str_eq!(o.val, "2026");
+    assert!(!m.val.named_opt("nope").has);
+    return 0;
+}
+
+fn test_backreference() -> i32 {
+    let re: *Regex = _re("(\\w)\\1");
+    assert!(re.matches("hello"));   // "ll"
+    assert_str_eq!(re.find("book").val.full(), "oo");
+    assert!(!re.matches("abcd"));
+    return 0;
+}
+
+fn test_flag_case_insensitive() -> i32 {
+    let r: !*Regex = Regex::compile_with("hello", "i");
+    assert!(r.ok);
+    assert!(r.val.matches("HELLO world"));
+    assert!(r.val.matches("HeLLo"));
+    return 0;
+}
+
+fn test_flag_multiline() -> i32 {
+    let r: !*Regex = Regex::compile_with("^bar", "m");
+    assert!(r.ok);
+    assert!(r.val.matches("foo\nbar"));
+    let single: *Regex = _re("^bar");
+    assert!(!single.matches("foo\nbar"));
+    return 0;
+}
+
+fn test_flag_dotall() -> i32 {
+    let r: !*Regex = Regex::compile_with("a.b", "s");
+    assert!(r.ok);
+    assert!(r.val.matches("a\nb"));
+    assert!(!_re("a.b").matches("a\nb"));
+    return 0;
+}
+
+fn test_lookahead() -> i32 {
+    let pos: *Regex = _re("foo(?=bar)");
+    assert!(pos.matches("foobar"));
+    assert!(!pos.matches("foobaz"));
+    assert_str_eq!(pos.find("foobar").val.full(), "foo");   // lookahead not consumed
+    let neg: *Regex = _re("foo(?!bar)");
+    assert!(neg.matches("foobaz"));
+    assert!(!neg.matches("foobar"));
+    return 0;
+}
+
+fn test_lookbehind() -> i32 {
+    let pos: *Regex = _re("(?<=\\$)\\d+");
+    assert_str_eq!(pos.find("price $42 now").val.full(), "42");
+    let neg: *Regex = _re("(?<!\\$)\\d+");
+    assert!(neg.matches("a7"));
+    return 0;
+}
+
+fn test_find_all_count() -> i32 {
+    let re: *Regex = _re("\\d+");
+    let all: *Vector<*Match> = re.find_all("a1 b22 c333");
+    assert_eq!(all.len(), 3);
+    assert_str_eq!(all.get(0).full(), "1");
+    assert_str_eq!(all.get(1).full(), "22");
+    assert_str_eq!(all.get(2).full(), "333");
+    return 0;
+}
+
+fn test_replace_first_and_all() -> i32 {
+    let re: *Regex = _re("\\d+");
+    assert_str_eq!(re.replace("a1 b2", "#"), "a# b2");
+    assert_str_eq!(re.replace_all("a1 b2 c3", "#"), "a# b# c#");
+    return 0;
+}
+
+fn test_replace_backrefs() -> i32 {
+    let re: *Regex = _re("(\\w+)@(\\w+)");
+    assert_str_eq!(re.replace("user@host", "$2.$1"), "host.user");
+    let dollar: *Regex = _re("\\d");
+    assert_str_eq!(dollar.replace("5", "$$"), "$");
+    return 0;
+}
+
+fn test_split() -> i32 {
+    let re: *Regex = _re("[,;]");
+    let parts: *Vector<string> = re.split("alpha,beta;gamma");
+    assert_eq!(parts.len(), 3);
+    assert_str_eq!(parts.get(0), "alpha");
+    assert_str_eq!(parts.get(1), "beta");
+    assert_str_eq!(parts.get(2), "gamma");
+    return 0;
+}
+
+fn test_group_opt_missing() -> i32 {
+    let re: *Regex = _re("a(b)?c");
+    let m: ?*Match = re.find("ac");
+    assert!(m.has);
+    assert!(!m.val.group_opt(1).has);   // group 1 did not participate
+    let m2: ?*Match = re.find("abc");
+    assert!(m2.val.group_opt(1).has);
+    assert_str_eq!(m2.val.group_opt(1).val, "b");
+    return 0;
+}
+
+fn test_free_functions() -> i32 {
+    assert!(regex_matches("\\d+", "abc123"));
+    assert!(!regex_matches("\\d+", "abc"));
+    assert!(regex_find("h(.)llo", "hello").has);
+    assert_str_eq!(regex_replace_all("[aeiou]", "banana", "_"), "b_n_n_");
+    return 0;
+}
+
+fn test_invalid_patterns() -> i32 {
+    assert!(!Regex::compile("(unclosed").ok);
+    assert!(!Regex::compile("[a-").ok);
+    assert!(!Regex::compile_with("x", "Q").ok);   // unknown flag
+    return 0;
+}
+
+fn test_no_match_returns_none() -> i32 {
+    let re: *Regex = _re("zzz");
+    assert!(!re.find("abc").has);
+    assert_str_eq!(re.replace("abc", "X"), "abc");        // unchanged
+    assert_str_eq!(re.replace_all("abc", "X"), "abc");
+    return 0;
+}

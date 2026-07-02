@@ -1,0 +1,142 @@
+import stdlib::testing::*;
+import stdlib::math::*;
+
+fn _near(a: f64, b: f64) -> bool {
+    let mut d: f64 = a - b;
+    if d < 0.0 { d = -d; }
+    return d < 0.0001;
+}
+
+fn test_abs_int_edges() -> i32 {
+    assert_eq!(abs_int(-1), 1);
+    assert_eq!(abs_int(1), 1);
+    assert_eq!(abs_int(-2147483647), 2147483647);
+    return 0;
+}
+
+fn test_sign_across_range() -> i32 {
+    assert_eq!(sign_int(-100), -1);
+    assert_eq!(sign_int(-1), -1);
+    assert_eq!(sign_int(0), 0);
+    assert_eq!(sign_int(1), 1);
+    assert_eq!(sign_int(100), 1);
+    return 0;
+}
+
+fn test_min_max_int_neg() -> i32 {
+    assert_eq!(min_int(-5, -9), -9);
+    assert_eq!(max_int(-5, -9), -5);
+    assert_eq!(min_int(0, 0), 0);
+    assert_eq!(max_int(-1, -1), -1);
+    return 0;
+}
+
+fn test_clamp_int_boundaries() -> i32 {
+    assert_eq!(clamp_int(0, 0, 10), 0);    // at lower bound
+    assert_eq!(clamp_int(10, 0, 10), 10);  // at upper bound
+    assert_eq!(clamp_int(-100, -5, 5), -5);
+    assert_eq!(clamp_int(100, -5, 5), 5);
+    return 0;
+}
+
+fn test_ipow_more() -> i32 {
+    assert_eq!(ipow(2, 0), 1);
+    assert_eq!(ipow(2, 1), 2);
+    assert_eq!(ipow(2, 16), 65536);
+    assert_eq!(ipow(10, 3), 1000);
+    assert_eq!(ipow(0, 5), 0);
+    assert_eq!(ipow(-2, 3), -8);   // negative base, odd exp
+    assert_eq!(ipow(-2, 2), 4);    // negative base, even exp
+    return 0;
+}
+
+fn test_gcd_symmetry_and_zero() -> i32 {
+    assert_eq!(gcd(18, 12), 6);
+    assert_eq!(gcd(12, 18), 6);   // symmetric
+    assert_eq!(gcd(0, 0), 0);
+    assert_eq!(gcd(7, 0), 7);
+    assert_eq!(gcd(0, 7), 7);
+    assert_eq!(gcd(17, 13), 1);   // coprime
+    return 0;
+}
+
+fn test_lcm_more() -> i32 {
+    assert_eq!(lcm(3, 4), 12);    // coprime -> product
+    assert_eq!(lcm(6, 4), 12);
+    assert_eq!(lcm(0, 9), 0);
+    assert_eq!(lcm(9, 0), 0);
+    assert_eq!(lcm(5, 5), 5);
+    return 0;
+}
+
+fn test_sqrt_pow_relationship() -> i32 {
+    assert!(_near(sqrt(16.0), 4.0));
+    assert!(_near(sqrt(0.0), 0.0));
+    assert!(_near(sqrt(1.0), 1.0));
+    assert!(_near(pow(sqrt(7.0), 2.0), 7.0));   // (sqrt x)^2 == x
+    assert!(_near(pow(2.0, 0.0), 1.0));
+    assert!(_near(pow(9.0, 0.5), 3.0));
+    return 0;
+}
+
+fn test_floor_ceil_round_negatives() -> i32 {
+    assert!(_near(floor(-2.3), -3.0));
+    assert!(_near(ceil(-2.7), -2.0));
+    assert!(_near(round(-2.5), -3.0));   // ties away from zero
+    assert!(_near(round(2.4), 2.0));
+    assert!(_near(round(2.6), 3.0));
+    assert!(_near(floor(5.0), 5.0));     // exact int unchanged
+    assert!(_near(ceil(5.0), 5.0));
+    return 0;
+}
+
+fn test_fabs() -> i32 {
+    assert!(_near(fabs(-3.25), 3.25));
+    assert!(_near(fabs(3.25), 3.25));
+    assert!(_near(fabs(0.0), 0.0));
+    return 0;
+}
+
+fn test_trig_identity() -> i32 {
+    // sin^2 + cos^2 == 1 at several angles
+    let angles: *Vector<f64> = Vector::new();
+    angles.push(0.3); angles.push(1.0); angles.push(2.5);
+    for let i: i32 = 0; i < angles.len(); i++ {
+        let a: f64 = angles.get(i);
+        assert!(_near(sin(a) * sin(a) + cos(a) * cos(a), 1.0));
+    }
+    assert!(_near(tan(PI / 4.0), 1.0));
+    return 0;
+}
+
+fn test_atan2_quadrants() -> i32 {
+    assert!(_near(atan2(1.0, 0.0), PI / 2.0));
+    assert!(_near(atan2(0.0, 1.0), 0.0));
+    assert!(_near(atan2(0.0, -1.0), PI));
+    return 0;
+}
+
+fn test_log_exp_inverse() -> i32 {
+    assert!(_near(exp(log(5.0)), 5.0));
+    assert!(_near(log(exp(2.0)), 2.0));
+    assert!(_near(log2(1.0), 0.0));
+    assert!(_near(log10(1.0), 0.0));
+    assert!(_near(log2(16.0), 4.0));
+    assert!(_near(log10(100.0), 2.0));
+    return 0;
+}
+
+fn test_constants_precision() -> i32 {
+    assert!(_near(PI, 3.14159265));
+    assert!(_near(E, 2.71828182));
+    assert!(_near(sin(PI), 0.0));
+    assert!(_near(cos(2.0 * PI), 1.0));
+    return 0;
+}
+
+fn test_min_max_f64_neg() -> i32 {
+    assert!(_near(min_f64(-1.5, -2.5), -2.5));
+    assert!(_near(max_f64(-1.5, -2.5), -1.5));
+    assert!(_near(min_f64(3.0, 3.0), 3.0));
+    return 0;
+}

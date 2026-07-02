@@ -1,0 +1,147 @@
+import stdlib::testing::*;
+import stdlib::base64::*;
+import stdlib::hex::*;
+
+// Build a string from a byte value (handles 0..255).
+fn _byte_str(b: i32) -> string {
+    return (b as char).to_string();
+}
+
+fn _byte(s: string, i: i32) -> i32 {
+    let mut n: i32 = s.at(i).to_int();
+    if n < 0 { n = n + 256; }
+    return n;
+}
+
+// A string covering many byte values (skipping NUL which terminates C strings).
+fn _all_bytes() -> string {
+    let mut s: string = "";
+    for let b: i32 = 1; b < 256; b++ {
+        s = s.concat(_byte_str(b));
+    }
+    return s;
+}
+
+fn _b64_round(s: string) {
+    let enc: string = b64_encode(s);
+    let dec: !string = b64_decode(enc);
+    assert!(dec.ok);
+    assert_str_eq!(dec.val, s);
+}
+
+fn _hex_round(s: string) {
+    let enc: string = hex_encode(s);
+    let dec: !string = hex_decode(enc);
+    assert!(dec.ok);
+    assert_str_eq!(dec.val, s);
+}
+
+fn test_b64_empty() -> i32 {
+    assert_str_eq!(b64_encode(""), "");
+    let dec: !string = b64_decode("");
+    assert!(dec.ok);
+    assert_str_eq!(dec.val, "");
+    return 0;
+}
+
+fn test_b64_length_variants() -> i32 {
+    // Exercise all three padding cases (len % 3 == 0, 1, 2).
+    _b64_round("a");
+    _b64_round("ab");
+    _b64_round("abc");
+    _b64_round("abcd");
+    _b64_round("abcde");
+    _b64_round("abcdef");
+    return 0;
+}
+
+fn test_b64_binary_roundtrip() -> i32 {
+    _b64_round(_all_bytes());
+    return 0;
+}
+
+fn test_b64_padding_output() -> i32 {
+    assert_str_eq!(b64_encode("f"), "Zg==");
+    assert_str_eq!(b64_encode("fo"), "Zm8=");
+    assert_str_eq!(b64_encode("foo"), "Zm9v");
+    return 0;
+}
+
+fn test_b64_decode_missing_padding() -> i32 {
+    let a: !string = b64_decode("Zg");
+    assert!(a.ok);
+    assert_str_eq!(a.val, "f");
+    let b: !string = b64_decode("Zm8");
+    assert!(b.ok);
+    assert_str_eq!(b.val, "fo");
+    return 0;
+}
+
+fn test_b64_decode_errors() -> i32 {
+    assert!(!b64_decode("**").ok);       // bad alphabet
+    assert!(!b64_decode("A").ok);        // length % 4 == 1
+    assert!(!b64_decode("AB=C").ok);     // char after padding
+    return 0;
+}
+
+fn test_b64_all_62_63_chars() -> i32 {
+    // "+/" appear for byte patterns; verify they round-trip.
+    let s: string = _byte_str(255).concat(_byte_str(255)).concat(_byte_str(255));
+    let enc: string = b64_encode(s);
+    assert_str_eq!(enc, "////");
+    _b64_round(s);
+    return 0;
+}
+
+fn test_hex_empty() -> i32 {
+    assert_str_eq!(hex_encode(""), "");
+    let dec: !string = hex_decode("");
+    assert!(dec.ok);
+    assert_str_eq!(dec.val, "");
+    return 0;
+}
+
+fn test_hex_encode_values() -> i32 {
+    assert_str_eq!(hex_encode("ABC"), "414243");
+    assert_str_eq!(hex_encode(_byte_str(0xFF)), "ff");
+    assert_str_eq!(hex_encode(_byte_str(0x0A)), "0a");
+    return 0;
+}
+
+fn test_hex_binary_roundtrip() -> i32 {
+    _hex_round(_all_bytes());
+    return 0;
+}
+
+fn test_hex_decode_case_insensitive() -> i32 {
+    let lo: !string = hex_decode("cafe");
+    let up: !string = hex_decode("CAFE");
+    assert!(lo.ok);
+    assert!(up.ok);
+    assert_str_eq!(lo.val, up.val);
+    assert_eq!(_byte(lo.val, 0), 202);
+    assert_eq!(_byte(lo.val, 1), 254);
+    return 0;
+}
+
+fn test_hex_decode_errors() -> i32 {
+    let odd: !string = hex_decode("abc");
+    assert!(!odd.ok);
+    assert_str_eq!(odd.err, "odd length");
+    let bad: !string = hex_decode("gg");
+    assert!(!bad.ok);
+    assert_str_eq!(bad.err, "non-hex char");
+    return 0;
+}
+
+fn test_cross_encoding_stability() -> i32 {
+    // hex-decode(hex-encode(x)) and b64-decode(b64-encode(x)) agree.
+    let src: string = "Glide \x01\x02\x7f mixed";
+    let via_hex: !string = hex_decode(hex_encode(src));
+    let via_b64: !string = b64_decode(b64_encode(src));
+    assert!(via_hex.ok);
+    assert!(via_b64.ok);
+    assert_str_eq!(via_hex.val, via_b64.val);
+    assert_str_eq!(via_hex.val, src);
+    return 0;
+}

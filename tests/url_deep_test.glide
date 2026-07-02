@@ -1,0 +1,102 @@
+import stdlib::testing::*;
+import stdlib::url::*;
+
+fn _round(s: string) {
+    let enc: string = url_encode(s);
+    let dec: !string = url_decode(enc);
+    assert!(dec.ok);
+    assert_str_eq!(dec.val, s);
+}
+
+fn test_encode_empty() -> i32 {
+    assert_str_eq!(url_encode(""), "");
+    let dec: !string = url_decode("");
+    assert!(dec.ok);
+    assert_str_eq!(dec.val, "");
+    return 0;
+}
+
+fn test_all_unreserved_pass_through() -> i32 {
+    let s: string = "abcXYZ0189-_.~";
+    assert_str_eq!(url_encode(s), s);
+    return 0;
+}
+
+fn test_encode_uppercase_hex() -> i32 {
+    // '&' is 0x26, '=' is 0x3D, '?' is 0x3F, '/' is 0x2F — all upper-case.
+    assert_str_eq!(url_encode("&=?/"), "%26%3D%3F%2F");
+    return 0;
+}
+
+fn test_encode_space_and_symbols() -> i32 {
+    assert_str_eq!(url_encode("a b"), "a%20b");
+    assert_str_eq!(url_encode("100%"), "100%25");
+    assert_str_eq!(url_encode("a+b"), "a%2Bb");   // '+' is not unreserved
+    return 0;
+}
+
+fn test_decode_uppercase_and_lowercase_hex() -> i32 {
+    let up: !string = url_decode("%2F");
+    let lo: !string = url_decode("%2f");
+    assert!(up.ok);
+    assert!(lo.ok);
+    assert_str_eq!(up.val, "/");
+    assert_str_eq!(lo.val, lo.val);
+    assert_str_eq!(up.val, lo.val);
+    return 0;
+}
+
+fn test_decode_plus_is_literal() -> i32 {
+    // url_decode does NOT treat '+' as space (that's form-encoding).
+    let r: !string = url_decode("a+b");
+    assert!(r.ok);
+    assert_str_eq!(r.val, "a+b");
+    return 0;
+}
+
+fn test_decode_malformed_errors() -> i32 {
+    assert!(!url_decode("%").ok);      // dangling percent
+    assert!(!url_decode("%2").ok);     // truncated escape
+    assert!(!url_decode("%ZZ").ok);    // non-hex digits
+    assert!(!url_decode("%2G").ok);    // one bad digit
+    return 0;
+}
+
+fn test_utf8_encode_decode() -> i32 {
+    assert_str_eq!(url_encode("café"), "caf%C3%A9");
+    assert_str_eq!(url_encode("héllo"), "h%C3%A9llo");
+    let r: !string = url_decode("caf%C3%A9");
+    assert!(r.ok);
+    assert_str_eq!(r.val, "café");
+    return 0;
+}
+
+fn test_roundtrip_reserved_soup() -> i32 {
+    _round("a/b?c=d&e=f#g");
+    _round("key=value with spaces & symbols!");
+    _round("100% sure? yes/no");
+    return 0;
+}
+
+fn test_roundtrip_utf8() -> i32 {
+    _round("café ☕ résumé");
+    _round("日本語");
+    _round("emoji 😀 test");
+    return 0;
+}
+
+fn test_roundtrip_all_ascii_specials() -> i32 {
+    _round(" !\"#$%&'()*+,/:;<=>?@[\\]^`{|}");
+    return 0;
+}
+
+fn test_double_encoding() -> i32 {
+    // Encoding a percent-encoded string escapes the '%' itself.
+    let once: string = url_encode("a b");        // "a%20b"
+    let twice: string = url_encode(once);        // "a%2520b"
+    assert_str_eq!(twice, "a%2520b");
+    let back: !string = url_decode(twice);
+    assert!(back.ok);
+    assert_str_eq!(back.val, once);
+    return 0;
+}

@@ -1,0 +1,136 @@
+import stdlib::testing::*;
+import stdlib::bytes::*;
+import stdlib::utf8::*;
+
+fn _buf(bytes: *Vector<i32>) -> *ByteBuffer {
+    let b: *ByteBuffer = ByteBuffer::new();
+    for let i: i32 = 0; i < bytes.len(); i++ {
+        b.push(bytes.get(i) as u8);
+    }
+    return b;
+}
+
+fn test_valid_ascii() -> i32 {
+    let b: *ByteBuffer = ByteBuffer::from_string("Hello, world!");
+    assert!(String::is_valid_utf8(b));
+    let r: !string = String::from_utf8(b);
+    assert!(r.ok);
+    assert_str_eq!(r.val, "Hello, world!");
+    b.free();
+    return 0;
+}
+
+fn test_valid_two_byte() -> i32 {
+    // "é" = 0xC3 0xA9
+    let bytes: *Vector<i32> = vec_of!(0xC3, 0xA9);
+    let b: *ByteBuffer = _buf(bytes);
+    assert!(String::is_valid_utf8(b));
+    let r: !string = String::from_utf8(b);
+    assert!(r.ok);
+    assert_eq!(r.val.char_count(), 1);
+    b.free();
+    return 0;
+}
+
+fn test_valid_three_byte() -> i32 {
+    // "€" = 0xE2 0x82 0xAC
+    let bytes: *Vector<i32> = vec_of!(0xE2, 0x82, 0xAC);
+    let b: *ByteBuffer = _buf(bytes);
+    assert!(String::is_valid_utf8(b));
+    let r: !string = String::from_utf8(b);
+    assert!(r.ok);
+    assert_eq!(r.val.char_count(), 1);
+    b.free();
+    return 0;
+}
+
+fn test_valid_four_byte() -> i32 {
+    // "😀" = 0xF0 0x9F 0x98 0x80
+    let bytes: *Vector<i32> = vec_of!(0xF0, 0x9F, 0x98, 0x80);
+    let b: *ByteBuffer = _buf(bytes);
+    assert!(String::is_valid_utf8(b));
+    let r: !string = String::from_utf8(b);
+    assert!(r.ok);
+    assert_eq!(r.val.char_count(), 1);
+    assert_eq!(r.val.len(), 4);
+    b.free();
+    return 0;
+}
+
+fn test_reject_lone_continuation() -> i32 {
+    let bytes: *Vector<i32> = vec_of!(0x80);
+    let b: *ByteBuffer = _buf(bytes);
+    assert!(!String::is_valid_utf8(b));
+    assert!(!String::from_utf8(b).ok);
+    b.free();
+    return 0;
+}
+
+fn test_reject_truncated_multibyte() -> i32 {
+    // 0xE2 announces a 3-byte sequence but only one continuation follows.
+    let bytes: *Vector<i32> = vec_of!(0xE2, 0x82);
+    let b: *ByteBuffer = _buf(bytes);
+    assert!(!String::is_valid_utf8(b));
+    b.free();
+    return 0;
+}
+
+fn test_reject_overlong_lead() -> i32 {
+    // 0xC0 / 0xC1 are illegal overlong 2-byte leads.
+    let bytes: *Vector<i32> = vec_of!(0xC0, 0xA9);
+    let b: *ByteBuffer = _buf(bytes);
+    assert!(!String::is_valid_utf8(b));
+    b.free();
+    return 0;
+}
+
+fn test_reject_out_of_range_lead() -> i32 {
+    // 0xF5..0xFF are not valid lead bytes.
+    let bytes: *Vector<i32> = vec_of!(0xF5, 0x80, 0x80, 0x80);
+    let b: *ByteBuffer = _buf(bytes);
+    assert!(!String::is_valid_utf8(b));
+    b.free();
+    return 0;
+}
+
+fn test_lossy_replaces_bad_run() -> i32 {
+    // valid 'A', bad 0xFF, valid 'B'
+    let bytes: *Vector<i32> = vec_of!(65, 0xFF, 66);
+    let b: *ByteBuffer = _buf(bytes);
+    let s: string = String::from_utf8_lossy(b);
+    // 'A' + U+FFFD (3 bytes) + 'B' => 3 codepoints, 5 bytes
+    assert_eq!(s.char_count(), 3);
+    assert_eq!(s.len(), 5);
+    b.free();
+    return 0;
+}
+
+fn test_lossy_preserves_valid() -> i32 {
+    let b: *ByteBuffer = ByteBuffer::from_string("café €");
+    let s: string = String::from_utf8_lossy(b);
+    assert_str_eq!(s, "café €");
+    b.free();
+    return 0;
+}
+
+fn test_empty_buffer_is_valid() -> i32 {
+    let b: *ByteBuffer = ByteBuffer::new();
+    assert!(String::is_valid_utf8(b));
+    let r: !string = String::from_utf8(b);
+    assert!(r.ok);
+    assert_str_eq!(r.val, "");
+    b.free();
+    return 0;
+}
+
+fn test_mixed_width_roundtrip() -> i32 {
+    let src: string = "aé€😀z";
+    let b: *ByteBuffer = ByteBuffer::from_string(src);
+    assert_eq!(b.len(), 1 + 2 + 3 + 4 + 1);   // byte widths
+    let r: !string = String::from_utf8(b);
+    assert!(r.ok);
+    assert_str_eq!(r.val, src);
+    assert_eq!(r.val.char_count(), 5);
+    b.free();
+    return 0;
+}

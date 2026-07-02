@@ -1,0 +1,168 @@
+import stdlib::testing::*;
+
+// Pointer struct with the full arithmetic set: + - * / %.
+struct Num { v: i32 }
+impl Num {
+    fn add(self: *Num, o: *Num) -> *Num { let r: *Num = Num { v: self.v + o.v }; return r; }
+    fn sub(self: *Num, o: *Num) -> *Num { let r: *Num = Num { v: self.v - o.v }; return r; }
+    fn mul(self: *Num, o: *Num) -> *Num { let r: *Num = Num { v: self.v * o.v }; return r; }
+    fn div(self: *Num, o: *Num) -> *Num { let r: *Num = Num { v: self.v / o.v }; return r; }
+    fn rem(self: *Num, o: *Num) -> *Num { let r: *Num = Num { v: self.v % o.v }; return r; }
+}
+
+// Value struct arithmetic + ordering (no pointers), like stdlib::time.
+struct Cents { n: i32 }
+impl Cents {
+    fn add(self: Cents, o: Cents) -> Cents { return Cents { n: self.n + o.n }; }
+    fn sub(self: Cents, o: Cents) -> Cents { return Cents { n: self.n - o.n }; }
+    fn cmp(self: Cents, o: Cents) -> i32 { return self.n - o.n; }
+}
+
+// Heterogeneous operand: struct * primitive.
+struct Scaled { v: i32 }
+impl Scaled {
+    fn mul(self: *Scaled, k: i32) -> *Scaled { let r: *Scaled = Scaled { v: self.v * k }; return r; }
+    fn add(self: *Scaled, k: i32) -> *Scaled { let r: *Scaled = Scaled { v: self.v + k }; return r; }
+}
+
+// Nested aggregates for value-equality.
+struct Inner { a: i32, b: string }
+struct Outer { id: i32, inner: Inner }
+
+// Custom eq: equal when magnitudes match, sign ignored.
+struct Mag { v: i32 }
+impl Mag {
+    fn _abs(x: i32) -> i32 { if x < 0 { return -x; } return x; }
+    fn eq(self: *Mag, o: *Mag) -> bool { return Mag::_abs(self.v) == Mag::_abs(o.v); }
+}
+
+// Custom cmp for ordering by descending priority.
+struct Task { prio: i32 }
+impl Task { fn cmp(self: *Task, o: *Task) -> i32 { return o.prio - self.prio; } }
+
+fn test_all_arithmetic_ops() -> i32 {
+    let a: *Num = Num { v: 20 };
+    let b: *Num = Num { v: 6 };
+    assert_eq!((a + b).v, 26);
+    assert_eq!((a - b).v, 14);
+    assert_eq!((a * b).v, 120);
+    assert_eq!((a / b).v, 3);
+    assert_eq!((a % b).v, 2);
+    return 0;
+}
+
+fn test_chained_arithmetic() -> i32 {
+    let a: *Num = Num { v: 1 };
+    let b: *Num = Num { v: 2 };
+    let c: *Num = Num { v: 3 };
+    assert_eq!((a + b + c).v, 6);
+    assert_eq!((a + b * c).v, 7);       // precedence: * before +
+    assert_eq!(((a + b) * c).v, 9);     // explicit grouping
+    return 0;
+}
+
+fn test_value_struct_arithmetic() -> i32 {
+    let x: Cents = Cents { n: 150 };
+    let y: Cents = Cents { n: 30 };
+    let sum: Cents = x + y;
+    let diff: Cents = x - y;
+    assert_eq!(sum.n, 180);
+    assert_eq!(diff.n, 120);
+    return 0;
+}
+
+fn test_value_struct_ordering() -> i32 {
+    let x: Cents = Cents { n: 5 };
+    let y: Cents = Cents { n: 9 };
+    assert!(x < y);
+    assert!(y > x);
+    assert!(x <= x);
+    assert!(y >= y);
+    assert!(!(x > y));
+    return 0;
+}
+
+fn test_mixed_struct_primitive() -> i32 {
+    let s: *Scaled = Scaled { v: 4 };
+    assert_eq!((s * 3).v, 12);
+    assert_eq!((s + 10).v, 14);
+    return 0;
+}
+
+fn test_auto_equality_and_neq() -> i32 {
+    let a: *Num = Num { v: 7 };
+    let b: *Num = Num { v: 7 };
+    let c: *Num = Num { v: 8 };
+    assert!(a == b);
+    assert!(a != c);
+    assert!(!(a == c));
+    assert!(!(a != b));
+    return 0;
+}
+
+fn test_nested_struct_equality() -> i32 {
+    let a: *Outer = Outer { id: 1, inner: Inner { a: 2, b: "hi" } };
+    let b: *Outer = Outer { id: 1, inner: Inner { a: 2, b: "h".concat("i") } };
+    let c: *Outer = Outer { id: 1, inner: Inner { a: 2, b: "bye" } };
+    let d: *Outer = Outer { id: 9, inner: Inner { a: 2, b: "hi" } };
+    assert!(a == b);   // nested struct + string field compared by value
+    assert!(a != c);   // differs in inner string
+    assert!(a != d);   // differs in outer id
+    return 0;
+}
+
+fn test_nested_tuple_equality() -> i32 {
+    let a: (i32, (string, i32)) = (1, ("x", 2));
+    let b: (i32, (string, i32)) = (1, ("x".concat(""), 2));
+    let c: (i32, (string, i32)) = (1, ("y", 2));
+    assert!(a == b);
+    assert!(a != c);
+    return 0;
+}
+
+fn test_struct_in_tuple_equality() -> i32 {
+    let a: (Inner, i32) = (Inner { a: 1, b: "k" }, 5);
+    let b: (Inner, i32) = (Inner { a: 1, b: "k" }, 5);
+    let c: (Inner, i32) = (Inner { a: 1, b: "k" }, 6);
+    assert!(a == b);
+    assert!(a != c);
+    return 0;
+}
+
+fn test_custom_eq() -> i32 {
+    let a: *Mag = Mag { v: -5 };
+    let b: *Mag = Mag { v: 5 };
+    let c: *Mag = Mag { v: 6 };
+    assert!(a == b);   // magnitude equal, sign ignored
+    assert!(a != c);
+    return 0;
+}
+
+fn test_custom_cmp_descending() -> i32 {
+    let high: *Task = Task { prio: 10 };
+    let low: *Task = Task { prio: 1 };
+    // cmp is inverted, so a higher prio compares as "less".
+    assert!(high < low);
+    assert!(low > high);
+    assert!(!(high > low));
+    return 0;
+}
+
+fn test_string_operators_edge() -> i32 {
+    assert!("" == "");
+    assert!("a" != "");
+    assert!("abc" < "abd");
+    assert!("Z" < "a");                 // uppercase before lowercase
+    assert_str_eq!("a" + "b" + "c", "abc");   // chained concat
+    assert!("abc".concat("") == "abc");
+    return 0;
+}
+
+fn test_arithmetic_negatives() -> i32 {
+    let a: *Num = Num { v: -12 };
+    let b: *Num = Num { v: 5 };
+    assert_eq!((a + b).v, -7);
+    assert_eq!((a - b).v, -17);
+    assert_eq!((a * b).v, -60);
+    return 0;
+}
