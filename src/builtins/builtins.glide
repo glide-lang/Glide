@@ -126,6 +126,57 @@ pub trait Display {
     fn to_string(self: *Self) -> string;
 }
 
+// ---- Operator traits -----------------------------------------------------
+
+/// Value equality for `==` / `!=`. Structs and tuples compare field-by-field
+/// automatically, so you only implement `Eq` to override that or to bound a
+/// generic (`fn contains<T: Eq>(...)`).
+pub trait Eq {
+    fn eq(self: *Self, other: *Self) -> bool;
+}
+
+/// Ordering for `<` `<=` `>` `>=`. `cmp` returns a negative / zero / positive
+/// `i32` when `self` is less than / equal to / greater than `other` — the
+/// same shape as `string.cmp`. `a < b` lowers to `a.cmp(b) < 0`.
+///
+/// ```glide
+/// impl Ord for Version {
+///     fn cmp(self: *Version, other: *Version) -> i32 {
+///         if self.major != other.major { return self.major - other.major; }
+///         return self.minor - other.minor;
+///     }
+/// }
+/// if v1 < v2 { ... }
+/// ```
+pub trait Ord {
+    fn cmp(self: *Self, other: *Self) -> i32;
+}
+
+/// `+` operator. `a + b` lowers to `a.add(b)` and takes its return type.
+pub trait Add {
+    fn add(self: *Self, other: *Self) -> *Self;
+}
+
+/// `-` operator (`a - b` -> `a.sub(b)`).
+pub trait Sub {
+    fn sub(self: *Self, other: *Self) -> *Self;
+}
+
+/// `*` operator (`a * b` -> `a.mul(b)`).
+pub trait Mul {
+    fn mul(self: *Self, other: *Self) -> *Self;
+}
+
+/// `/` operator (`a / b` -> `a.div(b)`).
+pub trait Div {
+    fn div(self: *Self, other: *Self) -> *Self;
+}
+
+/// `%` operator (`a % b` -> `a.rem(b)`).
+pub trait Rem {
+    fn rem(self: *Self, other: *Self) -> *Self;
+}
+
 // ---- C runtime escape hatches --------------------------------------------
 //
 // The Glide compiler relies on libc for memory and IO. These declarations
