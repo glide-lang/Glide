@@ -2637,6 +2637,16 @@ fn _is_string_ty(t: *Type) -> bool {
     return t != null && t.kind == TY_NAMED && t.name.eq("string");
 }
 
+// Method name an arithmetic operator dispatches to (`+`->add …), or "".
+fn _emit_arith_method(op: i32) -> string {
+    if op == OP_ADD { return "add"; }
+    if op == OP_SUB { return "sub"; }
+    if op == OP_MUL { return "mul"; }
+    if op == OP_DIV { return "div"; }
+    if op == OP_MOD { return "rem"; }
+    return "";
+}
+
 // Emit a C bool expression comparing two same-typed values, given as C-expr
 // strings `a` / `b`. Recurses structurally: strings via the byte-compare
 // runtime, structs/tuples field-by-field (null-safe behind a pointer), and
@@ -3244,6 +3254,38 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 _emit_eq_of(g, elt, "__eqa", "__eqb", eq_seen, 0);
                 eq_seen.free();
                 print!("; }))");
+                return;
+            }
+        }
+        // Operator overloading for structs / strings: ordering dispatches to a
+        // `cmp(self, other) -> i32` method (`a < b` -> `a.cmp(b) < 0`), and
+        // arithmetic to add/sub/mul/div/rem (`string + string` = concat). Both
+        // synthesize a method call and emit it, reusing the normal call path
+        // (self adaptation, single-eval of each operand).
+        let ov_ty: *Type = strip_ptr(infer_for_codegen(g, e.lhs));
+        if ov_ty != null && ov_ty.kind == TY_NAMED {
+            let ov_struct: bool = g.structs.contains(ov_ty.name);
+            let ov_string: bool = ov_ty.name.eq("string");
+            if (e.op_code == OP_LT || e.op_code == OP_LE || e.op_code == OP_GT || e.op_code == OP_GE) && (ov_struct || ov_string) {
+                let cargs: *Vector<Expr> = Vector::new();
+                cargs.push(*e.rhs);
+                let ccall: *Expr = expr_call(expr_member(e.lhs, "cmp"), cargs);
+                print!("(");
+                emit_expr(g, ccall);
+                print!(" ", op_to_c(e.op_code), " 0)");
+                return;
+            }
+            let cam: string = _emit_arith_method(e.op_code);
+            if !cam.eq("") && ov_struct {
+                let aargs: *Vector<Expr> = Vector::new();
+                aargs.push(*e.rhs);
+                emit_expr(g, expr_call(expr_member(e.lhs, cam), aargs));
+                return;
+            }
+            if e.op_code == OP_ADD && ov_string {
+                let sargs: *Vector<Expr> = Vector::new();
+                sargs.push(*e.rhs);
+                emit_expr(g, expr_call(expr_member(e.lhs, "concat"), sargs));
                 return;
             }
         }

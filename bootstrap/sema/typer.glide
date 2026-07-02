@@ -166,6 +166,31 @@ pub fn type_to_string(t: *Type) -> string {
     return "<ty?>";
 }
 
+// Operator-overloading method name for an arithmetic op (`+`->add, …), or ""
+// for non-arithmetic ops. `%` maps to `rem`, matching the Rust naming.
+fn _arith_method(op: i32) -> string {
+    if op == OP_ADD { return "add"; }
+    if op == OP_SUB { return "sub"; }
+    if op == OP_MUL { return "mul"; }
+    if op == OP_DIV { return "div"; }
+    if op == OP_MOD { return "rem"; }
+    return "";
+}
+
+// The source symbol for an operator, for diagnostics.
+fn _op_symbol(op: i32) -> string {
+    if op == OP_ADD { return "+"; }
+    if op == OP_SUB { return "-"; }
+    if op == OP_MUL { return "*"; }
+    if op == OP_DIV { return "/"; }
+    if op == OP_MOD { return "%"; }
+    if op == OP_LT { return "<"; }
+    if op == OP_LE { return "<="; }
+    if op == OP_GT { return ">"; }
+    if op == OP_GE { return ">="; }
+    return "?";
+}
+
 fn is_int_type(t: *Type) -> bool {
     if t == null {
         return false;
@@ -3832,6 +3857,15 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             // `==` / `!=` compare VALUES: strings by bytes, structs and tuples
             // field-by-field (all lowered in codegen), so the old string
             // pointer-identity footgun and the tuple-eq rejection are gone.
+            // Ordering (`< <= > >=`) on a struct dispatches to a `cmp(self,
+            // other) -> i32` method (string has one built in); primitives
+            // compare natively. Missing `cmp` on a struct is a clear error.
+            if op == OP_LT || op == OP_LE || op == OP_GT || op == OP_GE {
+                let ls: *Type = strip_ptr(lt);
+                if ls != null && ls.kind == TY_NAMED && t.structs.contains(ls.name) && !t.fns.contains(ls.name.concat("_cmp")) {
+                    t.err_code(e.line, e.column, "no-operator", "no `".concat(_op_symbol(op)).concat("` operator for `").concat(ls.name).concat("`; implement `fn cmp(self: *").concat(ls.name).concat(", other: *").concat(ls.name).concat(") -> i32`"));
+                }
+            }
             return ty_named("bool");
         }
         if op == OP_AND || op == OP_OR {
@@ -3847,6 +3881,25 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             // RHS may either match the inner directly (fallback value) or
             // be an `err(...)` call → wraps the result back into !T.
             return inner_lt;
+        }
+        // Arithmetic on a struct dispatches to its operator method (`+`->add,
+        // `-`->sub, `*`->mul, `/`->div, `%`->rem) — the result type is the
+        // method's return type. `string + string` concatenates. Primitives
+        // fall through to native width-promotion below.
+        let am: string = _arith_method(op);
+        if !am.eq("") {
+            let ls: *Type = strip_ptr(lt);
+            if ls != null && ls.kind == TY_NAMED && t.structs.contains(ls.name) {
+                let mkey: string = ls.name.concat("_").concat(am);
+                if t.fns.contains(mkey) {
+                    return t.fns.get(mkey).ret_type;
+                }
+                t.err_code(e.line, e.column, "no-operator", "no `".concat(_op_symbol(op)).concat("` operator for `").concat(ls.name).concat("`; implement `fn ").concat(am).concat("(self: *").concat(ls.name).concat(", other: *").concat(ls.name).concat(") -> ").concat(ls.name).concat("`"));
+                return lt;
+            }
+            if op == OP_ADD && lt != null && lt.kind == TY_NAMED && lt.name.eq("string") {
+                return ty_named("string");
+            }
         }
         if !types_compat(lt, rt) {
             t.err(e.line, e.column, "binary op type mismatch: ".concat(type_to_string(lt)).concat(" vs ").concat(type_to_string(rt)));
