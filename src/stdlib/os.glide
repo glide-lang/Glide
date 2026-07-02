@@ -137,7 +137,24 @@ c_raw! {
         return 0;
     #endif
     }
-    static int __glide_shell(const char* cmd) { return system(cmd); }
+    /* system() returns the raw wait STATUS on POSIX (exit code << 8), not
+       the exit code. Callers that propagate this up as a process exit code
+       silently truncate it to 0 (exit(256) == exit(0)) — a failed `glide
+       build` under `glide test`/CI then reads as success. Decode it. */
+    #ifndef _WIN32
+    #include <sys/wait.h>
+    #endif
+    static int __glide_shell(const char* cmd) {
+    #ifdef _WIN32
+        return system(cmd);
+    #else
+        int st = system(cmd);
+        if (st == -1) return -1;
+        if (WIFEXITED(st)) return WEXITSTATUS(st);
+        if (WIFSIGNALED(st)) return 128 + WTERMSIG(st);
+        return st;
+    #endif
+    }
 
     // Process identity
     static int __glide_pid(void) {
