@@ -1,7 +1,7 @@
 import stdlib::testing::*;
 import stdlib::hashmap::*;
-import bootstrap::ast::*;
-import bootstrap::interp::*;
+import bootstrap::syntax::ast::*;
+import bootstrap::syntax::interp::*;
 
 // Build the AST for `fn add(a: int, b: int) -> int { return a + b; }`
 // programmatically so the interpreter has something concrete to chew

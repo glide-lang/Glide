@@ -1,6 +1,6 @@
 import stdlib::testing::*;
-import bootstrap::ast::*;
-import bootstrap::interp::*;
+import bootstrap::syntax::ast::*;
+import bootstrap::syntax::interp::*;
 
 // ---- a tiny derive --------------------------------------------------
 //

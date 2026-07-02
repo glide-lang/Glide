@@ -6,8 +6,8 @@
 // `routes!(r)` proc-macro walks the program for every @route'd fn
 // and emits the register calls inline.
 
-import bootstrap::ast::*;
-import bootstrap::interp::*;
+import bootstrap::syntax::ast::*;
+import bootstrap::syntax::interp::*;
 import stdlib::http::handler::*;
 
 @proc_attr(route)

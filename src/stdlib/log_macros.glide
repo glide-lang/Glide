@@ -18,8 +18,8 @@
 // Use `@logged` for more detail (args and return value), or `@trace(info)`
 // to pick a different level. Defaults to debug.
 
-import bootstrap::ast::*;
-import bootstrap::interp::*;
+import bootstrap::syntax::ast::*;
+import bootstrap::syntax::interp::*;
 // NB: no `import stdlib::log` — these proc-macros only build AST (by
 // name), so they don't depend on the log runtime. Keeping them
 // independent lets `log.glide` import THIS module without a cycle, so a

@@ -28,8 +28,8 @@
 // // Pet now has from_json / to_json, ready for json_respond / Json<Pet>.
 // ```
 
-import bootstrap::ast::*;
-import bootstrap::interp::*;
+import bootstrap::syntax::ast::*;
+import bootstrap::syntax::interp::*;
 // The expansion emits `impl JsonBind for <Struct>`, whose trait + JsonValue
 // helpers live in stdlib::json. Pull it in here so importing the derive is
 // enough to use `@derive(JsonBind)`; without it the generated impl raised a

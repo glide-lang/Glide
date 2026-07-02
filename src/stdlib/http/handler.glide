@@ -23,8 +23,8 @@
 //   - `HttpResponse`        passthrough
 //   - `Json<T>`             wrapped via `IntoResponse`
 
-import bootstrap::ast::*;
-import bootstrap::interp::*;
+import bootstrap::syntax::ast::*;
+import bootstrap::syntax::interp::*;
 
 /// Axum-style typed handler. Wraps a fn so its params can be typed
 /// extractors (`Json<T>`, `Path<T>`, `Bearer`, `Headers`, `State<T>`,

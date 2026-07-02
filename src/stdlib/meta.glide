@@ -31,4 +31,4 @@
 //
 // Macro impls are stripped from the consumer's generated binary (they exist
 // only at compile time), so importing this module adds no runtime weight.
-pub import bootstrap::ast::*;
+pub import bootstrap::syntax::ast::*;
