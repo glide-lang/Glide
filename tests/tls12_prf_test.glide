@@ -1,0 +1,22 @@
+// TLS 1.2 PRF (RFC 5246 §5) cross-checked against an independent Python
+// implementation.
+import stdlib::testing::*;
+import stdlib::net::tls12::prf::*;
+import stdlib::hex::*;
+
+fn _h(s: string) -> string { return hex_decode(s).unwrap(); }
+
+fn test_prf_vector() -> i32 {
+    let secret: string = _h("0102030405060708090a0b0c0d0e0f10");
+    let seed: string = _h("cafebabe");
+    let out: string = tls12_prf(secret, "test label", seed, 48);
+    assert_str_eq!(hex_encode(out),
+        "4ff74993f63de855ac6cdc150e5ae46065467d573468c26684a6a1954e4ff4d13d5453c6804cd4a307dc6635d6c1d644");
+    return 0;
+}
+
+fn test_prf_length() -> i32 {
+    let out: string = tls12_prf(_h("00112233"), "master secret", _h("aabb"), 12);
+    assert_eq!(out.len(), 12);
+    return 0;
+}

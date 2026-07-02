@@ -1,0 +1,30 @@
+// TLS 1.2 PRF (RFC 5246 §5), pure Glide over HMAC-SHA256. For the AEAD
+// cipher suites this stack uses, the PRF hash is always SHA-256:
+//
+//   PRF(secret, label, seed) = P_SHA256(secret, label || seed)
+//   P_hash(secret, seed)     = HMAC(secret, A(1)||seed) || HMAC(secret, A(2)||seed) || ...
+//   A(0) = seed ;  A(i) = HMAC(secret, A(i-1))
+//
+// Used to derive the master secret, the key block, and the Finished
+// verify_data.
+
+import stdlib::crypto::*;      // hmac_sha256
+import stdlib::bytes::*;
+
+/// P_SHA256(secret, seed) expanded to `n` bytes.
+pub fn p_sha256(secret: string, seed: string, n: i32) -> string {
+    let out: *ByteBuffer = ByteBuffer::new();
+    let mut a: string = seed;                       // A(0)
+    while out.len() < n {
+        a = hmac_sha256(secret, a);                 // A(i)
+        out.push_str(hmac_sha256(secret, a.concat(seed)));
+    }
+    let full: string = out.to_string();
+    out.free();
+    return full.substring(0, n);
+}
+
+/// TLS 1.2 PRF: P_SHA256(secret, label || seed), `n` bytes.
+pub fn tls12_prf(secret: string, label: string, seed: string, n: i32) -> string {
+    return p_sha256(secret, label.concat(seed), n);
+}

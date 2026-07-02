@@ -1,0 +1,39 @@
+// TLS 1.2 AES-GCM record protection: a known-answer seal cross-checked
+// against Python, plus round-trip and tamper rejection.
+import stdlib::testing::*;
+import stdlib::net::tls12::record::*;
+import stdlib::hex::*;
+
+fn _h(s: string) -> string { return hex_decode(s).unwrap(); }
+
+fn test_seal_kat() -> i32 {
+    let key: string = _h("000102030405060708090a0b0c0d0e0f");
+    let wiv: string = _h("aabbccdd");
+    let rec: !string = tls12_seal(key, wiv, 5, 23, _h("1516171819"));
+    assert!(rec.is_ok());
+    assert_str_eq!(hex_encode(rec.unwrap()),
+        "170303001d000000000000000528b1772888b35b1df1c4c216cb58e0b90709357901");
+    return 0;
+}
+
+fn test_roundtrip() -> i32 {
+    let key: string = _h("0f0e0d0c0b0a09080706050403020100");
+    let wiv: string = _h("11223344");
+    let pt: string = "some TLS 1.2 record\x00with a nul";
+    let rec: !string = tls12_seal(key, wiv, 42, 23, pt);
+    assert!(rec.is_ok());
+    let open: !*Tls12Plain = tls12_open(key, wiv, 42, rec.unwrap());
+    assert!(open.is_ok());
+    assert_eq!(open.unwrap().content_type, 23);
+    assert!(open.unwrap().content.eq(pt));
+    return 0;
+}
+
+fn test_wrong_seq_fails() -> i32 {
+    let key: string = _h("0f0e0d0c0b0a09080706050403020100");
+    let wiv: string = _h("11223344");
+    let rec: string = tls12_seal(key, wiv, 7, 23, "x").unwrap();
+    // opening with a mismatched seq changes the AAD -> auth failure
+    assert!(tls12_open(key, wiv, 8, rec).is_err());
+    return 0;
+}
