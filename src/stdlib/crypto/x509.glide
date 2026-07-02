@@ -17,7 +17,8 @@
 import stdlib::crypto::asn1::*;
 import stdlib::crypto::p256::*;
 import stdlib::crypto::*;              // sha256
-import stdlib::crypto::sha512::*;      // sha384
+import stdlib::crypto::sha512::*;      // sha384, sha512
+import stdlib::crypto::rsa::*;         // rsa_pkcs1_verify + DigestInfo prefixes
 import stdlib::crypto::pem::*;
 import stdlib::fs::*;
 import stdlib::env::*;
@@ -30,6 +31,9 @@ const OID_P256: string = "1.2.840.10045.3.1.7";
 const OID_ECDSA_SHA256: string = "1.2.840.10045.4.3.2";
 const OID_ECDSA_SHA384: string = "1.2.840.10045.4.3.3";
 const OID_RSA_SHA256: string = "1.2.840.113549.1.1.11";
+const OID_RSA_SHA384: string = "1.2.840.113549.1.1.12";
+const OID_RSA_SHA512: string = "1.2.840.113549.1.1.13";
+const OID_RSA_SHA1: string = "1.2.840.113549.1.1.5";
 const OID_SAN: string = "2.5.29.17";
 const OID_BASIC_CONSTRAINTS: string = "2.5.29.19";
 const OID_CN: string = "2.5.4.3";
@@ -323,18 +327,27 @@ fn _ecdsa_der_to_raw(sig_der: string) -> !string {
     return ok(_pad32(der_int_bytes(r.val)).concat(_pad32(der_int_bytes(s.val))));
 }
 
-/// Verify `cert`'s signature using the issuer's public key (an EC point
-/// 0x04||X||Y for the ecPublicKey case). Currently covers ECDSA-P256 with
-/// SHA-256/384; RSA is not yet implemented (returns an explicit error).
+/// Verify `cert`'s signature using the issuer's public key: an EC point
+/// (0x04||X||Y) for ECDSA, or the RSAPublicKey DER for RSA. Covers
+/// ECDSA-P256 with SHA-256/384 and RSASSA-PKCS1-v1_5 with SHA-1/256/384/512.
 pub fn cert_verify_signature(cert: *Cert, issuer_pubkey: string) -> !bool {
+    // RSA PKCS#1 v1.5.
+    if cert.sig_alg.eq(OID_RSA_SHA256) {
+        return rsa_pkcs1_verify(issuer_pubkey, RSA_SHA256_PREFIX, sha256(cert.tbs_der), cert.signature);
+    } else if cert.sig_alg.eq(OID_RSA_SHA384) {
+        return rsa_pkcs1_verify(issuer_pubkey, RSA_SHA384_PREFIX, sha384(cert.tbs_der), cert.signature);
+    } else if cert.sig_alg.eq(OID_RSA_SHA512) {
+        return rsa_pkcs1_verify(issuer_pubkey, RSA_SHA512_PREFIX, sha512(cert.tbs_der), cert.signature);
+    } else if cert.sig_alg.eq(OID_RSA_SHA1) {
+        return rsa_pkcs1_verify(issuer_pubkey, RSA_SHA1_PREFIX, sha1(cert.tbs_der), cert.signature);
+    }
+    // ECDSA.
     let mut digest: string = "";
     if cert.sig_alg.eq(OID_ECDSA_SHA256) {
         digest = sha256(cert.tbs_der);
     } else if cert.sig_alg.eq(OID_ECDSA_SHA384) {
         // ECDSA over P-256 takes the leftmost 256 bits of the hash.
         digest = sha384(cert.tbs_der).substring(0, 32);
-    } else if cert.sig_alg.eq(OID_RSA_SHA256) {
-        return err("x509: RSA signature verification not yet implemented");
     } else {
         return err("x509: unsupported signature algorithm ".concat(cert.sig_alg));
     }

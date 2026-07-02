@@ -1,0 +1,171 @@
+// RSA signature verification — RSASSA-PKCS1-v1_5 (RFC 8017 §8.2.2). The
+// modular exponentiation is over PUBLIC values only (the signature, the
+// modulus, and the small public exponent), so unlike the secret-key
+// primitives it has no constant-time obligation; a plain schoolbook
+// bignum modexp is used. Parsing and the padding check are pure Glide —
+// the "construct the expected encoded message and compare" form, which
+// sidesteps the classic lenient-padding forgery bugs.
+//
+// This is verify-only: enough to validate certificate chains signed by
+// the RSA CAs that dominate the public PKI. RSA signing / key generation
+// is intentionally out of scope.
+//
+// ```glide
+// import stdlib::crypto::rsa::*;
+//
+// let ok: !bool = rsa_pkcs1_verify(rsa_pubkey_der, RSA_SHA256_PREFIX, hash, sig);
+// ```
+
+import stdlib::crypto::asn1::*;
+import stdlib::bytes::*;
+
+c_raw! {
+    #ifndef GLIDE_RSA_DEFINED
+    #define GLIDE_RSA_DEFINED
+    #include <stdint.h>
+    #include <string.h>
+
+    #define RSA_MAXW 130           /* 130*32 = 4160 bits, covers RSA-4096 */
+    typedef struct { uint32_t w[RSA_MAXW]; } rbn;   /* little-endian words */
+
+    static int rbn_words(int nbytes) { return (nbytes * 8 + 31) / 32; }
+
+    static void rbn_from_be(rbn* r, const uint8_t* b, int len) {
+        memset(r->w, 0, sizeof(r->w));
+        int wi = 0, sh = 0;
+        for (int i = len - 1; i >= 0; i--) {
+            r->w[wi] |= ((uint32_t)b[i]) << sh;
+            sh += 8; if (sh == 32) { sh = 0; wi++; }
+        }
+    }
+    static void rbn_to_be(const rbn* r, uint8_t* out, int len) {
+        for (int i = 0; i < len; i++) {
+            int bit = (len - 1 - i) * 8;
+            out[i] = (uint8_t)(r->w[bit >> 5] >> (bit & 31));
+        }
+    }
+    static int rbn_cmp(const rbn* a, const rbn* b, int nw) {
+        for (int i = nw - 1; i >= 0; i--) {
+            if (a->w[i] > b->w[i]) return 1;
+            if (a->w[i] < b->w[i]) return -1;
+        }
+        return 0;
+    }
+    static void rbn_sub(rbn* a, const rbn* b, int nw) {
+        int64_t br = 0;
+        for (int i = 0; i < nw; i++) {
+            int64_t d = (int64_t)a->w[i] - (int64_t)b->w[i] - br;
+            if (d < 0) { d += ((int64_t)1 << 32); br = 1; } else { br = 0; }
+            a->w[i] = (uint32_t)d;
+        }
+    }
+    static int rbn_add(rbn* a, const rbn* b, int nw) {
+        uint64_t c = 0;
+        for (int i = 0; i < nw; i++) { c += (uint64_t)a->w[i] + b->w[i]; a->w[i] = (uint32_t)c; c >>= 32; }
+        return (int)c;
+    }
+    static int rbn_dbl(rbn* a, int nw) {
+        uint32_t c = 0;
+        for (int i = 0; i < nw; i++) { uint32_t nc = a->w[i] >> 31; a->w[i] = (a->w[i] << 1) | c; c = nc; }
+        return (int)c;
+    }
+    static int rbn_bit(const rbn* a, int i) { return (a->w[i >> 5] >> (i & 31)) & 1; }
+
+    // r = a*b mod n, bit-by-bit (r distinct from a,b). nbits >= bit length of b.
+    static void rbn_modmul(rbn* r, const rbn* a, const rbn* b, const rbn* n, int nw, int nbits) {
+        memset(r->w, 0, sizeof(r->w));
+        for (int i = nbits - 1; i >= 0; i--) {
+            int c = rbn_dbl(r, nw);
+            if (c || rbn_cmp(r, n, nw) >= 0) rbn_sub(r, n, nw);
+            if (rbn_bit(b, i)) {
+                int c2 = rbn_add(r, a, nw);
+                if (c2 || rbn_cmp(r, n, nw) >= 0) rbn_sub(r, n, nw);
+            }
+        }
+    }
+
+    // out = base^e mod n. e is a big-endian exponent (public, small).
+    static void rbn_modexp(rbn* out, const rbn* base, const uint8_t* e, int elen,
+                           const rbn* n, int nw, int nbits) {
+        rbn r; memset(r.w, 0, sizeof(r.w)); r.w[0] = 1;
+        rbn b = *base;
+        int ebits = elen * 8;
+        int start = -1;
+        for (int i = ebits - 1; i >= 0; i--) {
+            if ((e[elen - 1 - (i >> 3)] >> (i & 7)) & 1) { start = i; break; }
+        }
+        for (int i = start; i >= 0; i--) {
+            rbn t; rbn_modmul(&t, &r, &r, n, nw, nbits); r = t;
+            if ((e[elen - 1 - (i >> 3)] >> (i & 7)) & 1) { rbn_modmul(&t, &r, &b, n, nw, nbits); r = t; }
+        }
+        *out = r;
+    }
+
+    // out (nlen bytes) = sig^e mod n. Returns 0 on success, -1 on bad size
+    // or sig >= n. All inputs big-endian.
+    static int __glide_rsa_modexp(void* out, void* sig, int siglen,
+                                  void* nmod, int nlen, void* e, int elen) {
+        if (nlen > RSA_MAXW * 4 || siglen > nlen) return -1;
+        rbn N; rbn_from_be(&N, (const uint8_t*)nmod, nlen);
+        rbn S; rbn_from_be(&S, (const uint8_t*)sig, siglen);
+        int nw = rbn_words(nlen);
+        if (rbn_cmp(&S, &N, nw) >= 0) return -1;
+        rbn R; rbn_modexp(&R, &S, (const uint8_t*)e, elen, &N, nw, nlen * 8);
+        rbn_to_be(&R, (uint8_t*)out, nlen);
+        return 0;
+    }
+    #endif
+}
+
+extern fn __glide_rsa_modexp(out: *void, sig: *void, siglen: i32, nmod: *void, nlen: i32, e: *void, elen: i32) -> i32;
+
+// DigestInfo DER prefixes (the fixed AlgorithmIdentifier+OCTET-STRING header
+// that precedes the raw hash in a PKCS#1 v1.5 signature).
+pub const RSA_SHA256_PREFIX: string = "\x30\x31\x30\x0d\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x01\x05\x00\x04\x20";
+pub const RSA_SHA384_PREFIX: string = "\x30\x41\x30\x0d\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x02\x05\x00\x04\x30";
+pub const RSA_SHA512_PREFIX: string = "\x30\x51\x30\x0d\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x03\x05\x00\x04\x40";
+pub const RSA_SHA1_PREFIX: string = "\x30\x21\x30\x09\x06\x05\x2b\x0e\x03\x02\x1a\x05\x00\x04\x14";
+
+/// Verify a PKCS#1 v1.5 signature. `pubkey_der` is the RSAPublicKey
+/// SEQUENCE { modulus, publicExponent }; `prefix` is the DigestInfo header
+/// for the hash used; `hash` is the raw digest of the signed data. Returns
+/// ok(true) only when the recovered encoded message exactly equals the
+/// canonical PKCS#1 v1.5 padding of the hash (no lenient parsing).
+pub fn rsa_pkcs1_verify(pubkey_der: string, prefix: string, hash: string, signature: string) -> !bool {
+    let d: *Der = der_new(pubkey_der);
+    let seq: !*Tlv = der_expect(d, ASN1_SEQUENCE);
+    if !seq.ok { return err(seq.err); }
+    let sd: *Der = der_into(seq.val);
+    let ntlv: !*Tlv = der_expect(sd, ASN1_INTEGER);
+    if !ntlv.ok { return err(ntlv.err); }
+    let etlv: !*Tlv = der_expect(sd, ASN1_INTEGER);
+    if !etlv.ok { return err(etlv.err); }
+    let n: string = der_int_bytes(ntlv.val);
+    let e: string = der_int_bytes(etlv.val);
+    let k: i32 = n.len();
+    if signature.len() != k { return ok(false); }
+
+    // T = prefix || hash; EM = 0x00 01 (FF * ps) 00 || T, total k bytes.
+    let tlen: i32 = prefix.len() + hash.len();
+    if k < tlen + 11 { return ok(false); }          // room for >= 8 FF bytes
+    let ps: i32 = k - tlen - 3;
+    let em: *ByteBuffer = ByteBuffer::new();
+    em.push(0 as u8);
+    em.push(1 as u8);
+    for let i: i32 = 0; i < ps; i++ { em.push(255 as u8); }
+    em.push(0 as u8);
+    em.push_str(prefix);
+    em.push_str(hash);
+    let expected: string = em.to_string();
+    em.free();
+
+    let out: *void = malloc(k) as *void;
+    let rc: i32 = __glide_rsa_modexp(out, signature as *void, signature.len(),
+                                     n as *void, k, e as *void, e.len());
+    if rc != 0 { free(out); return ok(false); }
+    let recovered: string = __glide_string_from_buf(out, k);
+    free(out);
+    return ok(recovered.eq(expected));
+}
+
+extern fn __glide_string_from_buf(p: *void, n: i32) -> string;
