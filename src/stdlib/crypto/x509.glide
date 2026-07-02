@@ -15,6 +15,9 @@
 // ```
 
 import stdlib::crypto::asn1::*;
+import stdlib::crypto::p256::*;
+import stdlib::crypto::*;              // sha256
+import stdlib::crypto::sha512::*;      // sha384
 import stdlib::bytes::*;
 
 // OIDs we recognise (dotted-decimal).
@@ -286,4 +289,93 @@ pub fn cert_parse(der: string) -> !*Cert {
     c.san_dns = sans;
     c.is_ca = is_ca;
     return ok(c);
+}
+
+// ---- signature verification -------------------------------------------
+
+// Left-pad (or trim a sign byte from) a big-endian magnitude to exactly 32
+// bytes for the raw r||s form ecdsa_verify expects.
+fn _pad32(mag: string) -> string {
+    let n: i32 = mag.len();
+    if n == 32 { return mag; }
+    if n > 32 { return mag.substring(n - 32, n); }
+    let bb: *ByteBuffer = ByteBuffer::new();
+    for let i: i32 = 0; i < 32 - n; i++ { bb.push(0 as u8); }
+    bb.push_str(mag);
+    let s: string = bb.to_string();
+    bb.free();
+    return s;
+}
+
+// DER ECDSA-Sig-Value SEQUENCE { r INTEGER, s INTEGER } -> raw r||s (64B).
+fn _ecdsa_der_to_raw(sig_der: string) -> !string {
+    let d: *Der = der_new(sig_der);
+    let seq: !*Tlv = der_expect(d, ASN1_SEQUENCE);
+    if !seq.ok { return err(seq.err); }
+    let sd: *Der = der_into(seq.val);
+    let r: !*Tlv = der_expect(sd, ASN1_INTEGER);
+    if !r.ok { return err(r.err); }
+    let s: !*Tlv = der_expect(sd, ASN1_INTEGER);
+    if !s.ok { return err(s.err); }
+    return ok(_pad32(der_int_bytes(r.val)).concat(_pad32(der_int_bytes(s.val))));
+}
+
+/// Verify `cert`'s signature using the issuer's public key (an EC point
+/// 0x04||X||Y for the ecPublicKey case). Currently covers ECDSA-P256 with
+/// SHA-256/384; RSA is not yet implemented (returns an explicit error).
+pub fn cert_verify_signature(cert: *Cert, issuer_pubkey: string) -> !bool {
+    let mut digest: string = "";
+    if cert.sig_alg.eq(OID_ECDSA_SHA256) {
+        digest = sha256(cert.tbs_der);
+    } else if cert.sig_alg.eq(OID_ECDSA_SHA384) {
+        // ECDSA over P-256 takes the leftmost 256 bits of the hash.
+        digest = sha384(cert.tbs_der).substring(0, 32);
+    } else if cert.sig_alg.eq(OID_RSA_SHA256) {
+        return err("x509: RSA signature verification not yet implemented");
+    } else {
+        return err("x509: unsupported signature algorithm ".concat(cert.sig_alg));
+    }
+    let raw: !string = _ecdsa_der_to_raw(cert.signature);
+    if !raw.ok { return err(raw.err); }
+    let v: !i32 = ecdsa_verify(issuer_pubkey, digest, raw.val);
+    if !v.ok { return err(v.err); }
+    return ok(v.val == 1);
+}
+
+// ---- hostname matching (RFC 6125) -------------------------------------
+
+// Match one presented identifier (SAN dNSName or CN) against a hostname.
+// A leftmost "*" wildcard matches exactly one label and never the whole
+// name or a partial label ("f*.example.com" is not honored as a wildcard).
+fn _dns_match(pattern: string, host: string) -> bool {
+    let p: string = pattern.to_lower();
+    let h: string = host.to_lower();
+    if p.len() == 0 { return false; }
+    if p.starts_with("*.") {
+        let suffix: string = p.substring(1, p.len());   // ".example.com"
+        let dot: i32 = h.index_of(".");
+        if dot <= 0 { return false; }                   // need a non-empty first label
+        let rest: string = h.substring(dot, h.len());
+        // the wildcard must not match a name with its own dots in the first label
+        return rest.eq(suffix);
+    }
+    return p.eq(h);
+}
+
+/// True if `hostname` is authorized by the certificate. Per RFC 6125, when
+/// any subjectAltName dNSName is present the CN is ignored; otherwise the
+/// CN is used as a legacy fallback.
+pub fn cert_matches_hostname(cert: *Cert, hostname: string) -> bool {
+    if cert.san_dns.len() > 0 {
+        for let i: i32 = 0; i < cert.san_dns.len(); i++ {
+            if _dns_match(cert.san_dns.get(i), hostname) { return true; }
+        }
+        return false;
+    }
+    return _dns_match(cert.subject_cn, hostname);
+}
+
+/// True if `now_epoch` (seconds) is within the certificate's validity.
+pub fn cert_is_time_valid(cert: *Cert, now_epoch: i64) -> bool {
+    return now_epoch >= cert.not_before && now_epoch <= cert.not_after;
 }
