@@ -158,14 +158,21 @@ impl TcpStream {
     /// Read until the connection closes (EOF). Useful for HTTP/1.0-style
     /// "read everything" responses.
     pub fn read_to_end(self: *TcpStream) -> !string {
-        let mut out: string = "";
+        // Doubling ByteBuffer instead of an `out = out.concat(...)` fold,
+        // which recopies the whole prefix every chunk (O(n^2)) — pathological
+        // on a multi-MB download. 64 KiB reads also cut the syscall count.
+        let bb: *ByteBuffer = ByteBuffer::new();
         while true {
-            let r: !string = self.read_str(4096);
-            if !r.ok { return err(r.err); }
-            if r.val.len() == 0 { return ok(out); }
-            out = out.concat(r.val);
+            let r: !string = self.read_str(65536);
+            if !r.ok { bb.free(); return err(r.err); }
+            if r.val.len() == 0 {
+                let out: string = bb.to_string();
+                bb.free();
+                return ok(out);
+            }
+            bb.push_str(r.val);
         }
-        return ok(out);
+        return ok("");
     }
 
     /// Raw single-buffer write by pointer (server fast path — avoids a

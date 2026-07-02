@@ -30,6 +30,7 @@ import stdlib::net::ip::*;
 import stdlib::net::dns::*;
 import stdlib::net::tcp::*;
 import stdlib::net::sys::*;   // Stream trait — TlsStream is a Stream
+import stdlib::bytes::*;      // ByteBuffer — O(n) read accumulation
 
 c_raw! {
     #ifndef GLIDE_NET_TLS_HELPERS_DEFINED
@@ -948,14 +949,22 @@ impl TlsStream {
     /// if r.ok { println!(r.val.len(), "bytes"); }
     /// ```
     pub fn read_to_end(self: *TlsStream) -> !string {
-        let mut out: string = "";
+        // Accumulate into a doubling ByteBuffer, not `out = out.concat(...)`:
+        // the fold reallocates + copies the whole prefix every chunk (O(n^2)),
+        // which is pathological on a multi-MB download. 64 KiB reads cut the
+        // syscall count too.
+        let bb: *ByteBuffer = ByteBuffer::new();
         while true {
-            let r: !string = self.read(4096);
-            if !r.ok { return err(r.err); }
-            if r.val.len() == 0 { return ok(out); }
-            out = out.concat(r.val);
+            let r: !string = self.read(65536);
+            if !r.ok { bb.free(); return err(r.err); }
+            if r.val.len() == 0 {
+                let out: string = bb.to_string();
+                bb.free();
+                return ok(out);
+            }
+            bb.push_str(r.val);
         }
-        return ok(out);
+        return ok("");
     }
 
     /// Negotiated protocol via ALPN, or `""` if no ALPN was offered.
