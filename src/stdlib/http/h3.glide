@@ -2360,9 +2360,17 @@ c_raw! {
                 pthread_mutex_lock(&l->lock);
                 __glide_h3_server_state* s = NULL;
                 ngtcp2_version_cid vc;
+                // short_dcidlen tells the decoder how long OUR CIDs are so
+                // it can slice the DCID out of short-header (1-RTT) packets,
+                // which don't encode a length. We mint 8-byte SCIDs
+                // (NGTCP2_MIN_INITIAL_DCIDLEN); passing MAX_CIDLEN here made
+                // every post-handshake lookup compare 20 bytes against 8, so
+                // ACKs/keepalives were dropped, the server retransmitted
+                // into a shrunk cwnd, and slow-handler responses never made
+                // it out before the conn was reaped.
                 int has_vc = (ngtcp2_pkt_decode_version_cid(&vc, pktbuf,
                                                               (size_t)n,
-                                                              NGTCP2_MAX_CIDLEN) == 0);
+                                                              NGTCP2_MIN_INITIAL_DCIDLEN) == 0);
                 if (has_vc) {
                     s = __glide_h3_lookup_conn(l, vc.dcid, vc.dcidlen);
                     if (s == NULL) {
