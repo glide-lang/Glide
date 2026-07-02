@@ -3027,6 +3027,12 @@ fn _consumed_apply(t: *Typer, keep: *HashMap<bool>) {
 // both reject a typo'd variant (which otherwise leaked `case Enum_Bogus` to
 // cc) and a non-exhaustive enum match (which otherwise fell through to an
 // uninitialized C switch result).
+// True for the `void` type (an expression that yields nothing). Used to reject
+// binding / passing a value that doesn't exist.
+fn _ty_is_void(ty: *Type) -> bool {
+    return ty != null && ty.kind == TY_NAMED && ty.name != null && ty.name.eq("void");
+}
+
 fn _check_match_coverage(t: *Typer, scrut_ty: *Type, arms: *Vector<MatchArm>, line: i32, col: i32) {
     if arms == null {
         return;
@@ -3488,6 +3494,14 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
                 }
             }
         } else {
+            // A binding whose initializer yields nothing (a void-returning call,
+            // or a `match` whose arms are all `{}`) is a mistake — void has no
+            // value to bind, and downstream it miscompiled (the alelo `let res =
+            // match … {}` fed into `stream.write(res)`). Reject it; the fix is to
+            // call the expression as its own statement.
+            if _ty_is_void(val_ty) {
+                t.err_code(s.let_value.line, s.let_value.column, "void-binding", "cannot bind `".concat(s.name).concat("`: this expression yields nothing (void). Call it as a statement instead."));
+            }
             final_ty = val_ty;
         }
     }
@@ -3772,6 +3786,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                         t.scope.insert(a.bindings.get(k), *placeholder);
                     }
                 }
+                let mut arm_ty: *Type = ty_named("void");
                 if a.body != null && a.body.len() > 0 {
                     let last_idx: i32 = a.body.len() - 1;
                     for let k: i32 = 0; k < last_idx; k++ {
@@ -3779,10 +3794,27 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                         check_stmt(t, &b);
                     }
                     let last: Stmt = a.body.get(last_idx);
-                    let v: *Expr = last.expr_value;
-                    let arm_ty: *Type = infer_expr(t, v);
-                    if result_ty == null {
+                    if last.expr_value != null {
+                        // The arm's value expression (a bare `=> v` lowers to a
+                        // value-carrying terminator). Infer it as the arm type.
+                        arm_ty = infer_expr(t, last.expr_value);
+                    } else {
+                        // A non-value trailing statement (a `{}` block, an `if`,
+                        // a bare `return;`): the arm produces nothing.
+                        check_stmt(t, &last);
+                        arm_ty = ty_named("void");
+                    }
+                }
+                // Unify: every value-producing arm must agree on a type, so a
+                // `match` used as a value can't mix `i32` and `string` (which
+                // ICE'd in cc). Void arms don't constrain the result.
+                if !_ty_is_void(arm_ty) {
+                    if result_ty == null || _ty_is_void(result_ty) {
                         result_ty = arm_ty;
+                    } else {
+                        if !types_compat(result_ty, arm_ty) {
+                            t.err_code(e.line, e.column, "match-arm-mismatch", "match arms have incompatible types: `".concat(type_to_string(result_ty)).concat("` vs `").concat(type_to_string(arm_ty)).concat("`"));
+                        }
                     }
                 }
                 exit_borrow_scope(t, saved);
@@ -3793,8 +3825,11 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         // silently produced an uninitialized C switch result. e.line/e.column
         // anchor the diagnostic at the `match`.
         _check_match_coverage(t, scrut_ty, e.match_arms, e.line, e.column);
-        if scrut_ty == null {
-            return result_ty;
+        // A match whose arms all yield nothing IS a void value — return that (not
+        // null), so binding it (`let x = match …{ …=>{} }`) or passing it to a
+        // typed slot trips the void-in-value checks instead of miscompiling.
+        if result_ty == null {
+            return ty_named("void");
         }
         return result_ty;
     }

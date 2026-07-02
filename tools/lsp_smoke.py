@@ -158,6 +158,31 @@ case_diagnostics("null comparison stays legal",
     '}',
     expect_codes_absent=["cmp-type-mismatch"])
 
+# A match whose arms all yield `{}` produces void; binding it is rejected (the
+# alelo bug: `let res = match … {}` then `stream.write(res)`).
+case_diagnostics("binding a void match is rejected",
+    'fn f() -> !i32 { return ok(1); }\n'
+    'fn main() -> i32 {\n'
+    '    let res = match f() {\n'
+    '        ok(v) => {}\n'
+    '        err(e) => {}\n'
+    '    };\n'
+    '    return 0;\n'
+    '}',
+    expect_codes_present=["void-binding"])
+
+# A value match (arms yield i32) still binds fine.
+case_diagnostics("binding a value match is fine",
+    'fn f() -> !i32 { return ok(1); }\n'
+    'fn main() -> i32 {\n'
+    '    let res = match f() {\n'
+    '        ok(v) => 1\n'
+    '        err(e) => 2\n'
+    '    };\n'
+    '    return res;\n'
+    '}',
+    expect_codes_absent=["void-binding"])
+
 case_diagnostics("for-in over a scalar (bare int var)",
     'fn main() -> i32 {\n    let n: i32 = 5;\n    for i in n { println!(i); }\n    return 0;\n}',
     expect_codes_present=["for-in-not-iterable"])
