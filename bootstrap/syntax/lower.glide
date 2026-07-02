@@ -164,6 +164,56 @@ fn lower_block(body: *Vector<Stmt>) -> *Vector<Stmt> {
     return out;
 }
 
+// Lower surface forms nested inside EXPRESSIONS. A block-expression
+// (`let x = { …; for y in v { … }; return z; }`), a match arm, or an
+// `fn(...) { … }` body can carry statements (incl. `for-in` / `if-let`) that
+// the statement walker never reaches on its own — without this they reach
+// codegen unlowered and emit `/* unknown stmt */`.
+fn lower_expr(e: *Expr) {
+    if e == null {
+        return;
+    }
+    if e.kind == EX_BLOCK {
+        if e.block_stmts != null {
+            e.block_stmts = lower_block(e.block_stmts);
+        }
+        lower_expr(e.operand);
+        return;
+    }
+    if e.kind == EX_MATCH {
+        lower_expr(e.lhs);
+        if e.match_arms != null {
+            for let i: i32 = 0; i < e.match_arms.len(); i++ {
+                let arm: MatchArm = e.match_arms.get(i);
+                if arm.body != null {
+                    arm.body = lower_block(arm.body);
+                }
+                e.match_arms.set(i, arm);
+            }
+        }
+        return;
+    }
+    if e.kind == EX_FNEXPR {
+        if e.fn_expr_body != null {
+            e.fn_expr_body = lower_block(e.fn_expr_body);
+        }
+        return;
+    }
+    lower_expr(e.lhs);
+    lower_expr(e.rhs);
+    lower_expr(e.operand);
+    if e.macro_recv != null {
+        lower_expr(e.macro_recv);
+    }
+    if e.args != null {
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            lower_expr(&a);
+            e.args.set(i, a);
+        }
+    }
+}
+
 fn lower_stmt(s: *Stmt) -> *Stmt {
     if s == null {
         return null;
@@ -200,6 +250,17 @@ fn lower_stmt(s: *Stmt) -> *Stmt {
             }
         }
         s.impl_methods = new_methods;
+    }
+    // Descend into expressions that may embed block-expressions / match / fn
+    // bodies carrying nested surface forms.
+    if s.let_value != null {
+        lower_expr(s.let_value);
+    }
+    if s.expr_value != null {
+        lower_expr(s.expr_value);
+    }
+    if s.cond != null {
+        lower_expr(s.cond);
     }
     return s;
 }
