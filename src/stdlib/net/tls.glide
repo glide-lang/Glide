@@ -1239,11 +1239,11 @@ impl TlsListener {
     pub fn accept(self: *TlsListener) -> !*TlsStream {
         if self.backend == 1 {
             let tr: !*TcpStream = self.glisten.accept();
-            if !tr.ok { return err(tr.err); }
-            let g: !*TlsConn = tls13_server_handshake(tr.val, self.identity.cert_chain,
-                                                      self.identity.key, self.salpn);
-            if !g.ok { return err(g.err); }
-            return ok(_tls_wrap_glide(g.val));
+            if !tr.is_ok() { return err(tr.unwrap_err()); }
+            let g: !*TlsConn = tls13_server_handshake(tr.unwrap(), self.identity.cert_chain,
+                                                      self.identity.key, self.identity.is_rsa, self.salpn);
+            if !g.is_ok() { return err(g.unwrap_err()); }
+            return ok(_tls_wrap_glide(g.unwrap()));
         }
         let h: *void = __glide_tls_accept(self.handle);
         if h == null { return err("tls_listener: accept/handshake failure"); }

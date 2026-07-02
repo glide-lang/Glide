@@ -283,3 +283,107 @@ pub fn rsa_pss_verify(pubkey_der: string, sel: i32, message: string, signature: 
     let hprime: string = _pss_hash(sel, mprime);
     return ok(hprime.eq(h));
 }
+
+// ---- RSASSA-PSS signing (RFC 8017 §8.1.1) -----------------------------
+// The private-key side, for the pure-Glide TLS server presenting an RSA
+// certificate. Reuses the shared modexp (s = EM^d mod n) — the exponent
+// here is the private d, so this is NOT constant-time; a server signing
+// key is a long-lived secret and this modexp leaks timing. Acceptable for
+// the current threat model (network attacker, not a local timing attacker
+// co-resident with the server); a constant-time RSA is a future hardening.
+
+import stdlib::crypto::csprng::*;   // random_bytes (PSS salt)
+
+struct RsaPrivKey { n: string, d: string }
+
+// Parse a PKCS#1 "RSA PRIVATE KEY" or PKCS#8 "PRIVATE KEY" DER, extracting
+// the modulus n and private exponent d.
+fn _rsa_priv_parse(der: string) -> !*RsaPrivKey {
+    let d0: *Der = der_new(der);
+    let seq: *Tlv = der_expect(d0, ASN1_SEQUENCE)?;
+    let sd: *Der = der_into(seq);
+    let _ver: *Tlv = der_read(sd)?;                 // version
+    let second: *Tlv = der_read(sd)?;
+    if second.tag == ASN1_SEQUENCE {
+        // PKCS#8: third element is an OCTET STRING wrapping the PKCS#1 key.
+        let inner: *Tlv = der_expect(sd, ASN1_OCTETSTRING)?;
+        return _rsa_priv_parse(der_content(inner));
+    }
+    // PKCS#1: `second` is the modulus; then publicExponent; then d.
+    let n: string = der_int_bytes(second);
+    let _e: *Tlv = der_read(sd)?;                   // publicExponent
+    let dexp: *Tlv = der_read(sd)?;                 // privateExponent
+    let k: *RsaPrivKey = malloc(sizeof(RsaPrivKey)) as *RsaPrivKey;
+    k.n = n;
+    k.d = der_int_bytes(dexp);
+    return ok(k);
+}
+
+fn _pss_xor(a: string, b: string) -> string {
+    let bb: *ByteBuffer = ByteBuffer::new();
+    for let i: i32 = 0; i < a.len(); i++ { bb.push((_rbyte(a, i) ^ _rbyte(b, i)) as u8); }
+    let s: string = bb.to_string(); bb.free(); return s;
+}
+
+/// Sign `message` with an RSA private key (PKCS#1/PKCS#8 DER) using
+/// RSASSA-PSS; `sel` selects the hash (also MGF1's hash and the salt
+/// length). Returns the k-byte signature.
+pub fn rsa_pss_sign(privkey_der: string, sel: i32, message: string) -> !string {
+    let key: *RsaPrivKey = _rsa_priv_parse(privkey_der)?;
+    let n: string = key.n;
+    let d: string = key.d;
+    let k: i32 = n.len();
+    let modbits: i32 = (k - 1) * 8 + _bitlen8(_rbyte(n, 0));
+    let embits: i32 = modbits - 1;
+    let emlen: i32 = (embits + 7) / 8;
+    let hlen: i32 = _pss_hlen(sel);
+    let slen: i32 = hlen;
+    if emlen < hlen + slen + 2 { return err("rsa-pss: key too small for this hash"); }
+
+    // EMSA-PSS-ENCODE.
+    let m_hash: string = _pss_hash(sel, message);
+    let salt: string = random_bytes(slen)?;
+    let mp: *ByteBuffer = ByteBuffer::new();
+    for let i: i32 = 0; i < 8; i++ { mp.push(0 as u8); }
+    mp.push_str(m_hash);
+    mp.push_str(salt);
+    let h: string = _pss_hash(sel, mp.to_string());
+    mp.free();
+
+    let db: *ByteBuffer = ByteBuffer::new();
+    let ps_len: i32 = emlen - slen - hlen - 2;
+    for let i: i32 = 0; i < ps_len; i++ { db.push(0 as u8); }
+    db.push(1 as u8);
+    db.push_str(salt);
+    let db_str: string = db.to_string();
+    db.free();
+
+    let db_mask: string = _mgf1(h, emlen - hlen - 1, sel);
+    let masked_db: string = _pss_xor(db_str, db_mask);
+    // clear the leftmost (8*emLen - emBits) bits of maskedDB[0].
+    let topbits: i32 = 8 * emlen - embits;
+    let em: *ByteBuffer = ByteBuffer::new();
+    em.push((_rbyte(masked_db, 0) & (0xff >> topbits)) as u8);
+    for let i: i32 = 1; i < masked_db.len(); i++ { em.push(_rbyte(masked_db, i) as u8); }
+    em.push_str(h);
+    em.push(0xbc as u8);
+    // left-pad EM to k bytes (emLen is k for a top-bit-set modulus).
+    let em_str: string = em.to_string();
+    em.free();
+    let mut base: string = em_str;
+    if base.len() < k {
+        let pad: *ByteBuffer = ByteBuffer::new();
+        for let i: i32 = 0; i < k - base.len(); i++ { pad.push(0 as u8); }
+        pad.push_str(base);
+        base = pad.to_string();
+        pad.free();
+    }
+
+    // s = base^d mod n.
+    let out: *void = malloc(k) as *void;
+    let rc: i32 = __glide_rsa_modexp(out, base as *void, base.len(), n as *void, k, d as *void, d.len());
+    if rc != 0 { free(out); return err("rsa-pss: signing failed"); }
+    let sig: string = __glide_string_from_buf(out, k);
+    free(out);
+    return ok(sig);
+}

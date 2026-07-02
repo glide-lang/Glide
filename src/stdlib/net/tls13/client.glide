@@ -534,7 +534,7 @@ fn _parse_ec_key(der: string) -> !string {
 /// `cert_chain` (DER, leaf first) authenticated with the P-256 `key_scalar`
 /// (32 bytes). Offers ALPN protocols from `alpn_offer` if the client asks.
 pub fn tls13_server_handshake(stream: *TcpStream, cert_chain: *Vector<string>,
-                              key_scalar: string, alpn_offer: *Vector<string>) -> !*TlsConn {
+                              key: string, is_rsa: bool, alpn_offer: *Vector<string>) -> !*TlsConn {
     let conn: *TlsConn = malloc(sizeof(TlsConn)) as *TlsConn;
     conn.stream = stream;
     conn.rbuf = "";
@@ -638,11 +638,19 @@ pub fn tls13_server_handshake(stream: *TcpStream, cert_chain: *Vector<string>,
     cv_content.push_str("TLS 1.3, server CertificateVerify");
     cv_content.push(0 as u8);
     cv_content.push_str(th_cert);
-    let sig_r: !string = ecdsa_sign(key_scalar, sha256(cv_content.to_string()));
+    let content: string = cv_content.to_string();
     cv_content.free();
-    if !sig_r.is_ok() { return err(sig_r.unwrap_err()); }
-    let sig_der: string = der_seq(der_integer(sig_r.unwrap().substring(0, 32)).concat(der_integer(sig_r.unwrap().substring(32, 64))));
-    let cv_body: string = _clu16v(SIG_ECDSA_P256_SHA256).concat(_clu16v(sig_der.len())).concat(sig_der);
+    // Sign with the certificate's key: RSA-PSS for an RSA cert, ECDSA-P256
+    // otherwise.
+    let mut cv_body: string = "";
+    if is_rsa {
+        let sig: string = rsa_pss_sign(key, PSS_SHA256, content)?;
+        cv_body = _clu16v(SIG_RSA_PSS_SHA256).concat(_clu16v(sig.len())).concat(sig);
+    } else {
+        let sig_raw: string = ecdsa_sign(key, sha256(content))?;
+        let sig_der: string = der_seq(der_integer(sig_raw.substring(0, 32)).concat(der_integer(sig_raw.substring(32, 64))));
+        cv_body = _clu16v(SIG_ECDSA_P256_SHA256).concat(_clu16v(sig_der.len())).concat(sig_der);
+    }
     let cv_msg: string = ((HS_CERTIFICATE_VERIFY & 255) as char).to_string().concat(_clu24(cv_body.len())).concat(cv_body);
     transcript.push_str(cv_msg);
 
@@ -707,32 +715,41 @@ fn _clu24(n: i32) -> string {
 }
 
 /// A server's TLS identity: its certificate chain (DER, leaf first) and the
-/// P-256 private-key scalar.
+/// private key — a 32-byte P-256 scalar (EC) or the RSA private-key DER.
 pub struct ServerIdentity {
     pub cert_chain: *Vector<string>,
     pub key: string,
+    pub is_rsa: bool,
 }
 
 /// Load a server identity from PEM files: `cert_path` (leaf + chain) and
-/// `key_path` (an EC private key, SEC1 or PKCS#8).
+/// `key_path` (an EC key SEC1/PKCS#8, or an RSA key PKCS#1/PKCS#8). The key
+/// type is taken from the leaf certificate.
 pub fn tls13_load_identity(cert_path: string, key_path: string) -> !*ServerIdentity {
     let cert_pem: string = fs_read(cert_path);
     if cert_pem.len() == 0 { return err("tls13: cannot read certificate file"); }
     let chain: *Vector<string> = pem_certificates(cert_pem);
     if chain.len() == 0 { return err("tls13: no certificates in ".concat(cert_path)); }
+    let leaf: *Cert = cert_parse(chain.get(0))?;
+    let is_rsa: bool = leaf.pubkey_alg.eq("1.2.840.113549.1.1.1");   // rsaEncryption
+
     let key_pem: string = fs_read(key_path);
     if key_pem.len() == 0 { return err("tls13: cannot read key file"); }
     let blocks: *Vector<*PemBlock> = pem_decode(key_pem);
     let mut key_der: string = "";
     for let i: i32 = 0; i < blocks.len(); i++ {
         let lbl: string = blocks.get(i).label;
-        if lbl.eq("EC PRIVATE KEY") || lbl.eq("PRIVATE KEY") { key_der = blocks.get(i).der; }
+        if lbl.eq("EC PRIVATE KEY") || lbl.eq("RSA PRIVATE KEY") || lbl.eq("PRIVATE KEY") {
+            key_der = blocks.get(i).der;
+        }
     }
-    if key_der.len() == 0 { return err("tls13: no EC private key in ".concat(key_path)); }
-    let ks: !string = _parse_ec_key(key_der);
-    if !ks.is_ok() { return err(ks.unwrap_err()); }
+    if key_der.len() == 0 { return err("tls13: no private key in ".concat(key_path)); }
+
     let id: *ServerIdentity = malloc(sizeof(ServerIdentity)) as *ServerIdentity;
     id.cert_chain = chain;
-    id.key = ks.unwrap();
+    id.is_rsa = is_rsa;
+    // EC keys are reduced to the raw scalar; RSA keys are passed as DER to
+    // the signer, which parses n/d itself.
+    id.key = if is_rsa { key_der } else { _parse_ec_key(key_der)? };
     return ok(id);
 }
