@@ -2,7 +2,7 @@
 # Dev install (Windows / MSYS2 + git-bash).
 #
 # Cross-builds a SELF-CONTAINED glide.exe and installs it together with the
-# CURRENT src/ + bootstrap/ + runtime/zig into ~/.glide/bin. Keeping the
+# CURRENT src/ + bootstrap/ into ~/.glide/bin. Keeping the
 # binary and its src/ in lockstep is the point: the installed LSP indexes
 # ~/.glide/bin/src/stdlib, so a stale src/ there is why autocomplete misses
 # newly added modules (log, regex, …). Run this after changing the compiler
@@ -10,10 +10,11 @@
 #
 #   bash tools/dev_install.sh
 #
-# Why cross-compile instead of a host build: the host `cc` (ucrt64) ships no
-# zlib.h, and the compiler uses stdlib::compress. The bundled zig + a tiny
-# staged sysroot (real zlib + a stub openssl header the compiler never links)
-# sidesteps that and yields a binary with no mingw DLL dependencies.
+# Why the --target build instead of a plain host build: the host `cc`
+# (ucrt64) ships no zlib.h, and the compiler uses stdlib::compress. A
+# host-triple --target build rides the native mingw gcc against a tiny
+# staged sysroot (real zlib + a stub openssl header the compiler never
+# links) with -static, yielding a binary with no mingw DLL dependencies.
 set -e
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -46,20 +47,18 @@ cp dist_glide.exe "$INSTALL/glide.exe"
 cp dist_glide.exe "$GLIDE"
 rm -f "$INSTALL/glide.exe.old" dist_glide.exe dist_glide.exe.__glide.c
 
-# --- sync src/ + bootstrap/ + runtime/zig so the install matches the repo ---
+# --- sync src/ + bootstrap/ so the install matches the repo ---
 # Copy OVER in place rather than rm-then-copy: a running editor LSP holds
 # files under the install, so `rm -rf` fails "Device or resource busy".
 # cp-over refreshes everything it can; any file locked by the live LSP is
 # skipped (|| true) and updates next time the editor is closed. The binary
 # above already swapped via rename, which Windows allows even while running.
-echo ">> syncing src/ + bootstrap/ + runtime/zig ..."
+echo ">> syncing src/ + bootstrap/ ..."
 mkdir -p "$INSTALL/src" "$INSTALL/bootstrap"
 cp -r src/.       "$INSTALL/src/"       2>/dev/null || true
 cp -r bootstrap/. "$INSTALL/bootstrap/" 2>/dev/null || true
-if [ -d runtime/zig ]; then
-    mkdir -p "$INSTALL/runtime/zig"
-    cp -r runtime/zig/. "$INSTALL/runtime/zig/" 2>/dev/null || true
-fi
+# Legacy: drop a zig toolchain a previous dev install left behind.
+rm -rf "$INSTALL/runtime/zig" 2>/dev/null || true
 
 echo ">> done -> $INSTALL"
 "$INSTALL/glide.exe" version

@@ -2,13 +2,13 @@
 # Generate bootstrap/cli/embed.glide with byte arrays of the inputs baked in.
 #
 # Run in the release pipeline just before building the bundle binary. The
-# resulting compiler links the Zig toolchain + every supplied sysroot
+# resulting compiler links every supplied sysroot + the src/ tree
 # straight into .rodata, so a single-file install can build for any
 # supported target with zero network access.
 #
 # Usage:
 #   tools/gen_embedded_blobs.sh \
-#       --zig=runtime/zig.tar.gz \
+#       --src=dist/src-0.3.1.tar.gz \
 #       --sysroot=dist/glide-sysroot-x86_64-linux-musl-0.3.1.tar.gz \
 #       --sysroot=dist/glide-sysroot-aarch64-linux-musl-0.3.1.tar.gz \
 #       ...
@@ -19,14 +19,12 @@
 
 set -e
 
-ZIG_TARBALL=""
 SRC_TARBALL=""
 SYSROOTS=()
 OUT="bootstrap/cli/embed.glide"
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --zig=*)     ZIG_TARBALL="${1#--zig=}"; shift ;;
         --src=*)     SRC_TARBALL="${1#--src=}"; shift ;;
         --sysroot=*) SYSROOTS+=("${1#--sysroot=}"); shift ;;
         --out=*)     OUT="${1#--out=}"; shift ;;
@@ -91,7 +89,7 @@ mkdir -p "$(dirname "$OUT")"
 //
 // This file is the same shape as the checked-in default; the only
 // difference is the c_raw block, which here ships real byte arrays
-// for the Zig toolchain + every embedded sysroot and points the
+// for every embedded sysroot + the src/ tree and points the
 // dispatch fns at them.
 
 c_raw! {
@@ -99,18 +97,6 @@ c_raw! {
     #include <string.h>
 
 HEADER
-
-    if [ -n "$ZIG_TARBALL" ]; then
-        echo "    // Zig toolchain ($(du -h "$ZIG_TARBALL" | cut -f1))."
-        emit_array "EMBED_ZIG_DATA" "$ZIG_TARBALL" | sed 's/^/    /'
-        echo ""
-        echo "    static void* __glide_embed_zig(void) { return (void*)EMBED_ZIG_DATA; }"
-        echo "    static int   __glide_embed_zig_len(void) { return (int)EMBED_ZIG_DATA_len; }"
-    else
-        echo "    static void* __glide_embed_zig(void) { return (void*)0; }"
-        echo "    static int   __glide_embed_zig_len(void) { return 0; }"
-    fi
-    echo ""
 
     if [ -n "$SRC_TARBALL" ]; then
         echo "    // Glide src/ tree ($(du -h "$SRC_TARBALL" | cut -f1))."
@@ -154,19 +140,10 @@ HEADER
     cat <<'FOOTER'
 }
 
-extern fn __glide_embed_zig() -> *void;
-extern fn __glide_embed_zig_len() -> i32;
 extern fn __glide_embed_sysroot(triple: string) -> *void;
 extern fn __glide_embed_sysroot_len(triple: string) -> i32;
 extern fn __glide_embed_src() -> *void;
 extern fn __glide_embed_src_len() -> i32;
-
-/// Pointer to the embedded Zig toolchain tarball, or null on
-/// non-bundle builds.
-pub fn embedded_zig() -> *void { return __glide_embed_zig(); }
-
-/// Size in bytes of the embedded Zig tarball, or 0 on non-bundle builds.
-pub fn embedded_zig_len() -> i32 { return __glide_embed_zig_len(); }
 
 /// Pointer to the embedded sysroot tarball for `triple`, or null when
 /// it isn't bundled in this build.
@@ -183,10 +160,6 @@ pub fn embedded_src() -> *void { return __glide_embed_src(); }
 /// Size in bytes of the embedded `src/` tarball, or 0 on non-bundle builds.
 pub fn embedded_src_len() -> i32 { return __glide_embed_src_len(); }
 
-/// True when this glide binary was built in bundle mode with a Zig
-/// toolchain baked in.
-pub fn has_embedded_zig() -> bool { return __glide_embed_zig_len() > 0; }
-
 /// True when this glide binary ships an embedded sysroot for `triple`.
 pub fn has_embedded_sysroot(triple: string) -> bool { return __glide_embed_sysroot_len(triple) > 0; }
 
@@ -198,7 +171,6 @@ FOOTER
 echo ">> Wrote $OUT"
 echo ""
 echo "Bundle inputs:"
-[ -n "$ZIG_TARBALL" ] && echo "  zig:       $ZIG_TARBALL ($(du -h "$ZIG_TARBALL" | cut -f1))"
 [ -n "$SRC_TARBALL" ] && echo "  src:       $SRC_TARBALL ($(du -h "$SRC_TARBALL" | cut -f1))"
 for tb in "${SYSROOTS[@]}"; do
     echo "  sysroot:   $(triple_from_tarball "$tb") ($(du -h "$tb" | cut -f1))"

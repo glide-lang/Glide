@@ -70,9 +70,6 @@ echo ">> Installed to $INSTALL_DIR"
 # was built on a host that didn't preserve the +x bit (MSYS / MinGW
 # bash on Windows is the usual offender).
 chmod +x "$INSTALL_DIR/glide" 2>/dev/null || true
-if [ -f "$INSTALL_DIR/runtime/zig/zig" ]; then
-    chmod +x "$INSTALL_DIR/runtime/zig/zig"
-fi
 
 # Wrapper in ~/.local/bin so PATH stays clean of one entry per tool.
 mkdir -p "$BIN_DIR"

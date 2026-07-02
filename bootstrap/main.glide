@@ -2,7 +2,7 @@
 //
 // Subcommands:
 //   build <file> [-o out]    parse + check + emit C, hand off to a C
-//                            compiler (zig cc / cc / cl), produce an exe.
+//                            compiler (cc / gcc / clang), produce an exe.
 //   run   <file>             build then exec the resulting binary.
 //   check <file>             parse + typecheck only; print diagnostics.
 //   fmt   <file> [--write]   parse + reformat; stdout by default.
@@ -206,7 +206,7 @@ extern fn __glide_is_windows() -> i32;
 extern fn __glide_file_exists(path: string) -> bool;
 
 // Wrap a raw byte buffer + length as a Glide string. Used by the
-// embedded-blob extractors (sysroot / zig / src self-extract) to hand
+// embedded-blob extractors (sysroot / src self-extract) to hand
 // gzip_decode / tar_extract the decoded bytes. Declared here as well as
 // in fetch.glide / stdlib::compress so the bootstrap seed's stricter
 // extern-visibility check resolves it without leaning on a transitive
@@ -223,7 +223,7 @@ extern fn write_file(path: string, content: string) -> bool;
 
 // ---- C-compiler error rendering -----------------------------------------
 //
-// The generated C is compiled by an external cc (gcc / clang / `zig cc`). Its
+// The generated C is compiled by an external cc (gcc / clang). Its
 // output normally streams raw to the terminal — a wall of C diagnostics that
 // reference the throwaway `.__glide.c`. But codegen emits `#line N "file.glide"`
 // directives, so cc already anchors each error at the originating .glide line.
@@ -1396,19 +1396,6 @@ fn run_install(argc: i32) -> i32 {
             println!("warning: could not copy", bs_origin, "->", bs_dest, "(proc-macros may lose goto/hover on bootstrap types)");
         }
     }
-    // Same idea for `runtime/zig/`. Without it, `--target=<triple>`
-    // builds can't find a cross-capable cc. Optional — we skip
-    // silently when there's no zig in the source tree.
-    let zig_origin: string = project_root.concat("/runtime/zig");
-    if fs_is_dir(zig_origin) {
-        let zig_dest: string = install_dir.concat("/runtime/zig");
-        fs_remove_dir_rec(zig_dest);
-        if fs_copy_dir_rec(zig_origin, zig_dest) {
-            println!("installed toolchain ->", zig_dest);
-        } else {
-            println!("warning: could not copy", zig_origin, "->", zig_dest, "(cross-compile will fall back to system zig if present)");
-        }
-    }
     println!("installed", m.name, "->", final_path);
     _ensure_on_path(install_dir);
     return 0;
@@ -2175,15 +2162,10 @@ fn parse_program_into(stmts: *Vector<Stmt>, path: string, pdiags: *Vector<ParseD
     return true;
 }
 
-// Host C compiler. Resolution order:
-//   1. $CC (explicit override)
-//   2. `cc` / `gcc` / `clang` on PATH (gcc / clang / MSYS2 / Apple CLT)
-//   3. transitional: a bundled zig as `cc` on cc-less machines, ONLY for
-//      lib-free programs (zig ships no openssl/zlib). Goes away with the
-//      zig excision — a machine with no C compiler then gets a clear
-//      per-platform install hint instead.
+// Host C compiler. Resolution order: $CC (explicit override), then
+// `cc` / `gcc` / `clang` on PATH (gcc / clang / MSYS2 / Apple CLT).
 // Returns "" when nothing usable is found, so the caller can print a
-// targeted hint.
+// targeted per-platform install hint.
 fn pick_cc_host(needs_libs: bool) -> string {
     let env: string = __glide_getenv("CC");
     if !env.eq("") {
@@ -2198,12 +2180,6 @@ fn pick_cc_host(needs_libs: bool) -> string {
     if _have_on_path("clang") {
         return "clang";
     }
-    if !needs_libs {
-        let zig: string = _find_zig();
-        if !zig.eq("") {
-            return "\"".concat(zig).concat("\" cc");
-        }
-    }
     return "";
 }
 
@@ -2216,8 +2192,6 @@ fn pick_cc_host(needs_libs: bool) -> string {
 //   2. clang — clang is inherently cross-capable; the sysroot's libc/
 //      tree (v2 layout) supplies the target's libc + crt + libgcc, and
 //      lld links foreign arches/OSes the system GNU ld can't.
-//   3. zig — transitional fallback while installs still carry a bundled
-//      zig; scheduled for removal.
 pub struct CrossBackend {
     pub cc: string, // compiler command (may be quoted)
     pub emit_target: bool, // append `--target=<triple>` to the link line?
@@ -2300,80 +2274,11 @@ fn pick_cc_for_target(triple: string, needs_libs: bool) -> !*CrossBackend {
         }
         return ok(_mk_backend("clang", true, extra));
     }
-    // Tier 3 (transitional): bundled/system zig still drives cross builds
-    // on installs that carry it.
-    let zig: string = _find_zig();
-    if !zig.eq("") {
-        return ok(_mk_backend("\"".concat(zig).concat("\" cc"), true, ""));
-    }
     if !_have_on_path("clang") {
         return err("--target needs clang (the cross C backend) on PATH.\n".concat(_clang_install_hint()));
     }
     // clang is present but the sysroot lacks the libc/ tree (v1 layout).
     return err("the ".concat(triple).concat(" sysroot has no libc/ tree (pre-v2 layout). Refresh it:\n").concat("  glide target remove ").concat(triple).concat(" && glide target add ").concat(triple));
-}
-
-// Bundled zig (next to the binary, in `~/.glide/runtime/`, or in the
-// source tree). Cross-compile also accepts a system `zig` on PATH via
-// `_find_zig` — but host builds don't, because system zigs typically
-// lack the openssl/zlib sysroot.
-//
-// Probes for both `zig.exe` and `zig` on Windows because zig's release
-// tarballs ship the binary without the `.exe` suffix on some
-// distributions — cmd.exe still launches it via the PATHEXT lookup.
-fn _find_bundled_zig() -> string {
-    let win: bool = __glide_is_windows() != 0;
-    let exe_dir: string = __glide_exe_dir();
-    let roots: *Vector<string> = Vector::new();
-    if !exe_dir.eq("") {
-        roots.push(exe_dir.concat("/runtime/zig"));
-    }
-    let home: !string = os_home_dir();
-    if home.ok {
-        roots.push(home.val.concat("/.glide/runtime/zig"));
-    }
-    roots.push("./runtime/zig");
-    for let i: i32 = 0; i < roots.len(); i++ {
-        let root: string = roots.get(i);
-        // On Windows, only return a path the shell can actually launch
-        // via cmd.exe / system(). A bare `zig` with no extension exists
-        // in some Zig releases but cmd.exe refuses to run it; in that
-        // case we fall back to the next probe (or system PATH) where a
-        // `.exe`-suffixed binary is more likely.
-        if win {
-            let p_exe: string = root.concat("/zig.exe");
-            if __glide_file_exists(p_exe) {
-                return p_exe;
-            }
-        } else {
-            let p: string = root.concat("/zig");
-            if __glide_file_exists(p) {
-                return p;
-            }
-        }
-    }
-    return "";
-}
-
-// Any usable zig — bundled first, then embedded (one-time self-extract
-// from a bundle binary), then `zig` on PATH. Used by cross-compile,
-// which doesn't link the heavy host-only libs and so doesn't need a
-// configured sysroot.
-fn _find_zig() -> string {
-    let bundled: string = _find_bundled_zig();
-    if !bundled.eq("") {
-        return bundled;
-    }
-    if has_embedded_zig() {
-        let extracted: string = _extract_embedded_zig();
-        if !extracted.eq("") {
-            return extracted;
-        }
-    }
-    if _have_on_path("zig") {
-        return "zig";
-    }
-    return "";
 }
 
 // Extract the embedded `src/` tree (Glide stdlib + builtins) into
@@ -2429,80 +2334,25 @@ fn _maybe_install_embedded_src() {
     write_file(marker, GLIDE_VERSION);
 }
 
-// Extract the embedded Zig tarball into `~/.glide/runtime/zig/` the
-// first time a build needs it. Idempotent — subsequent calls hit the
-// already-laid-out tree via `_find_bundled_zig`. Returns the path to
-// the zig binary on success, "" on failure.
-fn _extract_embedded_zig() -> string {
-    let win: bool = __glide_is_windows() != 0;
-    let bytes_ptr: *void = embedded_zig();
-    let bytes_len: i32 = embedded_zig_len();
-    if bytes_ptr == null || bytes_len <= 0 {
-        return "";
-    }
+// One-time migration: pre-zig-removal installs self-extracted a bundled
+// Zig toolchain into ~/.glide (and `glide install` copied one under
+// ~/.glide/bin). Reclaim the ~340MB — the C backend is the system
+// cc/clang now.
+fn _cleanup_legacy_zig() {
     let home: !string = os_home_dir();
     if !home.ok {
-        return "";
+        return;
     }
-    let runtime_dir: string = home.val.concat("/.glide/runtime");
-    let zig_dir: string = runtime_dir.concat("/zig");
-    let zig_exe: string = zig_dir.concat("/zig.exe");
-    let zig_bare: string = zig_dir.concat("/zig");
-    if win && __glide_file_exists(zig_exe) {
-        return zig_exe;
+    let d1: string = home.val.concat("/.glide/runtime/zig");
+    if fs_is_dir(d1) {
+        fs_remove_dir_rec(d1);
+        println!("note: removed the legacy bundled zig toolchain at", d1);
+        println!("      (the C backend is the system cc/clang now)");
     }
-    if __glide_file_exists(zig_bare) {
-        return zig_bare;
+    let d2: string = home.val.concat("/.glide/bin/runtime/zig");
+    if fs_is_dir(d2) {
+        fs_remove_dir_rec(d2);
     }
-    spinner_start("unpacking bundled Zig toolchain");
-    if !fs_mkdir_p(runtime_dir) {
-        spinner_finish(false, "");
-        return "";
-    }
-    fs_remove_dir_rec(zig_dir);
-    if !fs_mkdir_p(zig_dir) {
-        spinner_finish(false, "");
-        return "";
-    }
-    let archive_gz: string = __glide_string_from_buf(bytes_ptr, bytes_len);
-    let mut decoded_len: i32 = 0;
-    let raw: *void = gzip_decode(archive_gz, bytes_len, &decoded_len);
-    if raw == null || decoded_len <= 0 {
-        spinner_finish(false, "");
-        return "";
-    }
-    let archive: string = __glide_string_from_buf(raw, decoded_len);
-    // The Zig release tarball nests its files under a versioned dir
-    // (`zig-<os>-<arch>-<ver>/`); strip-1 flattens that so we land
-    // straight into `zig_dir`.
-    let extracted: i32 = tar_extract(archive, decoded_len, zig_dir, 1);
-    free(raw);
-    if extracted < 0 {
-        spinner_finish(false, "");
-        fs_remove_dir_rec(zig_dir);
-        return "";
-    }
-    // Windows demands the `.exe`; bare `zig` on Windows usually means
-    // the bundle accidentally carried a Linux build and the shell
-    // can't launch it. Treat that case as a failure so the user falls
-    // back to the system PATH instead of silently producing a broken
-    // command.
-    if win {
-        if __glide_file_exists(zig_exe) {
-            spinner_finish(true, "Zig toolchain installed");
-            return zig_exe;
-        }
-        spinner_finish(false, "");
-        fs_remove_dir_rec(zig_dir);
-        return "";
-    }
-    if __glide_file_exists(zig_bare) {
-        spinner_finish(true, "Zig toolchain installed");
-        return zig_bare;
-    }
-    spinner_finish(false, "");
-    fs_remove_dir_rec(zig_dir);
-    return "";
 }
 
 // `command -v` / `where` thin wrapper. Returns true if the program
@@ -2561,7 +2411,7 @@ fn _host_lib_bundle_dir() -> string {
     return "";
 }
 
-// Compute the canonical zig-style triple for the current host, e.g.
+// Compute the canonical target triple for the current host, e.g.
 // `x86_64-windows-gnu`, `aarch64-linux-musl`, `aarch64-macos-none`.
 // Returns "" only on truly unrecognised arch/OS combinations.
 //
@@ -3094,7 +2944,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     emit_program_mode(codegen_stmts, freestanding, tiny);
     __glide_restore_stdout(saved);
     // Freestanding / kernel build: a self-contained path that links the
-    // emitted C with zig as a bare-metal x86_64 ELF against the linker
+    // emitted C as a bare-metal x86_64 ELF against the linker
     // script. Skips the hosted lib-scan / -lpthread / run-after-build below.
     if freestanding {
         return _build_freestanding(tmp_c, out_path, link_script, quiet, user_cflags, user_ldflags, stmts, src_path, src_text);
@@ -3137,14 +2987,14 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     if eff_target.eq("") && needs_any_lib {
         let host_triple: string = _host_triple();
         // Promote only when a backend can actually drive the promoted
-        // build (native host toolchain, clang + libc sysroot, or the
-        // transitional zig). Otherwise soft-fail to the host-cc path
+        // build (the native host toolchain on win/mac, or clang against
+        // the libc sysroot). Otherwise soft-fail to the host-cc path
         // (system cc + system openssl/zlib) — same spirit as a flopped
         // sysroot download. An explicit `--target=` below still
         // hard-errors: there the user requested the cross pipeline.
         let hos: string = _target_os(host_triple);
         let native_ok: bool = (hos.eq("windows") || hos.eq("macos")) && !pick_cc_host(needs_any_lib).eq("");
-        let maybe_backend: bool = native_ok || _have_on_path("clang") || !_find_zig().eq("");
+        let maybe_backend: bool = native_ok || _have_on_path("clang");
         if !host_triple.eq("") && _is_known_target(host_triple) && maybe_backend {
             // Auto-install the host sysroot on first use, same as the
             // explicit-target branch below. Soft-fail to the host-cc
@@ -3155,7 +3005,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
             }
             if _has_target_sysroot(host_triple) {
                 // Final say is the selector's: an old v1 sysroot without
-                // libc/ (and no zig) can't feed clang, so stay native.
+                // libc/ can't feed clang, so stay native.
                 let probe: !*CrossBackend = pick_cc_for_target(host_triple, needs_any_lib);
                 if probe.ok {
                     eff_target = host_triple;
@@ -3350,9 +3200,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         // Garbage-collect unreferenced functions/data from the final binary.
         // The compile step emitted per-symbol sections (-ffunction-sections
         // -fdata-sections); here the linker drops what `main` can't reach.
-        // GNU ld / lld accept --gc-sections (both `cc`=gcc and `cc`=zig);
-        // Apple ld wants -dead_strip. `zig cc` rejects MSVC-style /OPT:* and
-        // --exclude-all-symbols, so they're not an option on the zig path.
+        // GNU ld / lld accept --gc-sections; Apple ld wants -dead_strip.
         // (On windows-gnu the MinGW auto-export of every global pins them as
         // GC roots, so this mostly trims runtime dead code there, not user
         // symbols — still a net win on top of -s.)
@@ -3607,20 +3455,13 @@ fn _bundle_runtime_dlls_win(out_path: string, cc: string) {
     }
 }
 
-// Resolve a cc command (e.g. "cc", "gcc", an absolute path, or
-// `"path/to/zig" cc`) to the directory holding the cc binary. Uses
+// Resolve a cc command (e.g. "cc", "gcc", or an absolute path) to
+// the directory holding the cc binary. Uses
 // `where` on Windows to look up bare names; absolute paths are split
 // at the last separator. Returns "" when we can't tell — caller treats
 // that as "skip bundling, the user is on their own".
 fn _resolve_cc_dir_win(cc: string) -> string {
     if cc.eq("") {
-        return "";
-    }
-    // `pick_cc_for_target` returns `"<zigpath>" cc` for cross builds;
-    // host builds without zig fall through to plain "gcc" / "cc".
-    // The zig case never bundles MSYS DLLs (zig's own libc has no
-    // openssl), so we just bail.
-    if cc.contains("zig") {
         return "";
     }
     let raw: string = cc.trim();
@@ -3663,7 +3504,7 @@ fn _resolve_cc_dir_win(cc: string) -> string {
 }
 
 // Freestanding / kernel link path. Compiles the emitted C as a bare-metal
-// x86_64 ELF with zig (clang under the hood): no libc, no startup, no PIE,
+// x86_64 ELF: no libc, no startup, no PIE,
 // red-zone off for interrupt safety, higher-half code model. The user's
 // linker script (`linker:` in glide.glide) owns the layout + entry point.
 fn _build_freestanding(tmp_c: string, out_path: string, link_script: string, quiet: bool, user_cflags: string, user_ldflags: string, stmts: *Vector<Stmt>, src_path: string, src_text: string) -> i32 {
@@ -3679,12 +3520,6 @@ fn _build_freestanding(tmp_c: string, out_path: string, link_script: string, qui
             fs_target_flags = " --target=x86_64-none-elf -fuse-ld=lld";
         } else {
             cc = "";
-        }
-    } else {
-        // Transitional: pick_cc_host may still hand back the bundled zig
-        // on cc-less machines — it spells the bare-metal triple its own way.
-        if cc.contains("zig") {
-            fs_target_flags = " -target x86_64-freestanding-none";
         }
     }
     if cc.eq("") {
@@ -4460,6 +4295,7 @@ fn main() -> i32 {
     // installer script. Idempotent — the second run sees the marker
     // file and skips the extract.
     _maybe_install_embedded_src();
+    _cleanup_legacy_zig();
     if argc < 2 {
         print_usage();
         return 1;
