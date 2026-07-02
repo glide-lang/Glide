@@ -36,6 +36,40 @@ import stdlib::net::tls13::client::*;   // pure-Glide TLS 1.3 backend
 import stdlib::net::tls12::client::*;   // pure-Glide TLS 1.2 backend (legacy fallback)
 import stdlib::env::*;        // GLIDE_TLS_BACKEND selector
 
+// ============================================================================
+// TLS backend scope — THE RULE
+// ============================================================================
+// TLS runs on the pure-Glide backend BY DEFAULT. OpenSSL is opt-out, selected
+// per-process with `GLIDE_TLS_BACKEND=openssl`. When you hit something the
+// pure-Glide backend does not cover, set that env var — do not silently
+// weaken security to work around it.
+//
+// The pure-Glide backend COVERS (and is the default for):
+//   * Client: TLS 1.3 and TLS 1.2, verifying or insecure, over connect().
+//     1.3 is tried first and falls back to 1.2 for 1.2-only servers.
+//   * Server: TLS 1.3 and TLS 1.2 (version-dispatched), ECDSA or RSA certs.
+//   * Key exchange: X25519, secp256r1 (ECDHE only).
+//   * AEAD: AES-128/256-GCM, ChaCha20-Poly1305.
+//   * Auth: ECDSA P-256/P-384 (verify), RSA PKCS#1-v1.5 + PSS (verify+sign).
+//   * X.509 chain verification against the OS trust store, RFC 6125 hostname.
+//
+// The pure-Glide backend does NOT implement (falls back to OpenSSL — set
+// GLIDE_TLS_BACKEND=openssl):
+//   * STARTTLS attach() to a TLS-1.2-ONLY server. attach() speaks 1.3 only
+//     (it cannot reconnect to retry a lower version on an in-use socket);
+//     1.3-capable STARTTLS servers — every modern mail host — work.
+//   * HTTP/3 / QUIC (stdlib::http::h3 is OpenSSL + ngtcp2 + nghttp3).
+//   * Client certificates (mTLS), session resumption / tickets / 0-RTT,
+//     and OCSP / CRL revocation checking.
+//
+// The pure-Glide backend WILL NOT implement (deliberately dropped as legacy
+// or insecure — use OpenSSL only if a peer truly requires them):
+//   * TLS 1.0 / 1.1, SSLv3.
+//   * CBC cipher suites (MAC-then-encrypt), RC4, 3DES.
+//   * Static-RSA and finite-field (non-EC) DH key exchange, DSA.
+//   * TLS renegotiation.
+// ============================================================================
+
 c_raw! {
     #ifndef GLIDE_NET_TLS_HELPERS_DEFINED
     #define GLIDE_NET_TLS_HELPERS_DEFINED
