@@ -1,10 +1,10 @@
 # Static-lib bundle pipeline
 
-Produces the `.a` files (`libssl`, `libcrypto`, `libz`, `libngtcp2`,
+Produces the `.a` files (`libssl`, `libcrypto`, `libngtcp2`,
 `libnghttp3`, `libngtcp2_crypto_ossl`) that ride inside the release
 tarball so end users don't need `apt install libssl-dev` / equivalents
 before they can build Glide programs that use `stdlib::http` or
-`stdlib::http::h3`.
+`stdlib::http::h3`. (No zlib — `stdlib::compress` is pure Glide.)
 
 ## How it plugs in
 

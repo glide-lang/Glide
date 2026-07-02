@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Produce the windows-x86_64 bundle from inside msys2 (ucrt64 shell).
 #
-# msys2 ucrt64 ships static .a builds of openssl, zlib, ngtcp2,
-# nghttp3, ngtcp2_crypto_ossl via pacman packages. We just need to
-# pull them out of /ucrt64/lib/.
+# msys2 ucrt64 ships static .a builds of openssl, ngtcp2, nghttp3,
+# ngtcp2_crypto_ossl via pacman packages. We just need to pull them
+# out of /ucrt64/lib/. (No zlib — stdlib::compress is pure Glide.)
 #
 # Run as:  OUT=/path/to/out tools/bundle/windows-x86_64-mingw/build.sh
 
@@ -23,7 +23,6 @@ fi
 # as a setup checklist.
 REQ_PKGS="\
     mingw-w64-ucrt-x86_64-openssl
-    mingw-w64-ucrt-x86_64-zlib
     mingw-w64-ucrt-x86_64-ngtcp2
     mingw-w64-ucrt-x86_64-nghttp3
 "
@@ -40,7 +39,6 @@ done
 LIBS="\
     libssl.a
     libcrypto.a
-    libz.a
     libngtcp2.a
     libnghttp3.a
     libngtcp2_crypto_ossl.a

@@ -75,11 +75,8 @@ make install
 cp "$PREFIX"/lib/libssl.a "$PREFIX"/lib/libcrypto.a \
    "$PREFIX"/lib/libngtcp2.a "$PREFIX"/lib/libngtcp2_crypto_ossl.a \
    "$PREFIX"/lib/libnghttp3.a /out/lib/
-# Alpine's zlib-static drops libz.a under /lib (not /usr/lib).
-cp "$(ls /lib/libz.a /usr/lib/libz.a 2>/dev/null | head -1)" /out/lib/
 cp -r "$PREFIX"/include/openssl "$PREFIX"/include/ngtcp2 \
       "$PREFIX"/include/nghttp3 /out/include/
-cp /usr/include/zlib.h /usr/include/zconf.h /out/include/
 
 # The container runs as root; hand the bind-mounted output back to the
 # host user (whoever owns the mounted /out directory).

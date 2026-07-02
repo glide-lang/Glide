@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Produce the macOS bundle (x86_64 or arm64) on an actual Mac.
 #
-# Strategy: pull openssl + zlib static libs out of brew (they ship in
-# the openssl@3 and zlib formulas as .a files), then build ngtcp2 +
-# nghttp3 + ngtcp2_crypto_ossl from source via Apple Clang.
+# Strategy: pull openssl static libs out of brew (the openssl@3 formula
+# ships .a files), then build ngtcp2 + nghttp3 + ngtcp2_crypto_ossl from
+# source via Apple Clang. (No zlib — stdlib::compress is pure Glide.)
 #
 # Brew dependencies (install up front):
-#   brew install openssl@3 zlib autoconf automake libtool pkg-config
+#   brew install openssl@3 autoconf automake libtool pkg-config
 #
 # Run as:  OUT=/path/to/out tools/bundle/macos/build.sh macos-aarch64
 
@@ -29,23 +29,17 @@ fi
 
 mkdir -p "$OUT"
 
-# Locate brew prefixes for openssl@3 and zlib. On arm64 Macs brew lives
-# under /opt/homebrew; on x86_64 it's /usr/local. `brew --prefix` does
-# the right thing on either.
+# Locate the brew prefix for openssl@3. On arm64 Macs brew lives under
+# /opt/homebrew; on x86_64 it's /usr/local. `brew --prefix` does the
+# right thing on either.
 OPENSSL_PREFIX="$(brew --prefix openssl@3 2>/dev/null || echo "")"
-ZLIB_PREFIX="$(brew --prefix zlib 2>/dev/null || echo "")"
 if [ -z "$OPENSSL_PREFIX" ] || [ ! -f "$OPENSSL_PREFIX/lib/libssl.a" ]; then
     echo "openssl@3 not installed or static libs missing — brew install openssl@3" >&2
-    exit 1
-fi
-if [ -z "$ZLIB_PREFIX" ] || [ ! -f "$ZLIB_PREFIX/lib/libz.a" ]; then
-    echo "zlib not installed or static libs missing — brew install zlib" >&2
     exit 1
 fi
 
 cp "$OPENSSL_PREFIX/lib/libssl.a"    "$OUT/"
 cp "$OPENSSL_PREFIX/lib/libcrypto.a" "$OUT/"
-cp "$ZLIB_PREFIX/lib/libz.a"         "$OUT/"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
