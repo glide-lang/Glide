@@ -1,0 +1,74 @@
+import stdlib::testing::*;
+
+// Coverage for the Pair builtin (src/builtins/pair.glide). Pair is the
+// two-value tuple used by HashMap::entries and Vector::enumerate.
+
+fn test_pair_new_int_string() -> i32 {
+    let p: *Pair<i32, string> = Pair::new(42, "answer");
+    assert_eq!(p.first, 42);
+    assert_str_eq!(p.second, "answer");
+    return 0;
+}
+
+fn test_pair_int_int() -> i32 {
+    let p: *Pair<i32, i32> = Pair::new(7, 9);
+    assert_eq!(p.first, 7);
+    assert_eq!(p.second, 9);
+    return 0;
+}
+
+fn test_pair_fields_mutable() -> i32 {
+    let p: *Pair<i32, i32> = Pair::new(1, 2);
+    p.first = 100;
+    p.second = 200;
+    assert_eq!(p.first, 100);
+    assert_eq!(p.second, 200);
+    return 0;
+}
+
+fn test_pair_nested() -> i32 {
+    // A pair whose second element is itself a pair.
+    let inner: *Pair<i32, i32> = Pair::new(3, 4);
+    let outer: *Pair<i32, *Pair<i32, i32>> = Pair::new(1, inner);
+    assert_eq!(outer.first, 1);
+    assert_eq!(outer.second.first, 3);
+    assert_eq!(outer.second.second, 4);
+    return 0;
+}
+
+fn test_pair_bool_value() -> i32 {
+    let p: *Pair<string, bool> = Pair::new("ok", true);
+    assert_str_eq!(p.first, "ok");
+    assert!(p.second);
+    return 0;
+}
+
+fn test_pair_from_enumerate() -> i32 {
+    let v: *Vector<string> = Vector::new();
+    defer v.free();
+    v.push_all!("a", "b", "c");
+    let e: *Vector<*Pair<i32, string>> = v.enumerate();
+    defer e.free();
+    assert_eq!(e.len(), 3);
+    let p0: *Pair<i32, string> = e.get(0);
+    assert_eq!(p0.first, 0);
+    assert_str_eq!(p0.second, "a");
+    let p2: *Pair<i32, string> = e.get(2);
+    assert_eq!(p2.first, 2);
+    assert_str_eq!(p2.second, "c");
+    return 0;
+}
+
+fn test_pair_vector_of_pairs() -> i32 {
+    let v: *Vector<*Pair<i32, i32>> = Vector::new();
+    defer v.free();
+    v.push(Pair::new(1, 10));
+    v.push(Pair::new(2, 20));
+    let mut total: i32 = 0;
+    for let i: i32 = 0; i < v.len(); i++ {
+        let p: *Pair<i32, i32> = v.get(i);
+        total = total + p.first + p.second;
+    }
+    assert_eq!(total, 33);
+    return 0;
+}

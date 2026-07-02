@@ -1,0 +1,104 @@
+import stdlib::testing::*;
+import stdlib::set::*;
+
+// Deep coverage for StringSet (src/stdlib/set.glide). The existing
+// set_test covers new/insert/remove/clear and a 100-key smoke test;
+// these go after re-insertion after removal, clear-then-reuse, mixed
+// membership at scale, and idempotent inserts.
+
+fn test_reinsert_after_remove_counts_again() -> i32 {
+    let s: *StringSet = StringSet::new();
+    defer s.free();
+    assert!(s.insert("a"));
+    assert!(s.remove("a"));
+    assert_eq!(s.len(), 0);
+    // Once removed, insert reports "new" again.
+    assert!(s.insert("a"));
+    assert_eq!(s.len(), 1);
+    assert!(s.contains("a"));
+    return 0;
+}
+
+fn test_clear_then_reuse() -> i32 {
+    let s: *StringSet = StringSet::new();
+    defer s.free();
+    s.insert("x");
+    s.insert("y");
+    s.clear();
+    assert_eq!(s.len(), 0);
+    // Reuse after clear: keys count as new.
+    assert!(s.insert("x"));
+    assert_eq!(s.len(), 1);
+    return 0;
+}
+
+fn test_duplicate_inserts_are_idempotent() -> i32 {
+    let s: *StringSet = StringSet::new();
+    defer s.free();
+    assert!(s.insert("dup"));
+    assert_not!(s.insert("dup"));
+    assert_not!(s.insert("dup"));
+    assert_eq!(s.len(), 1);
+    return 0;
+}
+
+fn test_remove_missing_is_false() -> i32 {
+    let s: *StringSet = StringSet::new();
+    defer s.free();
+    s.insert("here");
+    assert_not!(s.remove("nope"));
+    assert_eq!(s.len(), 1);
+    assert!(s.remove("here"));
+    assert_not!(s.remove("here"));
+    return 0;
+}
+
+fn test_scale_with_selective_removal() -> i32 {
+    let s: *StringSet = StringSet::new();
+    defer s.free();
+    for let i: i32 = 0; i < 300; i++ {
+        assert!(s.insert("item${i}"));
+    }
+    assert_eq!(s.len(), 300);
+    // Remove every third.
+    let mut removed: i32 = 0;
+    for let i: i32 = 0; i < 300; i++ {
+        if i % 3 == 0 {
+            assert!(s.remove("item${i}"));
+            removed = removed + 1;
+        }
+    }
+    assert_eq!(s.len(), 300 - removed);
+    // Verify membership post-removal.
+    for let i: i32 = 0; i < 300; i++ {
+        if i % 3 == 0 {
+            assert_not!(s.contains("item${i}"));
+        } else {
+            assert!(s.contains("item${i}"));
+        }
+    }
+    return 0;
+}
+
+fn test_empty_string_is_a_valid_key() -> i32 {
+    let s: *StringSet = StringSet::new();
+    defer s.free();
+    assert!(s.insert(""));
+    assert!(s.contains(""));
+    assert_eq!(s.len(), 1);
+    assert_not!(s.insert(""));
+    assert!(s.remove(""));
+    assert_not!(s.contains(""));
+    return 0;
+}
+
+fn test_case_sensitive_keys() -> i32 {
+    let s: *StringSet = StringSet::new();
+    defer s.free();
+    assert!(s.insert("Key"));
+    // Different case is a distinct key.
+    assert!(s.insert("key"));
+    assert!(s.insert("KEY"));
+    assert_eq!(s.len(), 3);
+    return 0;
+}

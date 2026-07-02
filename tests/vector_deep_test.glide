@@ -1,0 +1,234 @@
+import stdlib::testing::*;
+
+// Deep coverage for the Vector builtin (src/builtins/vector.glide),
+// focused on the mutating/structural ops the existing
+// vector_methods_test / vector_ext_test don't cover: pop, swap,
+// swap_remove, truncate, extend, clear+reuse, with_cap, in-place
+// reverse, manual iteration, and duplicate handling.
+
+fn test_push_get_set() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    defer v.free();
+    v.push_all!(10, 20, 30);
+    assert_eq!(v.len(), 3);
+    assert_eq!(v.get(0), 10);
+    assert_eq!(v.get(2), 30);
+    v.set(1, 99);
+    assert_eq!(v.get(1), 99);
+    return 0;
+}
+
+fn test_pop_returns_last_and_shrinks() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    defer v.free();
+    v.push_all!(1, 2, 3);
+    assert_eq!(v.pop(), 3);
+    assert_eq!(v.pop(), 2);
+    assert_eq!(v.len(), 1);
+    assert_eq!(v.get(0), 1);
+    return 0;
+}
+
+fn test_first_last() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    defer v.free();
+    v.push_all!(5, 6, 7, 8);
+    assert_eq!(v.first(), 5);
+    assert_eq!(v.last(), 8);
+    return 0;
+}
+
+fn test_swap() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    defer v.free();
+    v.push_all!(1, 2, 3, 4);
+    v.swap(0, 3);
+    assert_eq!(v.get(0), 4);
+    assert_eq!(v.get(3), 1);
+    // Swapping a slot with itself is a no-op.
+    v.swap(1, 1);
+    assert_eq!(v.get(1), 2);
+    return 0;
+}
+
+fn test_swap_remove_changes_order() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    defer v.free();
+    v.push_all!(10, 20, 30, 40);
+    let removed: i32 = v.swap_remove(1);
+    assert_eq!(removed, 20);
+    assert_eq!(v.len(), 3);
+    // Last element (40) took slot 1.
+    assert_eq!(v.get(1), 40);
+    assert_eq!(v.get(2), 30);
+    return 0;
+}
+
+fn test_swap_remove_last() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    defer v.free();
+    v.push_all!(1, 2, 3);
+    // Removing the last index just pops.
+    assert_eq!(v.swap_remove(2), 3);
+    assert_eq!(v.len(), 2);
+    assert_eq!(v.get(0), 1);
+    assert_eq!(v.get(1), 2);
+    return 0;
+}
+
+fn test_reverse_in_place() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    defer v.free();
+    v.push_all!(1, 2, 3, 4, 5);
+    v.reverse();
+    assert_eq!(v.get(0), 5);
+    assert_eq!(v.get(4), 1);
+    // Even length.
+    let w: *Vector<i32> = Vector::new();
+    defer w.free();
+    w.push_all!(1, 2);
+    w.reverse();
+    assert_eq!(w.get(0), 2);
+    assert_eq!(w.get(1), 1);
+    return 0;
+}
+
+fn test_truncate() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    defer v.free();
+    v.push_all!(1, 2, 3, 4, 5);
+    v.truncate(3);
+    assert_eq!(v.len(), 3);
+    assert_eq!(v.last(), 3);
+    // Truncating longer than len is a no-op.
+    v.truncate(99);
+    assert_eq!(v.len(), 3);
+    // Negative is ignored.
+    v.truncate(-1);
+    assert_eq!(v.len(), 3);
+    // Truncate to 0 empties.
+    v.truncate(0);
+    assert!(v.is_empty());
+    return 0;
+}
+
+fn test_extend() -> i32 {
+    let a: *Vector<i32> = Vector::new();
+    defer a.free();
+    let b: *Vector<i32> = Vector::new();
+    defer b.free();
+    a.push_all!(1, 2);
+    b.push_all!(3, 4, 5);
+    a.extend(b);
+    assert_eq!(a.len(), 5);
+    assert_eq!(a.get(4), 5);
+    // b unchanged.
+    assert_eq!(b.len(), 3);
+    return 0;
+}
+
+fn test_clear_then_reuse() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    defer v.free();
+    v.push_all!(1, 2, 3);
+    v.clear();
+    assert_eq!(v.len(), 0);
+    assert!(v.is_empty());
+    // Reuse after clear.
+    v.push(42);
+    assert_eq!(v.len(), 1);
+    assert_eq!(v.get(0), 42);
+    return 0;
+}
+
+fn test_with_cap_starts_empty() -> i32 {
+    let v: *Vector<i32> = Vector::with_cap(16);
+    defer v.free();
+    // Capacity reserved but no elements yet.
+    assert_eq!(v.len(), 0);
+    assert!(v.is_empty());
+    for let i: i32 = 0; i < 16; i++ { v.push(i); }
+    assert_eq!(v.len(), 16);
+    assert_eq!(v.get(15), 15);
+    return 0;
+}
+
+fn test_manual_iteration() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    defer v.free();
+    v.push_all!(10, 20, 30);
+    let it: *VecIter<i32> = v.iter();
+    let mut sum: i32 = 0;
+    while true {
+        let nx: ?i32 = it.next();
+        if !nx.has { break; }
+        sum = sum + nx.val;
+    }
+    assert_eq!(sum, 60);
+    return 0;
+}
+
+fn test_index_of_returns_first_of_duplicates() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    defer v.free();
+    v.push_all!(5, 7, 5, 9, 5);
+    // First matching index.
+    assert_eq!(v.index_of(5), 0);
+    assert_eq!(v.index_of(9), 3);
+    assert_eq!(v.index_of(100), -1);
+    assert!(v.contains(7));
+    assert_not!(v.contains(100));
+    return 0;
+}
+
+fn test_sort_with_duplicates() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    defer v.free();
+    v.push_all!(3, 1, 2, 1, 3, 2);
+    v.sort();
+    assert_eq!(v.get(0), 1);
+    assert_eq!(v.get(1), 1);
+    assert_eq!(v.get(2), 2);
+    assert_eq!(v.get(3), 2);
+    assert_eq!(v.get(4), 3);
+    assert_eq!(v.get(5), 3);
+    return 0;
+}
+
+fn test_single_element_edges() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    defer v.free();
+    v.push(42);
+    assert_eq!(v.first(), 42);
+    assert_eq!(v.last(), 42);
+    v.reverse();
+    assert_eq!(v.get(0), 42);
+    v.sort();
+    assert_eq!(v.get(0), 42);
+    return 0;
+}
+
+fn test_string_vector_dedup_via_sort_and_index() -> i32 {
+    let v: *Vector<string> = Vector::new();
+    defer v.free();
+    v.push_all!("banana", "apple", "cherry", "apple");
+    v.sort();
+    assert_str_eq!(v.get(0), "apple");
+    assert_str_eq!(v.get(1), "apple");
+    assert_str_eq!(v.get(3), "cherry");
+    // index_of uses .eq (value equality).
+    assert_eq!(v.index_of("cherry"), 3);
+    assert_eq!(v.index_of("kiwi"), -1);
+    return 0;
+}
+
+fn test_bool_counts() -> i32 {
+    let v: *Vector<bool> = Vector::new();
+    defer v.free();
+    v.push_all!(true, false, true, true, false);
+    assert_eq!(v.count_true(), 3);
+    assert_eq!(v.count_false(), 2);
+    assert!(v.any_true());
+    assert_not!(v.all_true());
+    return 0;
+}

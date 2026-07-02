@@ -1,0 +1,208 @@
+import stdlib::testing::*;
+import stdlib::hashmap::*;
+
+// Deep coverage for HashMap (src/stdlib/hashmap.glide), focused on
+// scaling/probing behavior the existing hashmap_test / hashmap_ext_test
+// don't cover: many-key insert + resize, overwrite semantics, remove of
+// probe-chain members, get_or / insert_if_absent edges, keys() content,
+// and clear-then-reuse.
+
+fn test_many_keys_all_retrievable() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
+    defer m.free();
+    for let i: i32 = 0; i < 200; i++ {
+        m.insert("key${i}", i * 3);
+    }
+    assert_eq!(m.len(), 200);
+    // Every key maps to the right value after multiple resizes.
+    for let i: i32 = 0; i < 200; i++ {
+        assert!(m.contains("key${i}"));
+        assert_eq!(m.get("key${i}"), i * 3);
+    }
+    // Capacity grew well past the initial 8.
+    assert!(m.cap() >= 256);
+    return 0;
+}
+
+fn test_overwrite_updates_value_not_len() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
+    defer m.free();
+    m.insert("a", 1);
+    m.insert("a", 2);
+    m.insert("a", 3);
+    assert_eq!(m.get("a"), 3);
+    assert_eq!(m.len(), 1);
+    return 0;
+}
+
+fn test_get_or_default() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
+    defer m.free();
+    m.insert("present", 7);
+    assert_eq!(m.get_or("present", 0), 7);
+    assert_eq!(m.get_or("absent", -1), -1);
+    // Falls through to default without inserting.
+    assert_not!(m.contains("absent"));
+    assert_eq!(m.len(), 1);
+    return 0;
+}
+
+fn test_insert_if_absent() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
+    defer m.free();
+    assert!(m.insert_if_absent("k", 1));
+    // Second call refuses and leaves value untouched.
+    assert_not!(m.insert_if_absent("k", 99));
+    assert_eq!(m.get("k"), 1);
+    assert_eq!(m.len(), 1);
+    return 0;
+}
+
+fn test_remove_and_reinsert() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
+    defer m.free();
+    m.insert("a", 1);
+    m.insert("b", 2);
+    m.insert("c", 3);
+    assert!(m.remove("b"));
+    assert_not!(m.contains("b"));
+    assert_eq!(m.len(), 2);
+    // Removing again is a no-op returning false.
+    assert_not!(m.remove("b"));
+    // Other keys still reachable.
+    assert_eq!(m.get("a"), 1);
+    assert_eq!(m.get("c"), 3);
+    // Re-inserting a removed key works.
+    m.insert("b", 20);
+    assert_eq!(m.get("b"), 20);
+    assert_eq!(m.len(), 3);
+    return 0;
+}
+
+fn test_remove_all_probe_chain_intact() -> i32 {
+    // Insert many keys, remove half, and confirm the surviving half is
+    // still found (probe chains stay valid across deletions).
+    let m: *HashMap<i32> = HashMap::new();
+    defer m.free();
+    for let i: i32 = 0; i < 100; i++ {
+        m.insert("n${i}", i);
+    }
+    for let i: i32 = 0; i < 100; i++ {
+        if i % 2 == 0 { assert!(m.remove("n${i}")); }
+    }
+    assert_eq!(m.len(), 50);
+    for let i: i32 = 0; i < 100; i++ {
+        if i % 2 == 0 {
+            assert_not!(m.contains("n${i}"));
+        } else {
+            assert!(m.contains("n${i}"));
+            assert_eq!(m.get("n${i}"), i);
+        }
+    }
+    return 0;
+}
+
+fn test_keys_snapshot_content() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
+    defer m.free();
+    m.insert("x", 1);
+    m.insert("y", 2);
+    m.insert("z", 3);
+    let ks: *Vector<string> = m.keys();
+    defer ks.free();
+    assert_eq!(ks.len(), 3);
+    // Order is slot order (unspecified), so check membership.
+    assert!(ks.contains("x"));
+    assert!(ks.contains("y"));
+    assert!(ks.contains("z"));
+    return 0;
+}
+
+fn test_values_snapshot_sum() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
+    defer m.free();
+    m.insert("a", 10);
+    m.insert("b", 20);
+    m.insert("c", 30);
+    let vs: *Vector<i32> = m.values();
+    defer vs.free();
+    assert_eq!(vs.sum(), 60);
+    return 0;
+}
+
+fn test_clear_then_reuse() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
+    defer m.free();
+    m.insert("a", 1);
+    m.insert("b", 2);
+    let cap_before: i32 = m.cap();
+    m.clear();
+    assert_eq!(m.len(), 0);
+    assert!(m.is_empty());
+    assert_not!(m.contains("a"));
+    // Capacity preserved across clear.
+    assert_eq!(m.cap(), cap_before);
+    // Reuse works.
+    m.insert("c", 3);
+    assert_eq!(m.get("c"), 3);
+    assert_eq!(m.len(), 1);
+    return 0;
+}
+
+fn test_string_value_type() -> i32 {
+    let m: *HashMap<string> = HashMap::new();
+    defer m.free();
+    m.insert("name", "alice");
+    m.insert("role", "admin");
+    assert_str_eq!(m.get("name"), "alice");
+    assert_str_eq!(m.get_or("role", "none"), "admin");
+    assert_str_eq!(m.get_or("missing", "none"), "none");
+    return 0;
+}
+
+fn square(x: i32) -> i32 { return x * x; }
+
+fn test_map_values() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
+    defer m.free();
+    m.insert("a", 2);
+    m.insert("b", 3);
+    let m2: *HashMap<i32> = m.map_values(square);
+    defer m2.free();
+    assert_eq!(m2.get("a"), 4);
+    assert_eq!(m2.get("b"), 9);
+    // Original unchanged.
+    assert_eq!(m.get("a"), 2);
+    return 0;
+}
+
+fn test_entries_pairs() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
+    defer m.free();
+    m.insert("a", 1);
+    m.insert("b", 2);
+    let es: *Vector<*Pair<string, i32>> = m.entries();
+    defer es.free();
+    assert_eq!(es.len(), 2);
+    // Sum the second field to verify pairing.
+    let mut total: i32 = 0;
+    for let i: i32 = 0; i < es.len(); i++ {
+        let p: *Pair<string, i32> = es.get(i);
+        total = total + p.second;
+    }
+    assert_eq!(total, 3);
+    return 0;
+}
+
+fn test_empty_map_cap_zero() -> i32 {
+    let m: *HashMap<i32> = HashMap::new();
+    defer m.free();
+    assert_eq!(m.cap(), 0);
+    assert_eq!(m.len(), 0);
+    assert!(m.is_empty());
+    assert_not!(m.contains("anything"));
+    // First insert allocates the initial table.
+    m.insert("a", 1);
+    assert_eq!(m.cap(), 8);
+    return 0;
+}

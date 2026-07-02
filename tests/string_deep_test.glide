@@ -1,0 +1,251 @@
+import stdlib::testing::*;
+
+// Deep edge-case coverage for the `string` builtin methods
+// (src/builtins/string.glide). Focuses on behaviors the existing
+// string_test / string_ergonomics_test / string_ext_test don't exercise:
+// empty needles, not-found paths, adjacent separators, UTF-8, and the
+// integer parsers.
+
+fn test_index_of_edges() -> i32 {
+    // Empty needle is defined to return 0.
+    assert_eq!("hello".index_of(""), 0);
+    // Missing needle returns -1.
+    assert_eq!("hello".index_of("z"), -1);
+    // Needle longer than haystack.
+    assert_eq!("hi".index_of("hello"), -1);
+    // First occurrence only.
+    assert_eq!("abcabc".index_of("bc"), 1);
+    // Match at the very end.
+    assert_eq!("hello".index_of("lo"), 3);
+    // Whole-string match.
+    assert_eq!("abc".index_of("abc"), 0);
+    return 0;
+}
+
+fn test_contains() -> i32 {
+    assert!("hello world".contains("world"));
+    assert_not!("hello world".contains("World"));
+    assert!("abc".contains(""));
+    assert_not!("abc".contains("abcd"));
+    return 0;
+}
+
+fn test_starts_ends_with_edges() -> i32 {
+    // Empty affixes are always a prefix/suffix.
+    assert!("abc".starts_with(""));
+    assert!("abc".ends_with(""));
+    // Affix longer than the string can never match.
+    assert_not!("ab".starts_with("abc"));
+    assert_not!("ab".ends_with("abc"));
+    // Whole string is both prefix and suffix of itself.
+    assert!("abc".starts_with("abc"));
+    assert!("abc".ends_with("abc"));
+    assert_not!("image.png".starts_with("img"));
+    return 0;
+}
+
+fn test_split_empty_sep_is_per_byte() -> i32 {
+    let parts: *Vector<string> = "abc".split("");
+    assert_eq!(parts.len(), 3);
+    assert_str_eq!(parts.get(0), "a");
+    assert_str_eq!(parts.get(1), "b");
+    assert_str_eq!(parts.get(2), "c");
+    return 0;
+}
+
+fn test_split_adjacent_seps_yield_empties() -> i32 {
+    let parts: *Vector<string> = "a,,b".split(",");
+    assert_eq!(parts.len(), 3);
+    assert_str_eq!(parts.get(0), "a");
+    assert_str_eq!(parts.get(1), "");
+    assert_str_eq!(parts.get(2), "b");
+    return 0;
+}
+
+fn test_split_no_match_and_trailing() -> i32 {
+    // No separator present: one whole piece.
+    let one: *Vector<string> = "abc".split(",");
+    assert_eq!(one.len(), 1);
+    assert_str_eq!(one.get(0), "abc");
+    // Trailing separator produces a trailing empty piece.
+    let tr: *Vector<string> = "a,b,".split(",");
+    assert_eq!(tr.len(), 3);
+    assert_str_eq!(tr.get(2), "");
+    // Leading separator produces a leading empty piece.
+    let ld: *Vector<string> = ",a".split(",");
+    assert_eq!(ld.len(), 2);
+    assert_str_eq!(ld.get(0), "");
+    return 0;
+}
+
+fn test_split_multichar_sep() -> i32 {
+    let parts: *Vector<string> = "a::b::c".split("::");
+    assert_eq!(parts.len(), 3);
+    assert_str_eq!(parts.get(1), "b");
+    return 0;
+}
+
+fn test_replace_variants() -> i32 {
+    // Non-overlapping collapse.
+    assert_str_eq!("aaaa".replace("aa", "b"), "bb");
+    // Replacement longer than match.
+    assert_str_eq!("a.b".replace(".", "--"), "a--b");
+    // Replacement empty (deletion).
+    assert_str_eq!("a-b-c".replace("-", ""), "abc");
+    // Empty find returns self unchanged.
+    assert_str_eq!("abc".replace("", "x"), "abc");
+    // No match returns self unchanged.
+    assert_str_eq!("abc".replace("z", "?"), "abc");
+    // Whole-string replace.
+    assert_str_eq!("hello".replace("hello", "bye"), "bye");
+    return 0;
+}
+
+fn test_trim_left_right() -> i32 {
+    assert_str_eq!("   hello".trim_left(), "hello");
+    assert_str_eq!("hello   ".trim_left(), "hello   ");
+    assert_str_eq!("hello   ".trim_right(), "hello");
+    assert_str_eq!("   hello".trim_right(), "   hello");
+    // Mixed whitespace bytes stripped by trim.
+    assert_str_eq!("\r\n hi \t".trim(), "hi");
+    // All-whitespace trims to empty.
+    assert_str_eq!("  \t\n".trim(), "");
+    return 0;
+}
+
+fn test_case_conversion_non_ascii_passthrough() -> i32 {
+    assert_str_eq!("Hello, World!".to_upper(), "HELLO, WORLD!");
+    assert_str_eq!("Hello, World!".to_lower(), "hello, world!");
+    // Digits and punctuation unchanged.
+    assert_str_eq!("abc123!".to_upper(), "ABC123!");
+    // Empty string stays empty.
+    assert_str_eq!("".to_upper(), "");
+    assert_str_eq!("".to_lower(), "");
+    // Non-ASCII bytes pass through: "café" -> "CAFé" (é untouched).
+    assert_str_eq!("café".to_upper(), "CAFé");
+    return 0;
+}
+
+fn test_repeat_edges() -> i32 {
+    assert_str_eq!("ab".repeat(3), "ababab");
+    assert_str_eq!("x".repeat(0), "");
+    // Negative count yields empty.
+    assert_str_eq!("x".repeat(-2), "");
+    // Repeating the empty string is empty.
+    assert_str_eq!("".repeat(5), "");
+    assert_str_eq!("ab".repeat(1), "ab");
+    return 0;
+}
+
+fn test_parse_int() -> i32 {
+    assert_eq!("42".parse_int(), 42);
+    assert_eq!("-7".parse_int(), -7);
+    assert_eq!("+5".parse_int(), 5);
+    assert_eq!("0".parse_int(), 0);
+    // Invalid inputs all fall back to 0.
+    assert_eq!("abc".parse_int(), 0);
+    assert_eq!("".parse_int(), 0);
+    assert_eq!("12ab".parse_int(), 0);
+    return 0;
+}
+
+fn test_try_parse_int() -> i32 {
+    let a: !i32 = "42".try_parse_int();
+    assert!(a.ok);
+    assert_eq!(a.val, 42);
+
+    let n: !i32 = "-9".try_parse_int();
+    assert!(n.ok);
+    assert_eq!(n.val, -9);
+
+    let p: !i32 = "+3".try_parse_int();
+    assert!(p.ok);
+    assert_eq!(p.val, 3);
+
+    // Distinguishable failure modes.
+    assert_not!("".try_parse_int().ok);
+    assert_not!("-".try_parse_int().ok);
+    assert_not!("1a".try_parse_int().ok);
+    return 0;
+}
+
+fn test_strip_prefix_suffix() -> i32 {
+    assert_str_eq!("src/main.glide".strip_prefix("src/"), "main.glide");
+    // Absent prefix: unchanged.
+    assert_str_eq!("main.glide".strip_prefix("src/"), "main.glide");
+    assert_str_eq!("main.glide".strip_suffix(".glide"), "main");
+    // Absent suffix: unchanged.
+    assert_str_eq!("main.rs".strip_suffix(".glide"), "main.rs");
+    // Empty affix leaves string as-is.
+    assert_str_eq!("abc".strip_prefix(""), "abc");
+    assert_str_eq!("abc".strip_suffix(""), "abc");
+    return 0;
+}
+
+fn test_count_non_overlapping() -> i32 {
+    assert_eq!("a.b.c".count("."), 2);
+    // Non-overlapping: "aaaa" has 2 "aa", not 3.
+    assert_eq!("aaaa".count("aa"), 2);
+    assert_eq!("abc".count("x"), 0);
+    // Empty needle returns 0 by definition.
+    assert_eq!("abc".count(""), 0);
+    assert_eq!("aaa".count("a"), 3);
+    return 0;
+}
+
+fn test_char_count_and_chars_utf8() -> i32 {
+    assert_eq!("abc".char_count(), 3);
+    // "café": 5 bytes but 4 codepoints.
+    assert_eq!("café".len(), 5);
+    assert_eq!("café".char_count(), 4);
+
+    let cps: *Vector<i32> = "café".chars();
+    assert_eq!(cps.len(), 4);
+    assert_eq!(cps.get(0), 99);   // 'c'
+    assert_eq!(cps.get(3), 233);  // 'é' U+00E9
+    return 0;
+}
+
+fn test_reverse_empty_and_single() -> i32 {
+    assert_str_eq!("".reverse(), "");
+    assert_str_eq!("a".reverse(), "a");
+    assert_str_eq!("abc".reverse(), "cba");
+    return 0;
+}
+
+fn test_pad_already_wide_is_noop() -> i32 {
+    // Already at/over width: returned unchanged.
+    assert_str_eq!("hello".pad_left(3, ' '), "hello");
+    assert_str_eq!("hello".pad_right(5, ' '), "hello");
+    // Actual padding.
+    assert_str_eq!("42".pad_left(5, '0'), "00042");
+    assert_str_eq!("7".pad_right(4, '.'), "7...");
+    return 0;
+}
+
+fn test_cmp_prefix_and_equal() -> i32 {
+    // Longer string wins when one is a prefix of the other.
+    assert!("apple".cmp("app") > 0);
+    assert!("app".cmp("apple") < 0);
+    assert_eq!("apple".cmp("apple"), 0);
+    assert!("apple".cmp("banana") < 0);
+    // Empty compares less than non-empty.
+    assert!("".cmp("a") < 0);
+    assert_eq!("".cmp(""), 0);
+    return 0;
+}
+
+fn test_lines_edges() -> i32 {
+    // CRLF and LF both yield clean lines; trailing newline no empty tail.
+    let a: *Vector<string> = "a\r\nb\n".lines();
+    assert_eq!(a.len(), 2);
+    assert_str_eq!(a.get(0), "a");
+    assert_str_eq!(a.get(1), "b");
+    // Empty string yields no lines.
+    assert_eq!("".lines().len(), 0);
+    // Blank line preserved between two lines.
+    let b: *Vector<string> = "x\n\ny".lines();
+    assert_eq!(b.len(), 3);
+    assert_str_eq!(b.get(1), "");
+    return 0;
+}
