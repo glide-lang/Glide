@@ -23,7 +23,7 @@ fn _seq8(seq: u64) -> string {
     }
     let s: string = bb.to_string(); bb.free(); return s;
 }
-fn _u16(n: i32) -> string {
+fn _recu16(n: i32) -> string {
     let bb: *ByteBuffer = ByteBuffer::new();
     bb.push(((n >> 8) & 255) as u8); bb.push((n & 255) as u8);
     let s: string = bb.to_string(); bb.free(); return s;
@@ -36,11 +36,11 @@ pub fn tls12_seal(key: string, write_iv: string, seq: u64,
     let explicit: string = _seq8(seq);
     let nonce: string = write_iv.concat(explicit);          // 12 bytes
     let aad: string = _seq8(seq).concat(((content_type & 255) as char).to_string())
-        .concat(_u16(0x0303)).concat(_u16(plaintext.len()));
+        .concat(_recu16(0x0303)).concat(_recu16(plaintext.len()));
     let ct: !string = aes_gcm_encrypt(key, nonce, plaintext, aad);
     if !ct.ok { return err(ct.err); }
     let body: string = explicit.concat(ct.val);             // explicit_nonce || ct || tag
-    let rec: string = ((content_type & 255) as char).to_string().concat(_u16(0x0303)).concat(_u16(body.len())).concat(body);
+    let rec: string = ((content_type & 255) as char).to_string().concat(_recu16(0x0303)).concat(_recu16(body.len())).concat(body);
     return ok(rec);
 }
 
@@ -61,7 +61,7 @@ pub fn tls12_open(key: string, write_iv: string, seq: u64, record: string) -> !*
     let nonce: string = write_iv.concat(explicit);
     let ptlen: i32 = ct.len() - 16;
     let aad: string = _seq8(seq).concat(((ctype & 255) as char).to_string())
-        .concat(_u16(0x0303)).concat(_u16(ptlen));
+        .concat(_recu16(0x0303)).concat(_recu16(ptlen));
     let pt: !string = aes_gcm_decrypt(key, nonce, ct, aad);
     if !pt.ok { return err(pt.err); }
     let out: *Tls12Plain = malloc(sizeof(Tls12Plain)) as *Tls12Plain;
