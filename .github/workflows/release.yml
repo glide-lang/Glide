@@ -13,7 +13,7 @@ name: release
 #      bundle job below can pull all four in.
 #   2. `release` — each runner builds the small glide binary + the
 #      fully-self-contained bundle binary. The bundle has every sysroot
-#      + the Zig toolchain + the Glide stdlib baked in, so `glide build`
+#      + the Glide stdlib baked in, so `glide build`
 #      for any target works offline from a fresh install.
 #
 # Fires on a pushed `v*` tag, or manually via the Actions tab / `gh workflow
@@ -97,7 +97,7 @@ jobs:
 
   # ---------------------------------------------------------------------
   # Phase 2: each runner produces both the small glide binary AND the
-  # bundle binary (with every sysroot, src/, and Zig baked in).
+  # bundle binary (with every sysroot and src/ baked in).
   # ---------------------------------------------------------------------
   release:
     name: ${{ matrix.name }}
@@ -138,9 +138,6 @@ jobs:
           fi
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Fetch Zig toolchain
-        run: bash tools/install_toolchain.sh
 
       - name: Bootstrap compiler from a published release
         # Glide is self-hosting (no checked-in C seed): download a previously
@@ -190,20 +187,10 @@ jobs:
           tar -czf dist/src-${{ steps.ver.outputs.version }}.tar.gz src
           ls -lh dist/src-${{ steps.ver.outputs.version }}.tar.gz
 
-      - name: Build zig.tar.gz for embedding
-        run: |
-          set -e
-          # Tarball the bundled Zig we just fetched. Embedded as-is into
-          # the bundle binary so the first build on a fresh install
-          # self-extracts the toolchain.
-          tar -czf dist/zig-${{ steps.ver.outputs.version }}.tar.gz -C runtime zig
-          ls -lh dist/zig-${{ steps.ver.outputs.version }}.tar.gz
-
       - name: Generate embedded blobs
         run: |
           VER="${{ steps.ver.outputs.version }}"
           bash tools/gen_embedded_blobs.sh \
-            --zig=dist/zig-${VER}.tar.gz \
             --src=dist/src-${VER}.tar.gz \
             --sysroot=dist/glide-sysroot-x86_64-linux-musl-${VER}.tar.gz \
             --sysroot=dist/glide-sysroot-aarch64-linux-musl-${VER}.tar.gz \

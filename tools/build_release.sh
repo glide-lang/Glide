@@ -1,30 +1,18 @@
 #!/usr/bin/env bash
 # Stage everything a Glide install needs into dist/glide-<os>-<arch>-<ver>/
-# and pack it up.
-#
-# Modes:
-#   tools/build_release.sh                          # host only
-#   tools/build_release.sh --target=x86_64-linux    # cross-compile via Zig
-#
-# When --target is given, the script:
-#   1. Downloads the target-platform Zig toolchain into a staging dir
-#   2. Cross-builds the glide binary using the local Zig as `cc` with
-#      --target=<triple>
-#   3. Bundles target glide + target Zig + stdlib
+# and pack it up. Releases are built natively per platform (the CI matrix
+# runs this on a runner of each OS/arch) — there is no cross-release mode.
 #
 # Layout:
 #   glide-<os>-<arch>-<ver>/
 #     glide(.exe)
-#     stdlib/
-#     runtime/zig/...
+#     src/  bootstrap/  [lib/]
 #     README.md
 #     LICENSE
 
 set -e
 
 VERSION="${VERSION:-0.2.0}"
-ZIG_VERSION="${ZIG_VERSION:-0.14.1}"
-TARGET=""
 # Path to a directory of static libs to bundle into the release tarball
 # (under `lib/`). Expected to contain libssl.a, libcrypto.a, libz.a,
 # libngtcp2.a, libngtcp2_crypto_ossl.a, libnghttp3.a — once present
@@ -38,7 +26,6 @@ BUNDLE_LIBS=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --target=*)      TARGET="${1#--target=}"; shift ;;
         --version=*)     VERSION="${1#--version=}"; shift ;;
         --bundle-libs=*) BUNDLE_LIBS="${1#--bundle-libs=}"; shift ;;
         *) echo "unknown arg: $1" >&2; exit 1 ;;
@@ -58,25 +45,13 @@ case "$(uname -m)" in
     *) echo "unsupported host arch: $(uname -m)" >&2; exit 1 ;;
 esac
 
-# ---- Resolve target (what we're building for) ----
-if [ -z "$TARGET" ]; then
-    TARGET_OS="$HOST_OS"
-    TARGET_ARCH="$HOST_ARCH"
-else
-    # Accept arch-os, e.g. x86_64-linux, aarch64-macos, x86_64-windows
-    TARGET_ARCH="${TARGET%-*}"
-    TARGET_OS="${TARGET##*-}"
-fi
+# ---- Target = host (releases are native per-runner) ----
+TARGET_OS="$HOST_OS"
+TARGET_ARCH="$HOST_ARCH"
 
-# Map our short OS names to Zig's triplet vocabulary. Linux uses musl
-# (not glibc) so the bundled glide binary stays self-contained — and
-# the matching sysroot under ~/.glide/targets/x86_64-linux-musl
-# carries the zlib + openssl headers / static libs that the stdlib
-# c_raw blocks need.
 case "$TARGET_OS" in
-    windows) ZIG_TRIPLE="${TARGET_ARCH}-windows-gnu";  EXE_EXT=".exe" ;;
-    linux)   ZIG_TRIPLE="${TARGET_ARCH}-linux-musl";   EXE_EXT="" ;;
-    macos)   ZIG_TRIPLE="${TARGET_ARCH}-macos-none";   EXE_EXT="" ;;
+    windows) EXE_EXT=".exe" ;;
+    linux|macos) EXE_EXT="" ;;
     *) echo "unsupported target OS: $TARGET_OS" >&2; exit 1 ;;
 esac
 
@@ -92,60 +67,13 @@ if [ ! -x "$HOST_GLIDE" ]; then
     echo "  <downloaded-glide> build bootstrap/main.glide -o $HOST_GLIDE" >&2
     exit 1
 fi
-if [ ! -d runtime/zig ]; then
-    echo "no runtime/zig/ found. Run tools/install_toolchain.sh first." >&2
-    exit 1
-fi
-
-# ---- Download the target-platform Zig if cross-building ----
-TARGET_ZIG_DIR=""
-if [ "$TARGET_OS" != "$HOST_OS" ] || [ "$TARGET_ARCH" != "$HOST_ARCH" ]; then
-    TARGET_ZIG_DIR="dist/staging/zig-${TARGET_ARCH}-${TARGET_OS}-${ZIG_VERSION}"
-    if [ ! -d "$TARGET_ZIG_DIR" ]; then
-        echo ">> Fetching Zig $ZIG_VERSION for ${TARGET_ARCH}-${TARGET_OS}"
-        case "$TARGET_OS" in
-            windows) ZEXT="zip" ;;
-            *)       ZEXT="tar.xz" ;;
-        esac
-        ZNAME="zig-${TARGET_ARCH}-${TARGET_OS}-${ZIG_VERSION}"
-        URL="https://ziglang.org/download/${ZIG_VERSION}/${ZNAME}.${ZEXT}"
-        TMP="$(mktemp -d)"
-        if command -v curl >/dev/null 2>&1; then
-            curl -fL --progress-bar -o "$TMP/zig.${ZEXT}" "$URL"
-        else
-            wget --show-progress -O "$TMP/zig.${ZEXT}" "$URL"
-        fi
-        # Prefer system unzip; fall back to Python's zipfile so the
-        # script doesn't require an extra apt install on minimal hosts.
-        ( cd "$TMP" && \
-          if [ "$ZEXT" = "zip" ]; then \
-              if command -v unzip >/dev/null 2>&1; then \
-                  unzip -q "zig.${ZEXT}"; \
-              else \
-                  python3 -c "import zipfile, sys; zipfile.ZipFile('zig.${ZEXT}').extractall('.')"; \
-              fi; \
-          else \
-              tar -xf "zig.${ZEXT}"; \
-          fi )
-        mkdir -p dist/staging
-        mv "$TMP/$ZNAME" "$TARGET_ZIG_DIR"
-        rm -rf "$TMP"
-    fi
-fi
-
-# ---- Cross-build glide for target if needed ----
+# ---- Bundle the host-built glide ----
 TARGET_GLIDE="$STAGE/glide${EXE_EXT}"
 mkdir -p "$STAGE"
+echo ">> Bundling host glide"
+cp "$HOST_GLIDE" "$TARGET_GLIDE"
 
-if [ "$TARGET_OS" = "$HOST_OS" ] && [ "$TARGET_ARCH" = "$HOST_ARCH" ]; then
-    echo ">> Bundling host glide"
-    cp "$HOST_GLIDE" "$TARGET_GLIDE"
-else
-    echo ">> Cross-building glide for $ZIG_TRIPLE"
-    "./$HOST_GLIDE" build bootstrap/main.glide --target="$ZIG_TRIPLE" -o "$TARGET_GLIDE"
-fi
-
-# ---- Stage src/ + Zig + docs ----
+# ---- Stage src/ + docs ----
 # `src/builtins/` is auto-injected by the compiler; `src/stdlib/` ships
 # alongside it so user code can `import "src/stdlib/X.glide"`.
 echo ">> Staging $STAGE"
@@ -156,12 +84,6 @@ cp -r src "$STAGE/"
 # at expand-time, and so the LSP surfaces goto/hover for `Stmt`/`Expr`/
 # `Type` inside the proc-fns.
 cp -r bootstrap "$STAGE/"
-mkdir -p "$STAGE/runtime"
-if [ -n "$TARGET_ZIG_DIR" ]; then
-    cp -r "$TARGET_ZIG_DIR" "$STAGE/runtime/zig"
-else
-    cp -r runtime/zig "$STAGE/runtime/zig"
-fi
 cp README.md "$STAGE/" 2>/dev/null || true
 cp LICENSE "$STAGE/" 2>/dev/null || true
 
@@ -214,7 +136,7 @@ import os, tarfile
 name = "${NAME}"
 src = os.path.join("dist", name)
 out = os.path.join("dist", f"{name}.tar.gz")
-exec_files = {f"{name}/glide", f"{name}/runtime/zig/zig"}
+exec_files = {f"{name}/glide"}
 def fix(ti):
     if ti.isdir():
         ti.mode = 0o755
