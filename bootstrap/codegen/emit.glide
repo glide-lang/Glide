@@ -772,6 +772,9 @@ pub struct CG {
     pub structs: *HashMap<Stmt>,
     pub enums: *HashMap<Stmt>,
     pub fns: *HashMap<Stmt>,
+    // Struct names that define a user `eq` method — `==` uses it instead of the
+    // automatic field-by-field comparison.
+    pub user_eq: *HashMap<bool>,
     pub emitted_monos: *HashMap<bool>,
     pub fn_mono_queue: *Vector<FnMonoEntry>,
     // Struct monos discovered dynamically during prescan (e.g. via chained
@@ -991,6 +994,8 @@ impl CG {
         g.auto_drop_stack = ads;
         let ml: *HashMap<bool> = HashMap::new();
         g.moved_locals = ml;
+        let ueq: *HashMap<bool> = HashMap::new();
+        g.user_eq = ueq;
         let af: *Vector<AnonFn> = Vector::new();
         g.anon_fns = af;
         g.anon_count = 0;
@@ -3239,6 +3244,18 @@ pub fn emit_expr(g: *CG, e: *Expr) {
             // once. `!=` negates the whole comparison.
             let elt: *Type = infer_for_codegen(g, e.lhs);
             let est: *Type = strip_ptr(elt);
+            // A user `eq` method overrides the automatic field comparison.
+            if est != null && est.kind == TY_NAMED && g.user_eq.contains(est.name) {
+                let eqargs: *Vector<Expr> = Vector::new();
+                eqargs.push(*e.rhs);
+                print!("(");
+                if e.op_code == OP_NE {
+                    print!("!");
+                }
+                emit_expr(g, expr_call(expr_member(e.lhs, "eq"), eqargs));
+                print!(")");
+                return;
+            }
             if est != null && ((est.kind == TY_NAMED && g.structs.contains(est.name)) || est.kind == TY_TUPLE) {
                 let tc: string = type_to_c(elt);
                 print!("(");

@@ -1482,6 +1482,16 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         if s.kind == ST_TRAIT && s.name != null && !s.name.eq("") {
             g.traits.insert(s.name, s);
         }
+        // Record which named types define a user `eq` method, so `==` uses it
+        // instead of the automatic field-by-field comparison.
+        if s.kind == ST_IMPL && s.impl_target != null && s.impl_target.kind == TY_NAMED && s.impl_methods != null {
+            for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.kind == ST_FN && m.name.eq("eq") {
+                    g.user_eq.insert(s.impl_target.name, true);
+                }
+            }
+        }
     }
     // ---- Concurrency pre-pass: collect chan inner types + emit pthread runtime
     for let i: i32 = 0; i < program.len(); i++ {
