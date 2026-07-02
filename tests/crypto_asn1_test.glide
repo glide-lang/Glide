@@ -1,0 +1,84 @@
+// ASN.1 DER reader: TLV walking, nested SEQUENCE recursion, OID decoding,
+// INTEGER magnitude, and rejection of malformed encodings.
+import stdlib::testing::*;
+import stdlib::crypto::asn1::*;
+import stdlib::hex::*;
+
+fn _h(s: string) -> string { return hex_decode(s).unwrap(); }
+
+// SEQUENCE { INTEGER 0x0102, OID 1.2.840.10045.2.1 (ecPublicKey) }
+// 30 0d  02 02 01 02  06 07 2a 86 48 ce 3d 02 01
+fn test_parse_sequence() -> i32 {
+    let der: string = _h("300d0202010206072a8648ce3d0201");
+    let d: *Der = der_new(der);
+    let seq: !*Tlv = der_expect(d, ASN1_SEQUENCE);
+    assert!(seq.is_ok());
+    assert!(!der_more(d));                        // one top-level element
+
+    let inner: *Der = der_into(seq.unwrap());
+    let i: !*Tlv = der_expect(inner, ASN1_INTEGER);
+    assert!(i.is_ok());
+    assert_str_eq!(hex_encode(der_int_bytes(i.unwrap())), "0102");
+
+    let oid: !*Tlv = der_expect(inner, ASN1_OID);
+    assert!(oid.is_ok());
+    let os: !string = der_oid_string(der_content(oid.unwrap()));
+    assert!(os.is_ok());
+    assert_str_eq!(os.unwrap(), "1.2.840.10045.2.1");
+    assert!(!der_more(inner));
+    return 0;
+}
+
+// A leading 0x00 sign-pad on a positive INTEGER is stripped.
+fn test_integer_sign_pad() -> i32 {
+    // INTEGER 0x00ff (leading zero keeps it positive) -> magnitude ff
+    let der: string = _h("020200ff");
+    let d: *Der = der_new(der);
+    let t: !*Tlv = der_expect(d, ASN1_INTEGER);
+    assert!(t.is_ok());
+    assert_str_eq!(hex_encode(der_int_bytes(t.unwrap())), "ff");
+    return 0;
+}
+
+// Long-form length (0x81 0x80 = 128 bytes).
+fn test_long_form_length() -> i32 {
+    let body: string = "a".repeat(128);
+    let der: string = _h("0481").concat(_h("80")).concat(body);   // OCTET STRING, len 128
+    let d: *Der = der_new(der);
+    let t: !*Tlv = der_expect(d, ASN1_OCTETSTRING);
+    assert!(t.is_ok());
+    assert_eq!(t.unwrap().content_len, 128);
+    assert_eq!(der_content(t.unwrap()).len(), 128);
+    return 0;
+}
+
+// Common OIDs decode correctly.
+fn test_oids() -> i32 {
+    // sha256WithRSAEncryption 1.2.840.113549.1.1.11
+    let o1: !string = der_oid_string(_h("2a864886f70d01010b"));
+    assert!(o1.is_ok());
+    assert_str_eq!(o1.unwrap(), "1.2.840.113549.1.1.11");
+    // ecdsa-with-SHA256 1.2.840.10045.4.3.2
+    let o2: !string = der_oid_string(_h("2a8648ce3d040302"));
+    assert!(o2.is_ok());
+    assert_str_eq!(o2.unwrap(), "1.2.840.10045.4.3.2");
+    // commonName 2.5.4.3
+    let o3: !string = der_oid_string(_h("550403"));
+    assert!(o3.is_ok());
+    assert_str_eq!(o3.unwrap(), "2.5.4.3");
+    return 0;
+}
+
+// Malformed inputs are rejected, not misread.
+fn test_rejects_malformed() -> i32 {
+    // length runs past the buffer
+    let d1: *Der = der_new(_h("0405ffff"));
+    assert!(der_read(d1).is_err());
+    // indefinite length (0x80) is forbidden in DER
+    let d2: *Der = der_new(_h("048000"));
+    assert!(der_read(d2).is_err());
+    // wrong expected tag
+    let d3: *Der = der_new(_h("020101"));
+    assert!(der_expect(d3, ASN1_SEQUENCE).is_err());
+    return 0;
+}

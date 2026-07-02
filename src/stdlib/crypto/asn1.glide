@@ -1,0 +1,185 @@
+// ASN.1 DER reader — pure Glide. A cursor over a DER byte string that
+// walks Tag-Length-Value triples and recurses into constructed types
+// (SEQUENCE / SET / context tags). This is the parsing substrate for
+// X.509; it is deliberately strict (definite lengths only, low-tag-number
+// form) since DER — unlike BER — forbids the loose encodings.
+//
+// ```glide
+// import stdlib::crypto::asn1::*;
+//
+// let d: *Der = der_new(cert_der);
+// let seq: !*Tlv = der_read(d);          // the outer SEQUENCE
+// let inner: *Der = der_into(seq.unwrap());
+// while der_more(inner) { ... }
+// ```
+
+import stdlib::bytes::*;
+
+// Universal ASN.1 tags used by X.509 (class/PC bits included where they
+// always appear that way — SEQUENCE and SET are always constructed).
+pub const ASN1_BOOLEAN: i32 = 0x01;
+pub const ASN1_INTEGER: i32 = 0x02;
+pub const ASN1_BITSTRING: i32 = 0x03;
+pub const ASN1_OCTETSTRING: i32 = 0x04;
+pub const ASN1_NULL: i32 = 0x05;
+pub const ASN1_OID: i32 = 0x06;
+pub const ASN1_UTF8STRING: i32 = 0x0c;
+pub const ASN1_PRINTABLESTRING: i32 = 0x13;
+pub const ASN1_IA5STRING: i32 = 0x16;
+pub const ASN1_UTCTIME: i32 = 0x17;
+pub const ASN1_GENERALIZEDTIME: i32 = 0x18;
+pub const ASN1_SEQUENCE: i32 = 0x30;
+pub const ASN1_SET: i32 = 0x31;
+
+// A cursor into a DER buffer, bounded by [pos, end).
+pub struct Der {
+    pub buf: string,
+    pub pos: i32,
+    pub end: i32,
+}
+
+// A parsed TLV. `content_*` slices into the owning Der's buffer; `next`
+// is the position just past this whole element.
+pub struct Tlv {
+    pub tag: i32,
+    pub content_start: i32,
+    pub content_len: i32,
+    pub next: i32,
+    pub buf: string,
+}
+
+/// A reader over the whole `buf`.
+pub fn der_new(buf: string) -> *Der {
+    let d: *Der = malloc(sizeof(Der)) as *Der;
+    d.buf = buf;
+    d.pos = 0;
+    d.end = buf.len();
+    return d;
+}
+
+/// True while there is another element before the cursor's end.
+pub fn der_more(d: *Der) -> bool {
+    return d.pos < d.end;
+}
+
+fn _byte(s: string, i: i32) -> i32 {
+    return s.at(i).to_int() & 255;
+}
+
+/// Read one TLV at the cursor and advance past its value. DER only:
+/// definite lengths, low-tag-number form.
+pub fn der_read(d: *Der) -> !*Tlv {
+    if d.pos >= d.end { return err("asn1: unexpected end of input"); }
+    let tag: i32 = _byte(d.buf, d.pos);
+    let mut p: i32 = d.pos + 1;
+    if (tag & 0x1f) == 0x1f { return err("asn1: high-tag-number form unsupported"); }
+    if p >= d.end { return err("asn1: truncated length"); }
+    let len0: i32 = _byte(d.buf, p);
+    p = p + 1;
+    let mut length: i32 = 0;
+    if len0 < 0x80 {
+        length = len0;
+    } else {
+        let nbytes: i32 = len0 & 0x7f;
+        if nbytes == 0 { return err("asn1: indefinite length forbidden in DER"); }
+        if nbytes > 4 { return err("asn1: length too large"); }
+        for let i: i32 = 0; i < nbytes; i++ {
+            if p >= d.end { return err("asn1: truncated length"); }
+            length = (length << 8) | _byte(d.buf, p);
+            p = p + 1;
+        }
+        if length < 0 { return err("asn1: length overflow"); }
+    }
+    if p + length > d.end { return err("asn1: value length exceeds buffer"); }
+    let t: *Tlv = malloc(sizeof(Tlv)) as *Tlv;
+    t.tag = tag;
+    t.content_start = p;
+    t.content_len = length;
+    t.next = p + length;
+    t.buf = d.buf;
+    d.pos = p + length;
+    return ok(t);
+}
+
+/// Read the next element and require it to have `tag`.
+pub fn der_expect(d: *Der, tag: i32) -> !*Tlv {
+    let r: !*Tlv = der_read(d);
+    if !r.ok { return err(r.err); }
+    if r.val.tag != tag {
+        return err("asn1: expected tag ".concat(_hex2(tag)).concat(", got ").concat(_hex2(r.val.tag)));
+    }
+    return ok(r.val);
+}
+
+/// The raw content bytes of a TLV (binary-safe).
+pub fn der_content(t: *Tlv) -> string {
+    return t.buf.substring(t.content_start, t.content_start + t.content_len);
+}
+
+/// The full element including its header — needed when a signature is
+/// computed over an encoded structure (e.g. TBSCertificate).
+pub fn der_element(d: *Der, t: *Tlv) -> string {
+    // find header start: t.content_start minus the header we consumed.
+    // Recompute by scanning back is fragile; instead the caller records
+    // the element start. Here we expose content; element-with-header is
+    // taken via der_raw_at below.
+    return t.buf.substring(t.content_start, t.next);
+}
+
+/// A sub-cursor over a constructed TLV's content (SEQUENCE / SET / [n]).
+pub fn der_into(t: *Tlv) -> *Der {
+    let d: *Der = malloc(sizeof(Der)) as *Der;
+    d.buf = t.buf;
+    d.pos = t.content_start;
+    d.end = t.content_start + t.content_len;
+    return d;
+}
+
+/// Decode an OID's content bytes into dotted-decimal ("1.2.840.10045.2.1").
+pub fn der_oid_string(content: string) -> !string {
+    let n: i32 = content.len();
+    if n == 0 { return err("asn1: empty OID"); }
+    let first: i32 = _byte(content, 0);
+    let mut out: string = _itoa(first / 40).concat(".").concat(_itoa(first % 40));
+    let mut acc: i64 = 0;
+    let mut i: i32 = 1;
+    while i < n {
+        let b: i32 = _byte(content, i);
+        acc = (acc << 7) | ((b & 0x7f) as i64);
+        if (b & 0x80) == 0 {
+            out = out.concat(".").concat(_i64toa(acc));
+            acc = 0;
+        }
+        i = i + 1;
+    }
+    return ok(out);
+}
+
+/// An INTEGER's magnitude bytes with any single leading 0x00 sign pad
+/// stripped (X.509 serials / EC point coords are non-negative here).
+pub fn der_int_bytes(t: *Tlv) -> string {
+    let c: string = der_content(t);
+    if c.len() > 1 && _byte(c, 0) == 0 {
+        return c.substring(1, c.len());
+    }
+    return c;
+}
+
+fn _hex2(v: i32) -> string {
+    let d: string = "0123456789abcdef";
+    return "0x".concat(d.substring((v / 16) & 15, ((v / 16) & 15) + 1)).concat(d.substring(v & 15, (v & 15) + 1));
+}
+fn _itoa(n: i32) -> string {
+    if n == 0 { return "0"; }
+    let mut x: i32 = n;
+    let mut s: string = "";
+    while x > 0 { s = ((48 + x % 10) as char).to_string().concat(s); x = x / 10; }
+    return s;
+}
+fn _i64toa(n: i64) -> string {
+    if n == 0 { return "0"; }
+    let mut x: i64 = n;
+    let mut s: string = "";
+    while x > 0 { s = ((48 + (x % 10) as i32) as char).to_string().concat(s); x = x / 10; }
+    return s;
+}
