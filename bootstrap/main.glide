@@ -34,6 +34,7 @@ import bootstrap::lsp::server;
 import bootstrap::cli::openapi;
 import bootstrap::pkg::manifest;
 import bootstrap::pkg::fetch;
+import bootstrap::pkg::download;
 import bootstrap::cli::doc;
 import bootstrap::cli::embed;
 import stdlib::compress::*;
@@ -1042,10 +1043,8 @@ fn run_search(query: string) -> i32 {
     // Use Accept header to pin the API version; `-fsS` so a 4xx /
     // network error returns a non-zero exit instead of writing the
     // HTML error page into tmp.
-    let cmd: string = "curl -fsS -H \"Accept: application/vnd.github+json\" -o \"".concat(tmp).concat("\" \"").concat(url).concat("\"");
-    let rc: i32 = __glide_shell(cmd);
-    if rc != 0 {
-        println!("search: network call failed (rc=".concat(int_to_str(rc as i64)).concat(")"));
+    if !https_download(url, "application/vnd.github+json", tmp) {
+        println!("search: network call failed");
         println!("(GitHub's API rate-limits unauthenticated requests; retry in a minute or set GITHUB_TOKEN)");
         return 1;
     }
@@ -1231,7 +1230,7 @@ fn run_upgrade(argc: i32) -> i32 {
     // Ask GitHub for the newest published tag.
     let meta: string = tmp.concat("/glide_upgrade_latest.json");
     let api: string = "https://api.github.com/repos/glide-lang/Glide/releases/latest";
-    if __glide_shell("curl -fsSL -o \"".concat(meta).concat("\" \"").concat(api).concat("\"")) != 0 {
+    if !https_download(api, "", meta) {
         println!("upgrade: could not reach GitHub to check for updates.");
         return 1;
     }
@@ -1271,7 +1270,7 @@ fn run_upgrade(argc: i32) -> i32 {
     let url: string = "https://github.com/glide-lang/Glide/releases/download/v".concat(latest).concat("/").concat(name).concat(".tar.gz");
     let tgz: string = tmp.concat("/").concat(name).concat(".tar.gz");
     println!(">> downloading", name.concat(".tar.gz"));
-    if __glide_shell("curl -fL -o \"".concat(tgz).concat("\" \"").concat(url).concat("\"")) != 0 {
+    if !https_download(url, "", tgz) {
         println!("upgrade: download failed:", url);
         return 1;
     }
@@ -2677,12 +2676,9 @@ fn _target_add(triple: string) -> i32 {
     let url: string = "https://github.com/glide-lang/Glide/releases/download/v".concat(SYSROOT_VERSION).concat("/").concat(archive_name);
     let tmp_archive: string = root.concat("/.glide_target_fetch.tar.gz");
     spinner_start("fetching ".concat(triple).concat(" (").concat(archive_name).concat(")"));
-    let curl_cmd: string = "curl -fsSL -o \"".concat(tmp_archive).concat("\" \"").concat(url).concat("\"");
-    let rc_fetch: i32 = __glide_shell(curl_cmd);
-    if rc_fetch != 0 {
+    if !https_download(url, "", tmp_archive) {
         spinner_finish(false, "");
-        println!("target: download failed (curl exit", rc_fetch, ")");
-        println!("       url:", url);
+        println!("target: download failed:", url);
         fs_remove_file(tmp_archive);
         return 1;
     }

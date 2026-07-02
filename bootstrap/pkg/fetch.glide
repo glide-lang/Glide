@@ -7,6 +7,7 @@ import stdlib::crypto::*;
 import bootstrap::syntax::ast; // for int_to_str
 import bootstrap::pkg::manifest;
 import bootstrap::pkg::semver;
+import bootstrap::pkg::download;
 
 extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
 
@@ -114,9 +115,7 @@ fn _ensure_single(m: *Manifest, d: ManifestDep) -> string {
 // Returns `sha256:<hex>` on success, "" on any failure.
 fn _try_tarball(d: ManifestDep, url: string, cache: string) -> string {
     let tmp: string = cache.concat("/.glide_fetch.tar.gz");
-    let cmd: string = "curl -fsSL -o \"".concat(tmp).concat("\" \"").concat(url).concat("\"");
-    let rc: i32 = __glide_shell(cmd);
-    if rc != 0 {
+    if !https_download(url, "", tmp) {
         return "";
     }
     spinner_set("inflating ".concat(d.name));
