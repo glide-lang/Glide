@@ -3269,9 +3269,12 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         // --gc-sections). Frame pointers stay: the stack-grow fault handler
         // walks the saved-RBP chain, so `-fno-omit-frame-pointer` is kept even
         // here. Trade-off: panic backtraces lose function names / source lines.
-        cmd = cmd.concat(" -O2 -w -fno-omit-frame-pointer -ffunction-sections -fdata-sections -D_GNU_SOURCE -Wno-error=implicit-function-declaration -s -lpthread -lm");
+        cmd = cmd.concat(" -O2 -w -fwrapv -fno-omit-frame-pointer -ffunction-sections -fdata-sections -D_GNU_SOURCE -Wno-error=implicit-function-declaration -s -lpthread -lm");
     } else {
-        cmd = cmd.concat(" -O2 -g -w -fno-omit-frame-pointer -D_GNU_SOURCE -Wno-error=implicit-function-declaration -lpthread -lm");
+        // `-fwrapv` (both branches): Glide integers wrap on overflow.
+        // Without it, signed overflow in the emitted C is UB the optimizer
+        // is allowed to exploit (and UBSan rightly traps).
+        cmd = cmd.concat(" -O2 -g -w -fwrapv -fno-omit-frame-pointer -D_GNU_SOURCE -Wno-error=implicit-function-declaration -lpthread -lm");
     }
     // User cflags go right after the defaults so e.g. a `-O3` / `--opt=3`
     // overrides the default `-O2` (cc/clang is last-flag-wins).
@@ -3725,7 +3728,8 @@ fn _build_freestanding(tmp_c: string, out_path: string, link_script: string, qui
     // NB: SSE stays enabled — Limine hands the kernel off in long mode with
     // SSE usable, and compiler-provided builtins may use xmm for the
     // half-float ABI. Red-zone is still disabled (interrupt safety).
-    cmd = cmd.concat(" -O2 -g -w");
+    // `-fwrapv` matches the hosted path: Glide integers wrap on overflow.
+    cmd = cmd.concat(" -O2 -g -w -fwrapv");
     // User cflags after the defaults (so `-O3`/`-march=` override -O2).
     if !user_cflags.eq("") {
         cmd = cmd.concat(" ").concat(user_cflags);
