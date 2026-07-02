@@ -810,9 +810,10 @@ pub struct TlsStream {
     pub gconn: *TlsConn,     // pure-Glide connection (backend 1)
 }
 
-// True when the pure-Glide TLS 1.3 backend is selected (GLIDE_TLS_BACKEND=glide).
+// The pure-Glide TLS 1.3 backend is the default for verifying clients.
+// Set GLIDE_TLS_BACKEND=openssl to force the OpenSSL backend instead.
 fn _tls_use_glide() -> bool {
-    return env_get("GLIDE_TLS_BACKEND").eq("glide");
+    return !env_get("GLIDE_TLS_BACKEND").eq("openssl");
 }
 // Split a comma-separated ALPN string into a protocol list.
 fn _tls_alpn_vec(alpn: string) -> *Vector<string> {
