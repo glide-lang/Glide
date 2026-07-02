@@ -1,0 +1,40 @@
+// RSASSA-PSS verification against an independent implementation (Python
+// cryptography, rsa_pss_rsae_sha256 with saltLen=hLen), plus rejection of
+// a tampered message and a tampered signature.
+import stdlib::testing::*;
+import stdlib::crypto::rsa::*;
+import stdlib::hex::*;
+
+fn _h(s: string) -> string { return hex_decode(s).unwrap(); }
+fn _pub() -> string { return _h("3082010a0282010100bc6ee1dceaec315ad8c0a2e738732e18d8072c2401616170223a1224080131b5b4be1fae0a02844036574b01ab047db31d044fa6779724c8eecb798eb71e1d7bd35c9f96d0e29d0f3f2063d9f7f761f887da15940a8072fb945f339b919058455811080393679ed25a1e900b3c802ce269cef9b684ddc134917b43506ef117d7246fa6733e31cbadfa516fb2d548253541bed66591fa9af43e50c8e6bc7213cc3ddb1c1735922df1061b1cea4eb03bb82319852283e1bdf357a7583f9441b7990ee51ec7ecb7d65c008b704f9818e4c0ee61404d8bf7116a535ef4042bb456afcd4953dbf61314ef79b92f71e6263700eeaecedc7e32ae80cdaade45a0a6fc230203010001"); }
+fn _msg() -> string { return _h("636f6e74656e7420746f206265207369676e6564206279205253412d50535320696e20544c5320312e33204365727469666963617465566572696679"); }
+fn _sig() -> string { return _h("ab8a415b8f66e52d5f50e5d29d210b1c56c602467863eed36f3fc21e577c676f81e8d168b9ddad6d12390db520cf8ea80a385a6b9c8744a1f33689b847bb53d88fad4c8808125cc09cd6a5124994c7f8e7f89daab4e0d90db5b842ed1e211315b7ad5d520d43bfebbf71cdec0247ed7b61e01c822e1ba81bd9df5844b7ceae599cfce389e6c55382acfe994ec59d30379b876d528f7dec6386b3209e9b7759526c5951f0c53f709e90add7181fd3d37ecc3858f72b05e526ba6c5526e856a85c4f3482b8715bae82b398bcd430da4340b00caac421c79e033dcd449ed6efec01f4f23f316f1f0eb49d8f801cdf053e22405be3480d474f29330a2b95a0129c8e"); }
+
+fn test_pss_valid() -> i32 {
+    let v: !bool = rsa_pss_verify(_pub(), PSS_SHA256, _msg(), _sig());
+    assert!(v.is_ok());
+    assert!(v.unwrap());
+    return 0;
+}
+
+fn test_pss_rejects_wrong_message() -> i32 {
+    let bad: string = _msg().concat("x");
+    let v: !bool = rsa_pss_verify(_pub(), PSS_SHA256, bad, _sig());
+    assert!(v.is_ok());
+    assert!(!v.unwrap());
+    return 0;
+}
+
+fn test_pss_rejects_tampered_sig() -> i32 {
+    let s: string = _sig();
+    let mut bad: string = "";
+    for let i: i32 = 0; i < s.len(); i++ {
+        let b: i32 = s.at(i).to_int() & 255;
+        if i == 10 { bad = bad.concat(((b ^ 1) as char).to_string()); }
+        else { bad = bad.concat((b as char).to_string()); }
+    }
+    let v: !bool = rsa_pss_verify(_pub(), PSS_SHA256, _msg(), bad);
+    assert!(v.is_ok());
+    assert!(!v.unwrap());
+    return 0;
+}
