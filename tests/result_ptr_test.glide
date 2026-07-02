@@ -7,6 +7,49 @@ struct Acc { total: i32, n: i32 }
 fn mk_res() -> !*Acc { let a: *Acc = Acc { total: 42, n: 7 }; return ok(a); }
 fn mk_opt() -> ?*Acc { let a: *Acc = Acc { total: 99, n: 3 }; return some(a); }
 
+// Same rule when the owned local is born INSIDE a nested block: the block's
+// auto-drop must not fire on the returned value either. This is the exact
+// shape of the compiler's own backend selector (see _mk_backend in
+// bootstrap/main.glide), which segfaulted when bootstrapped by a compiler
+// that predated the fix.
+struct Pol { cmd: string, flag: bool }
+
+fn mk_nested(sel: i32) -> !*Pol {
+    if sel == 1 {
+        let p: *Pol = Pol { cmd: "native-".concat("cc"), flag: false };
+        return ok(p);
+    }
+    if sel == 2 {
+        let p: *Pol = Pol { cmd: "clang", flag: true };
+        return ok(p);
+    }
+    return err("no backend");
+}
+
+fn _churn_arena() -> i32 {
+    // Allocation churn so a freed pointee gets reused (and the stale read
+    // becomes visible) if the drop regresses.
+    let mut acc: i32 = 0;
+    for let i: i32 = 0; i < 64; i++ {
+        acc = acc + "churn-".concat("abcdefgh".substring(0, (i % 7) + 1)).len();
+    }
+    return acc;
+}
+
+fn test_result_ptr_from_nested_block() -> i32 {
+    let r: !*Pol = mk_nested(2);
+    let _c: i32 = _churn_arena();
+    assert!(r.ok);
+    assert_str_eq!(r.val.cmd, "clang");
+    assert!(r.val.flag);
+    let r1: !*Pol = mk_nested(1);
+    assert!(r1.ok);
+    assert_str_eq!(r1.val.cmd, "native-cc");
+    let r0: !*Pol = mk_nested(0);
+    assert!(!r0.ok);
+    return 0;
+}
+
 fn test_result_ptr_val() -> i32 {
     let r: !*Acc = mk_res();
     assert!(r.ok);

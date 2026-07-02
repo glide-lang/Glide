@@ -2198,9 +2198,12 @@ pub struct CrossBackend {
     pub extra: string, // --sysroot/-B/-L/--rtlib/-fuse-ld flags, or ""
 }
 
-// malloc (not a struct literal) so the value survives the `return ok(...)`
-// boundary — a struct-literal local built inside a nested block still gets
-// auto-dropped on return, leaving the Result payload dangling.
+// malloc (not a struct literal) as a BOOTSTRAP-COMPAT shim: current codegen
+// handles `return ok(<struct-literal local>)` correctly (6591cf5), but the
+// released compilers that bootstrap this source (0.6.1, CI BOOT_TAG) predate
+// that fix and emit a free of the payload — a glide binary they produce then
+// segfaults inside pick_cc_for_target. Switch back to a struct literal once
+// the boot compilers carry the fix.
 fn _mk_backend(cc: string, emit_target: bool, extra: string) -> *CrossBackend {
     let b: *CrossBackend = malloc(sizeof(CrossBackend)) as *CrossBackend;
     b.cc = cc;
