@@ -99,14 +99,29 @@ jobs:
         # A lib-linking `glide build` auto-promotes to the host triple and
         # links the sysroot's static openssl / zlib (+ ngtcp2 / nghttp3
         # where present), so no system -dev packages are needed.
+        #
+        # Windows/macOS fetch a PINNED published sysroot asset directly
+        # instead of `glide target add`: the compiler's SYSROOT_VERSION may
+        # already point at the NEXT release (bumped in the release-prep
+        # commit), whose assets don't exist until the tag's release run
+        # publishes them — `target add` would 404 on every pre-tag push.
+        # The native tier only needs include/ + lib/, which any published
+        # sysroot carries. Bump CI_SYSROOT when a newer asset is useful.
         run: |
+          CI_SYSROOT=0.6.1
           if [ "${{ runner.os }}" = "Linux" ]; then
             mkdir -p ~/.glide/targets/${{ matrix.triple }}
             tar -xzf dist/glide-sysroot-x86_64-linux-musl-ci.tar.gz -C ~/.glide/targets/${{ matrix.triple }}
-          elif [ "${{ runner.os }}" = "Windows" ]; then
-            ./glide.exe target add ${{ matrix.triple }}
           else
-            ./glide target add ${{ matrix.triple }}
+            if [ "${{ runner.os }}" = "Windows" ]; then
+              HOMEDIR="$(cygpath -u "$USERPROFILE")"
+            else
+              HOMEDIR="$HOME"
+            fi
+            DEST="${HOMEDIR}/.glide/targets/${{ matrix.triple }}"
+            mkdir -p "$DEST"
+            curl -fL -o sysroot.tar.gz "https://github.com/${GITHUB_REPOSITORY}/releases/download/v${CI_SYSROOT}/glide-sysroot-${{ matrix.triple }}-${CI_SYSROOT}.tar.gz"
+            tar -xzf sysroot.tar.gz -C "$DEST"
           fi
 
       - name: Skip HTTP/3 test where ngtcp2 is unavailable
