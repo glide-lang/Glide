@@ -4455,6 +4455,41 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 t.err_code_range(e.lhs.line, e.lhs.column, path_span, "", "module `".concat(prefix).concat("` not in scope; add `import ").concat(prefix).concat(";` or use the full path"));
                 return null;
             }
+            // A module-qualified free function `mod::fn(args)`. Its registry
+            // key is the BARE leaf `fn` (free fns are registered by name), not
+            // the `<mod>_<fn>` shape built above — that shape is for
+            // `Type::method`, and reusing it here would wrongly resolve e.g.
+            // `fs::read` to a free function literally named `fs_read`. So when
+            // the prefix is an imported module (not a type or type param),
+            // resolve the bare leaf first. Same arity/arg checks as below.
+            if !is_type && !is_type_param && t.fns.contains(e.lhs.field) {
+                let lsig: FnSig = t.fns.get(e.lhs.field);
+                let lplen: i32 = if lsig.params != null { lsig.params.len() } else { 0 };
+                if lsig.params != null && e.args != null {
+                    let lalen: i32 = e.args.len();
+                    let mut lbad: bool = lplen != lalen;
+                    if lsig.is_variadic && lalen >= lplen {
+                        lbad = false;
+                    }
+                    if lbad {
+                        let lspan: i32 = prefix.len() + 2 + e.lhs.field.len();
+                        t.err_code_range(e.lhs.line, e.lhs.column, lspan, "", "wrong arg count for `".concat(prefix).concat("::").concat(e.lhs.field).concat("`: expected ").concat(int_to_str(lplen)).concat(", got ").concat(int_to_str(lalen)));
+                    }
+                }
+                if e.args != null {
+                    for let i: i32 = 0; i < e.args.len(); i++ {
+                        let a: Expr = e.args.get(i);
+                        let at: *Type = infer_expr(t, &a);
+                        if i < lplen {
+                            let p: Param = lsig.params.get(i);
+                            if p.ty != null && !_type_references_any(p.ty, lsig.type_params) && !_type_references_any(p.ty, lsig.owner_type_params) && !arg_compat(p.ty, at, lsig.type_params) {
+                                t.err_code_range(a.line, a.column, _arg_span(&a), "", "arg ".concat(p.name).concat(" type mismatch: expected ").concat(type_to_string(p.ty)).concat(", got ").concat(type_to_string(at)));
+                            }
+                        }
+                    }
+                }
+                return lsig.ret_type;
+            }
             if t.fns.contains(pname) {
                 let sig: FnSig = t.fns.get(pname);
                 // Arity check for `Type::method(args)` — missing/extra args

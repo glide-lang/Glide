@@ -3772,6 +3772,11 @@ pub fn emit_expr(g: *CG, e: *Expr) {
             }
             let m_in: string = mangle_type(inner_ty.inner);
             let m_out: string = mangle_type(ret_ty.inner);
+            // The value the `?` stmt-expr produces. A `!void` result (a void
+            // payload) has no `.val` member, so `foo()?;` yields a void instead
+            // of reading a non-existent member.
+            let mut vtail: string = "__r.val";
+            if m_in.eq("void") { vtail = "(void)0"; }
             // Pick struct typedef + propagation snippets per (inner, ret) combo.
             let mut struct_pref: string = "__glide_result_";
             if inner_kind == TY_OPTION {
@@ -3796,13 +3801,13 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                     print!("; ");
                 }
                 if ret_kind == TY_RESULT {
-                    print!("return __glide_err_".concat(m_out).concat("(__r.err); } __r.val; })"));
+                    print!("return __glide_err_".concat(m_out).concat("(__r.err); } ").concat(vtail).concat("; })"));
                 } else {
                     if ret_kind == TY_OPT_RESULT {
-                        print!("return __glide_optres_err_".concat(m_out).concat("(__r.err); } __r.val; })"));
+                        print!("return __glide_optres_err_".concat(m_out).concat("(__r.err); } ").concat(vtail).concat("; })"));
                     } else {
                         // ?U fn cannot represent Err — typer should have rejected.
-                        print!("return __glide_none_".concat(m_out).concat("(); } __r.val; })"));
+                        print!("return __glide_none_".concat(m_out).concat("(); } ").concat(vtail).concat("; })"));
                     }
                 }
                 return;
@@ -3816,13 +3821,13 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                     print!("; ");
                 }
                 if ret_kind == TY_OPTION {
-                    print!("return __glide_none_".concat(m_out).concat("(); } __r.val; })"));
+                    print!("return __glide_none_".concat(m_out).concat("(); } ").concat(vtail).concat("; })"));
                 } else {
                     if ret_kind == TY_OPT_RESULT {
-                        print!("return __glide_optres_none_".concat(m_out).concat("(); } __r.val; })"));
+                        print!("return __glide_optres_none_".concat(m_out).concat("(); } ").concat(vtail).concat("; })"));
                     } else {
                         // !U fn: coerce None → Err{"none-coerced"}.
-                        print!("return __glide_err_".concat(m_out).concat("(\"none-coerced\"); } __r.val; })"));
+                        print!("return __glide_err_".concat(m_out).concat("(\"none-coerced\"); } ").concat(vtail).concat("; })"));
                     }
                 }
                 return;
@@ -3835,14 +3840,14 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 print!("; ");
             }
             if ret_kind == TY_OPT_RESULT {
-                print!("__glide_optres_".concat(m_out).concat("_t __pr; __pr.tag = __r.tag; __pr.err = __r.err; return __pr; } __r.val; })"));
+                print!("__glide_optres_".concat(m_out).concat("_t __pr; __pr.tag = __r.tag; __pr.err = __r.err; return __pr; } ").concat(vtail).concat("; })"));
             } else {
                 if ret_kind == TY_RESULT {
                     // None coerces to Err{"none-coerced"}; Err passes msg through.
-                    print!("if (__r.tag == 1) return __glide_err_".concat(m_out).concat("(\"none-coerced\"); ").concat("return __glide_err_").concat(m_out).concat("(__r.err); } __r.val; })"));
+                    print!("if (__r.tag == 1) return __glide_err_".concat(m_out).concat("(\"none-coerced\"); ").concat("return __glide_err_").concat(m_out).concat("(__r.err); } ").concat(vtail).concat("; })"));
                 } else {
                     // ?U fn: drop Err msg, propagate None.
-                    print!("return __glide_none_".concat(m_out).concat("(); } __r.val; })"));
+                    print!("return __glide_none_".concat(m_out).concat("(); } ").concat(vtail).concat("; })"));
                 }
             }
             return;

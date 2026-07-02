@@ -2567,6 +2567,18 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         if e.lhs != null && e.lhs.kind == EX_PATH {
             let qual: string = e.lhs.str_val.concat("::").concat(e.lhs.field);
             if g.module_aliases.contains(qual) {
+                // Module member call: the defining Glide free fn is keyed in
+                // g.fns by its BARE leaf. The module alias resolves to the
+                // emitted C name, which for a libc-shadowing fn (fs::read) is
+                // mangled (__glide_uf_read) and so isn't a g.fns key — look up
+                // the leaf first, then fall back to the resolved name.
+                if g.fns.contains(e.lhs.field) {
+                    return g.fns.get(e.lhs.field).fn_ret_ty;
+                }
+                if g.generic_fns.contains(e.lhs.field) {
+                    let gnl: Stmt = g.generic_fns.get(e.lhs.field);
+                    return _infer_generic_call_ret(g, e, &gnl);
+                }
                 let resolved: string = g.module_aliases.get(qual);
                 if g.fns.contains(resolved) {
                     return g.fns.get(resolved).fn_ret_ty;
