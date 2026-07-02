@@ -2,8 +2,8 @@
 # Build a cross-compile sysroot tarball for a given target.
 #
 # Sysroot v2 layout:
-#   include/ lib/    third-party static libs + headers (openssl, zlib,
-#                    ngtcp2, nghttp3) — same role as v1, consumed by the
+#   include/ lib/    third-party static libs + headers (openssl, ngtcp2,
+#                    nghttp3) — same role as v1, consumed by the
 #                    -I/-L link assembly in bootstrap/main.glide.
 #   libc/            the target's C library + startup files + libgcc, so
 #                    a host clang can cross-compile with
@@ -88,7 +88,7 @@ _fetch_checked() {
 }
 
 # -------------------------------------------------------------------------
-# Linux (musl): the lib stack (openssl 3.5 + zlib + ngtcp2/nghttp3, all
+# Linux (musl): the lib stack (openssl 3.5 + ngtcp2/nghttp3, all
 # static) is built inside the pinned Alpine container — Alpine gcc IS a
 # native musl toolchain, no cross shims needed. The libc/ tree (musl
 # headers + crt + libc.a + libgcc) comes from pinned Alpine APKs, which
@@ -182,18 +182,15 @@ build_windows_gnu() {
     done
     if [ -z "$prefix" ]; then
         echo "windows-gnu: no MSYS2 prefix found with libssl.a + openssl/." >&2
-        echo "   install: pacman -S mingw-w64-ucrt-x86_64-{openssl,zlib}" >&2
+        echo "   install: pacman -S mingw-w64-ucrt-x86_64-openssl" >&2
         exit 1
     fi
     echo ">> Staging from MSYS2 prefix: $prefix"
 
     cp -r "$prefix/include/openssl" "${SYSROOT}/include/"
-    cp "$prefix/include/zlib.h" "${SYSROOT}/include/"
-    cp "$prefix/include/zconf.h" "${SYSROOT}/include/"
 
     cp "$prefix/lib/libssl.a" "${SYSROOT}/lib/"
     cp "$prefix/lib/libcrypto.a" "${SYSROOT}/lib/"
-    cp "$prefix/lib/libz.a" "${SYSROOT}/lib/"
 
     # HTTP/3 stack — ship when MSYS2 has the static .a + headers. The
     # ngtcp2_crypto_ossl variant is the one stdlib::http::h3 links
@@ -257,29 +254,19 @@ build_macos() {
     fi
 
     local openssl_dir
-    local zlib_dir
     openssl_dir="$(brew --prefix openssl@3 2>/dev/null || true)"
-    zlib_dir="$(brew --prefix zlib 2>/dev/null || true)"
 
     if [ -z "$openssl_dir" ] || [ ! -d "$openssl_dir/include/openssl" ] || [ ! -f "$openssl_dir/lib/libssl.a" ]; then
         echo "macos: openssl@3 not installed via brew or static libs missing" >&2
-        echo "   brew install openssl@3 zlib" >&2
+        echo "   brew install openssl@3" >&2
         exit 1
     fi
-    if [ -z "$zlib_dir" ] || [ ! -f "$zlib_dir/include/zlib.h" ] || [ ! -f "$zlib_dir/include/zconf.h" ] || [ ! -f "$zlib_dir/lib/libz.a" ]; then
-        echo "macos: zlib not installed via brew or static libs missing" >&2
-        echo "   brew install openssl@3 zlib" >&2
-        exit 1
-    fi
-    echo ">> Staging from Homebrew: $openssl_dir + $zlib_dir"
+    echo ">> Staging from Homebrew: $openssl_dir"
 
     cp -r "$openssl_dir/include/openssl" "${SYSROOT}/include/"
-    cp "$zlib_dir/include/zlib.h" "${SYSROOT}/include/"
-    cp "$zlib_dir/include/zconf.h" "${SYSROOT}/include/"
 
     cp "$openssl_dir/lib/libssl.a" "${SYSROOT}/lib/"
     cp "$openssl_dir/lib/libcrypto.a" "${SYSROOT}/lib/"
-    cp "$zlib_dir/lib/libz.a" "${SYSROOT}/lib/"
 }
 
 # -------------------------------------------------------------------------
