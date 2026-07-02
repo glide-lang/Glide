@@ -11,6 +11,16 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 
 command -v "$GLIDE" >/dev/null 2>&1 || [ -x "$GLIDE" ] || fail "glide not found at $GLIDE"
 
+# Kernel images are x86_64 ELF: a linux-x86_64 host cc emits that natively;
+# any other host needs clang + lld (mingw gcc = PE only, Apple = Mach-O).
+# Skip where the toolchain can't do it — same gate as the compiler's.
+if [ "$(uname -s)" != "Linux" ] || [ "$(uname -m)" != "x86_64" ]; then
+    if ! command -v clang >/dev/null 2>&1 || ! command -v ld.lld >/dev/null 2>&1; then
+        echo "SKIP: host can't emit x86_64 ELF (need linux-x86_64 cc, or clang+lld)"
+        exit 0
+    fi
+fi
+
 T="$(mktemp -d)" || fail "mktemp failed"
 trap 'rm -rf "$T"' EXIT
 

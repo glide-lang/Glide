@@ -3177,14 +3177,11 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         }
     }
     if win_target {
-        cmd = cmd.concat(" -lws2_32 -lmswsock -ldbghelp -lpsapi");
-        // Crypt32 backs the Windows cert store bridge used by stdlib::
-        // net::tls when SSL is in play — OpenSSL on MSYS2/mingw has an
-        // empty default verify path, so every HTTPS verify falls back
-        // to enumerating ROOT/CA via CertOpenSystemStoreW.
-        if needs_ssl {
-            cmd = cmd.concat(" -lcrypt32");
-        }
+        // The winsock/dbghelp import libs are appended AFTER the openssl/
+        // zlib libs below (see the tail of the lib-resolution block): GNU
+        // ld resolves one-pass left-to-right, and libcrypto.a pulls
+        // symbols like gai_strerrorA out of libws2_32.a — putting the
+        // system libs first left them unresolved.
     } else {
         if !cross && !eff_release && !wants_static {
             // -rdynamic only on host POSIX builds — cross builds use static
@@ -3274,7 +3271,13 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
             // needs h3. The legacy unconditional `-static -lssl -lcrypto -lz`
             // is now split so a compress-only cross binary skips openssl.
             let has_h3libs: bool = fs_exists(sysroot.concat("/lib/libngtcp2.a"));
-            cmd = cmd.concat(" -static");
+            // No fully-static executables on macOS — Apple ships no static
+            // libSystem/crt0, so `-static` dies with `ld: library 'crt0.o'
+            // not found`. The sysroot's .a libs still link statically; only
+            // libSystem stays dynamic (every Mac has it).
+            if !_target_os(eff_target).eq("macos") {
+                cmd = cmd.concat(" -static");
+            }
             if needs_h3 && has_h3libs {
                 cmd = cmd.concat(" -lngtcp2_crypto_ossl -lngtcp2 -lnghttp3");
             }
@@ -3290,6 +3293,19 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
                 // is self-contained (runs on any Linux, incl. scratch/distroless).
                 cmd = cmd.concat(" -static");
             }
+        }
+    }
+    // Windows system import libs come AFTER the openssl/zlib archives:
+    // GNU ld resolves one-pass left-to-right, and libcrypto.a pulls
+    // winsock symbols (gai_strerrorA et al.) out of libws2_32.a.
+    if win_target {
+        cmd = cmd.concat(" -lws2_32 -lmswsock -ldbghelp -lpsapi");
+        // Crypt32 backs the Windows cert store bridge used by stdlib::
+        // net::tls when SSL is in play — OpenSSL on MSYS2/mingw has an
+        // empty default verify path, so every HTTPS verify falls back
+        // to enumerating ROOT/CA via CertOpenSystemStoreW.
+        if needs_ssl {
+            cmd = cmd.concat(" -lcrypt32");
         }
     }
     // User ldflags go at the very end, after every auto-detected -L/-l (correct
@@ -3508,25 +3524,28 @@ fn _resolve_cc_dir_win(cc: string) -> string {
 // red-zone off for interrupt safety, higher-half code model. The user's
 // linker script (`linker:` in glide.glide) owns the layout + entry point.
 fn _build_freestanding(tmp_c: string, out_path: string, link_script: string, quiet: bool, user_cflags: string, user_ldflags: string, stmts: *Vector<Stmt>, src_path: string, src_text: string) -> i32 {
-    // Kernel images target x86_64. On an x86_64 host any system cc does
-    // freestanding (-ffreestanding -nostdlib needs no libc/crt at all);
-    // from another arch it's a cross link and needs clang + lld.
-    let mut cc: string = pick_cc_host(false);
+    // Kernel images are x86_64 ELF. Only a linux-x86_64 host cc emits
+    // that natively (-ffreestanding -nostdlib needs no libc/crt at all);
+    // mingw gcc only does PE and Apple clang only Mach-O, so every other
+    // host needs clang + lld with an explicit bare-metal target.
+    let host: string = _host_triple();
+    let mut cc: string = "";
     let mut fs_target_flags: string = "";
-    let host_arch: string = _triple_arch(_host_triple());
-    if !host_arch.eq("x86_64") {
+    if _triple_arch(host).eq("x86_64") && _target_os(host).eq("linux") {
+        cc = pick_cc_host(false);
+    } else {
         if _have_on_path("clang") && _have_lld() {
             cc = "clang";
             fs_target_flags = " --target=x86_64-none-elf -fuse-ld=lld";
-        } else {
-            cc = "";
         }
     }
     if cc.eq("") {
         if !quiet {
             spinner_finish(false, "");
         }
-        println!(col_red().concat("error").concat(col_reset()).concat(": freestanding build needs a C compiler (gcc or clang; from a non-x86_64 host: clang + lld)."));
+        println!(col_red().concat("error").concat(col_reset()).concat(": freestanding build needs a C compiler that can emit x86_64 ELF."));
+        println!("  linux x86_64: any gcc/clang");
+        println!("  other hosts:  clang + lld (e.g. `brew install llvm lld` / MSYS2 clang+lld)");
         return 1;
     }
     if link_script.eq("") {
