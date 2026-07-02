@@ -1,0 +1,53 @@
+import stdlib::testing::*;
+
+// Regression: a local shadowing an ENCLOSING binding must read the outer
+// value in its own initializer (not the inner, uninitialized one).
+fn test_block_expr_shadow_reads_outer() -> i32 {
+    let n: i32 = 5;
+    let r: i32 = { let n: i32 = n + 100; return n; };
+    assert_eq!(r, 105);
+    assert_eq!(n, 5);          // outer untouched
+    return 0;
+}
+
+fn test_loop_body_shadow_reads_outer() -> i32 {
+    let base: i32 = 10;
+    let mut acc: i32 = 0;
+    for let i: i32 = 0; i < 3; i++ {
+        let base: i32 = base + i;   // shadows outer base
+        acc = acc + base;
+    }
+    assert_eq!(acc, 33);       // (10+0)+(10+1)+(10+2)
+    assert_eq!(base, 10);
+    return 0;
+}
+
+fn _p_shadow(x: i32) -> i32 { let x: i32 = x + 1; return x; }
+fn _p_shadow_nested(x: i32) -> i32 { if x > 0 { let x: i32 = x + 100; return x; } return x; }
+
+fn test_param_shadow() -> i32 {
+    assert_eq!(_p_shadow(5), 6);
+    assert_eq!(_p_shadow_nested(5), 105);
+    return 0;
+}
+
+// Regression: a block-expression containing a loop yields the right value.
+fn test_block_expr_with_range_for() -> i32 {
+    let s: i32 = { let mut a: i32 = 0; for i in 0..5 { a = a + i; } return a; };
+    assert_eq!(s, 10);         // 0+1+2+3+4
+    return 0;
+}
+
+fn test_block_expr_with_cstyle_for() -> i32 {
+    let s: i32 = { let mut a: i32 = 0; for let i: i32 = 1; i <= 4; i++ { a = a + i; } return a; };
+    assert_eq!(s, 10);
+    return 0;
+}
+
+// Regression: if-let nested inside a block-expression is lowered correctly.
+fn test_block_expr_with_if_let() -> i32 {
+    let o: ?i32 = some(7);
+    let v: i32 = { let mut r: i32 = -1; if let some(x) = o { r = x; } return r; };
+    assert_eq!(v, 7);
+    return 0;
+}
