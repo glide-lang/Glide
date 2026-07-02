@@ -1,0 +1,74 @@
+// OptResult (`?!T`) intrinsic methods. Pre-fix, `?!T` had none of the
+// Option/Result method family — `.unwrap()` leaked into the C as a plain
+// member access on __glide_optres_<T>_t and failed to compile. Also covers
+// `??` on a `?!T` LHS (plain and err-form), which fell into the generic
+// ternary and produced malformed C for the fat struct.
+import stdlib::testing::*;
+
+fn find(x: i32) -> ?!i32 {
+    if x > 0 { return some(x); }
+    if x == 0 { return none(); }
+    return err("negative");
+}
+
+fn test_optres_state_accessors() -> i32 {
+    let s: ?!i32 = find(7);
+    assert!(s.is_some());
+    assert!(!s.is_none());
+    assert!(!s.is_err());
+    let n: ?!i32 = find(0);
+    assert!(!n.is_some());
+    assert!(n.is_none());
+    assert!(!n.is_err());
+    let e: ?!i32 = find(-1);
+    assert!(!e.is_some());
+    assert!(!e.is_none());
+    assert!(e.is_err());
+    return 0;
+}
+
+fn test_optres_unwrap_family() -> i32 {
+    let s: ?!i32 = find(7);
+    assert_eq!(s.unwrap(), 7);
+    assert_eq!(s.expect("should be some"), 7);
+    let n: ?!i32 = find(0);
+    assert_eq!(n.unwrap_or(42), 42);
+    assert_eq!(n.unwrap_or_else(fn() -> i32 { return 77; }), 77);
+    let e: ?!i32 = find(-1);
+    assert_eq!(e.unwrap_or(43), 43);
+    assert_str_eq!(e.unwrap_err(), "negative");
+    return 0;
+}
+
+fn test_optres_string_inner() -> i32 {
+    let s: ?!string = some("hit");
+    assert!(s.is_some());
+    assert_str_eq!(s.unwrap(), "hit");
+    let n: ?!string = none();
+    assert_str_eq!(n.unwrap_or("fallback"), "fallback");
+    return 0;
+}
+
+fn test_optres_coalesce_plain() -> i32 {
+    let hit: i32 = find(9) ?? 5;
+    assert_eq!(hit, 9);
+    let on_none: i32 = find(0) ?? 5;
+    assert_eq!(on_none, 5);
+    let on_err: i32 = find(-1) ?? 6;
+    assert_eq!(on_err, 6);
+    return 0;
+}
+
+// err-form collapses `?!T` to `!T`: Some → Ok, None/Err → the fallback Err.
+fn test_optres_coalesce_err_form() -> i32 {
+    let kept: !i32 = find(9) ?? err("gone");
+    assert!(kept.is_ok());
+    assert_eq!(kept.unwrap(), 9);
+    let from_none: !i32 = find(0) ?? err("gone");
+    assert!(from_none.is_err());
+    assert_str_eq!(from_none.unwrap_err(), "gone");
+    let from_err: !i32 = find(-1) ?? err("gone");
+    assert!(from_err.is_err());
+    assert_str_eq!(from_err.unwrap_err(), "gone");
+    return 0;
+}

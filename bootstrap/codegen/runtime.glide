@@ -897,6 +897,9 @@ pub fn collect_result_in_type(g: *CG, t: *Type) {
             }
         }
         g.optres_types.push(*t.inner);
+        // `?!T ?? err(m)` collapses to a plain `!T`, so its ok/err ctors
+        // must exist in the header region too.
+        _register_result_wrapper(g, t.inner);
     }
     if t.inner != null {
         collect_result_in_type(g, t.inner);
@@ -2616,6 +2619,25 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
                 }
                 if e.lhs.field.eq("send") || e.lhs.field.eq("close") {
                     return ty_named("void");
+                }
+            }
+            // OptResult (`?!T`) intrinsic methods — mirrors the typer so a
+            // `println!(.., r.unwrap())` arg formats as T, not `%p`.
+            if stripped != null && stripped.kind == TY_OPT_RESULT {
+                let mm: string = e.lhs.field;
+                if mm.eq("is_some") || mm.eq("is_none") || mm.eq("is_err") {
+                    return ty_named("bool");
+                }
+                if mm.eq("unwrap") || mm.eq("expect") || mm.eq("unwrap_or") || mm.eq("unwrap_or_else") {
+                    if stripped.inner != null {
+                        let p: *Type = __glide_palloc(sizeof(Type)) as *Type;
+                        *p = *stripped.inner;
+                        return p;
+                    }
+                    return ty_named("void");
+                }
+                if mm.eq("unwrap_err") {
+                    return ty_named("string");
                 }
             }
             // Option / Result intrinsic methods — return type for chaining.

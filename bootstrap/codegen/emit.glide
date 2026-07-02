@@ -506,6 +506,80 @@ fn _emit_closure_call(g: *CG, cl: *Expr, c_arg: string) {
     print!("(", c_arg, ")");
 }
 
+// Intrinsic methods on OptResult (`?!T`): tag 0=Some, 1=None, 2=Err.
+// Same contract as _emit_opt_res_method — true when handled.
+fn _emit_optres_method(g: *CG, e: *Expr) -> bool {
+    let mname: string = e.lhs.field;
+    let recv_e: *Expr = e.lhs.lhs;
+    let recv_ty: *Type = infer_for_codegen(g, recv_e);
+    let stripped: *Type = strip_ptr(recv_ty);
+    let cty: string = type_to_c(stripped);
+    let mut derefs: string = "";
+    let mut t: *Type = recv_ty;
+    while t != null && (t.kind == TY_POINTER || t.kind == TY_BORROW || t.kind == TY_BORROW_MUT) {
+        derefs = derefs.concat("*");
+        t = t.inner;
+    }
+    let line: string = int_to_str(e.line);
+    let mut nargs: i32 = 0;
+    if e.args != null {
+        nargs = e.args.len();
+    }
+    if (mname.eq("is_some") || mname.eq("is_none") || mname.eq("is_err")) && nargs == 0 {
+        let mut tag: string = "0";
+        if mname.eq("is_none") {
+            tag = "1";
+        }
+        if mname.eq("is_err") {
+            tag = "2";
+        }
+        print!("({ ", cty, " __v = ", derefs, "(");
+        emit_expr(g, recv_e);
+        print!("); (__v.tag == ", tag, "); })");
+        return true;
+    }
+    if mname.eq("unwrap") && nargs == 0 {
+        print!("({ ", cty, " __v = ", derefs, "(");
+        emit_expr(g, recv_e);
+        print!("); if (__v.tag != 0) __glide_panic(__v.tag == 2 ? \"called `unwrap()` on an err value\" : \"called `unwrap()` on a none value\", \"\", ", line, "); __v.val; })");
+        return true;
+    }
+    if mname.eq("expect") && nargs == 1 {
+        print!("({ ", cty, " __v = ", derefs, "(");
+        emit_expr(g, recv_e);
+        print!("); if (__v.tag != 0) __glide_panic((");
+        let msg: Expr = e.args.get(0);
+        emit_expr(g, &msg);
+        print!("), \"\", ", line, "); __v.val; })");
+        return true;
+    }
+    if mname.eq("unwrap_or") && nargs == 1 {
+        print!("({ ", cty, " __v = ", derefs, "(");
+        emit_expr(g, recv_e);
+        print!("); __v.tag == 0 ? __v.val : (");
+        let d: Expr = e.args.get(0);
+        emit_expr(g, &d);
+        print!("); })");
+        return true;
+    }
+    if mname.eq("unwrap_or_else") && nargs == 1 {
+        let f0: Expr = e.args.get(0);
+        print!("({ ", cty, " __v = ", derefs, "(");
+        emit_expr(g, recv_e);
+        print!("); __v.tag == 0 ? __v.val : ");
+        _emit_closure_call(g, &f0, "");
+        print!("; })");
+        return true;
+    }
+    if mname.eq("unwrap_err") && nargs == 0 {
+        print!("({ ", cty, " __v = ", derefs, "(");
+        emit_expr(g, recv_e);
+        print!("); if (__v.tag != 2) __glide_panic(\"called `unwrap_err()` on a non-err value\", \"\", ", line, "); __v.err; })");
+        return true;
+    }
+    return false;
+}
+
 // Intrinsic methods on Option (`?T`) / Result (`!T`). Emits an inline
 // statement-expr and returns true when `e` is such a method call; false lets
 // the caller fall through to normal dispatch. Mirrors the chan method block.
@@ -522,6 +596,11 @@ fn _emit_opt_res_method(g: *CG, e: *Expr) -> bool {
     }
     let is_opt: bool = stripped.kind == TY_OPTION;
     let is_res: bool = stripped.kind == TY_RESULT;
+    // OptResult (`?!T`) is tag-based (0=Some, 1=None, 2=Err) rather than
+    // flag-based, so it gets its own emission block.
+    if stripped.kind == TY_OPT_RESULT {
+        return _emit_optres_method(g, e);
+    }
     if !is_opt && !is_res {
         return false;
     }
@@ -3210,6 +3289,27 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 print!("({ __glide_result_".concat(m_in).concat("_t __r = ("));
                 emit_expr(g, e.lhs);
                 print!("); __r.ok ? __r : __glide_err_".concat(m_in).concat("("));
+                let arg: Expr = e.rhs.args.get(0);
+                emit_expr(g, &arg);
+                print!("); })");
+                return;
+            }
+            // OptResult LHS: tag 0=Some extracts; None/Err take the fallback.
+            if lt != null && lt.kind == TY_OPT_RESULT {
+                let m_in: string = mangle_type(lt.inner);
+                if !is_err_form {
+                    print!("({ __glide_optres_".concat(m_in).concat("_t __o = ("));
+                    emit_expr(g, e.lhs);
+                    print!("); __o.tag == 0 ? __o.val : (");
+                    emit_expr(g, e.rhs);
+                    print!("); })");
+                    return;
+                }
+                // err-form collapses `?!T` to `!T`: Some → Ok, None/Err →
+                // the fallback Err.
+                print!("({ __glide_optres_".concat(m_in).concat("_t __o = ("));
+                emit_expr(g, e.lhs);
+                print!("); __o.tag == 0 ? __glide_ok_".concat(m_in).concat("(__o.val) : __glide_err_").concat(m_in).concat("("));
                 let arg: Expr = e.rhs.args.get(0);
                 emit_expr(g, &arg);
                 print!("); })");

@@ -3875,7 +3875,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             // `??` extracts the inner of an Option/Result/nullable. Result
             // type matches the LHS inner; the RHS supplies the fallback.
             let inner_lt: *Type = lt;
-            if lt != null && (lt.kind == TY_OPTION || lt.kind == TY_RESULT) {
+            if lt != null && (lt.kind == TY_OPTION || lt.kind == TY_RESULT || lt.kind == TY_OPT_RESULT) {
                 inner_lt = lt.inner;
             }
             // An `err(...)` fallback keeps Result shape instead of
@@ -4074,6 +4074,23 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             // Option (`?T`) / Result (`!T`) intrinsic methods. Resolve the
             // return type so chaining + `let x: bool = o.is_some()` type-check.
             let _ors: *Type = strip_ptr(recv_ty);
+            // OptResult (`?!T`) intrinsics: the three-state tag gets the
+            // union of both accessor families (is_some/is_none/is_err) plus
+            // the unwrap family, all yielding the same shapes as ?T / !T.
+            if _ors != null && _ors.kind == TY_OPT_RESULT {
+                if mname.eq("is_some") || mname.eq("is_none") || mname.eq("is_err") {
+                    return ty_named("bool");
+                }
+                if mname.eq("unwrap") || mname.eq("expect") || mname.eq("unwrap_or") || mname.eq("unwrap_or_else") {
+                    if _ors.inner != null {
+                        return _ors.inner;
+                    }
+                    return ty_named("void");
+                }
+                if mname.eq("unwrap_err") {
+                    return ty_named("string");
+                }
+            }
             if _ors != null && (_ors.kind == TY_OPTION || _ors.kind == TY_RESULT) {
                 let iso: bool = _ors.kind == TY_OPTION;
                 if iso && (mname.eq("is_some") || mname.eq("is_none")) || !iso && (mname.eq("is_ok") || mname.eq("is_err")) {
