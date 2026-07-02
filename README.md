@@ -23,9 +23,10 @@ spawn lightweight coroutines and pass data over typed channels. The standard
 library ships networking and a full HTTP stack, crypto, JSON, a package
 manager, a formatter, and a language server.
 
-Glide is plug-and-play. A release is a single self-contained binary that
-carries its own toolchain, so a fresh install builds and cross-compiles offline
-with nothing else to set up.
+Glide is plug-and-play and self-sufficient: the toolchain is a single small
+binary that drives your system's C compiler — no bundled third-party toolchain.
+Building needs any gcc/clang; cross-compiling to another OS/arch needs clang,
+with the target's libraries fetched automatically on first use.
 
 ## Documentation
 

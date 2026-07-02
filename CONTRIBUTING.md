@@ -35,7 +35,7 @@ Use [conventional commit prefixes](https://www.conventionalcommits.org/) — the
 ```
 feat(lsp): add hover for borrow types
 fix(typer): reject `&null` in let initializer
-chore: bump Zig to 0.14.2
+chore: bump openssl to 3.5.8
 docs(tutorial): clarify auto-drop pattern
 refactor(codegen): pull mono dispatch into a helper
 release: 0.2.0

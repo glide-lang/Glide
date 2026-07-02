@@ -12,11 +12,11 @@ the current sources. Any reasonably recent release can compile `main`.
 
 ```bash
 # 1. Download a release binary for your platform and put it on PATH (or use it
-#    by path) from https://github.com/glide-lang/Glide/releases. The archive
-#    bundles its own runtime + toolchain, so it builds offline.
+#    by path) from https://github.com/glide-lang/Glide/releases.
 
-# 2. (if not using the release's bundled toolchain) fetch the C backend toolchain
-bash tools/install_toolchain.sh
+# 2. Make sure a C compiler is installed (any gcc/clang; Xcode CLT on macOS,
+#    MSYS2 ucrt64 gcc on Windows). Cross-compilation additionally needs
+#    clang + lld.
 
 # 3. Use the downloaded compiler to build the real compiler from source
 glide build bootstrap/main.glide -o glide      # `glide` = the downloaded binary
@@ -60,11 +60,10 @@ src/
 tests/              *_test.glide files driven by `glide test`.
 
 tools/
-  install_toolchain.{sh,ps1}  download the bundled C toolchain
   install.{sh,ps1}            install a Glide release archive
   build_release.sh            package the small release artifact
   build_sysroot.sh            build a per-triple sysroot (static deps)
-  gen_embedded_blobs.sh       bake toolchain + stdlib + sysroots into the bundle
+  gen_embedded_blobs.sh       bake stdlib + sysroots into the bundle binary
   dev_install.sh              cross-build + install into ~/.glide for live use
   lsp_smoke.py                end-to-end LSP smoke test
   test_all.sh                 unit + LSP + end-to-end suites
