@@ -3040,7 +3040,13 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     let mut eff_target: string = target;
     if eff_target.eq("") && needs_any_lib {
         let host_triple: string = _host_triple();
-        if !host_triple.eq("") && _is_known_target(host_triple) {
+        // The promoted build compiles with `zig cc`; without zig it can
+        // only die later with a `--target requires zig` error the user
+        // never asked for. Same soft-fail as a flopped sysroot download:
+        // stay on the host-cc path (system cc + system openssl/zlib).
+        // An explicit `--target=` below still hard-errors — there the
+        // user actually requested the cross pipeline.
+        if !host_triple.eq("") && _is_known_target(host_triple) && !_find_zig().eq("") {
             // Auto-install the host sysroot on first use, same as the
             // explicit-target branch below. Soft-fail to the host-cc
             // path if the download flops (offline, etc.) so old setups
