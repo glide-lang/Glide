@@ -1400,6 +1400,12 @@ pub fn mangle_type(t: *Type) -> string {
     if t.kind == TY_OPT_RESULT {
         return "optres_".concat(mangle_type(t.inner));
     }
+    // Each trait gets its own mangle: two `Vector<*dyn A>` / `Vector<*dyn B>`
+    // must monomorphize separately (falling through to "void" collided them
+    // into one instantiation typed after whichever trait registered first).
+    if t.kind == TY_DYN {
+        return "dyn_".concat(t.name);
+    }
     if t.kind == TY_ASSOC {
         return "assoc_".concat(mangle_type(t.inner)).concat("_").concat(t.name);
     }

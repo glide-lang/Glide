@@ -1,0 +1,73 @@
+// Two `Vector<*dyn Trait>` of DIFFERENT traits in one program. Pre-fix,
+// `mangle_type` had no `dyn` case and fell through to "void", so both
+// vectors collided into a single `Vector__void_ptr` instantiation typed
+// after whichever trait registered first — the second vector's push/get
+// then failed in the C compile with a fat-pointer type mismatch.
+import stdlib::testing::*;
+
+pub trait Speaker {
+    fn speak(self: *Self) -> string;
+}
+
+pub trait Mover {
+    fn move_it(self: *Self) -> string;
+}
+
+pub struct Dog { pub name: string }
+pub struct Car { pub brand: string }
+
+impl Speaker for Dog {
+    fn speak(self: *Dog) -> string { return "woof"; }
+}
+
+impl Mover for Car {
+    fn move_it(self: *Car) -> string { return "vroom"; }
+}
+
+// Dog also moves, so ONE concrete type can appear in BOTH dyn vectors.
+impl Mover for Dog {
+    fn move_it(self: *Dog) -> string { return "trot"; }
+}
+
+fn test_two_dyn_vectors_do_not_collide() -> i32 {
+    let speakers: *Vector<*dyn Speaker> = Vector::new();
+    let movers: *Vector<*dyn Mover> = Vector::new();
+    let d: *Dog = Dog { name: "rex" };
+    let c: *Car = Car { brand: "vw" };
+    speakers.push(d as *dyn Speaker);
+    movers.push(c as *dyn Mover);
+    let s: *dyn Speaker = speakers.get(0);
+    let m: *dyn Mover = movers.get(0);
+    assert_str_eq!(s.speak(), "woof");
+    assert_str_eq!(m.move_it(), "vroom");
+    return 0;
+}
+
+fn test_same_struct_in_both_dyn_vectors() -> i32 {
+    let speakers: *Vector<*dyn Speaker> = Vector::new();
+    let movers: *Vector<*dyn Mover> = Vector::new();
+    let d: *Dog = Dog { name: "rex" };
+    speakers.push(d as *dyn Speaker);
+    movers.push(d as *dyn Mover);
+    let s: *dyn Speaker = speakers.get(0);
+    let m: *dyn Mover = movers.get(0);
+    assert_str_eq!(s.speak(), "woof");
+    assert_str_eq!(m.move_it(), "trot");
+    return 0;
+}
+
+fn test_dyn_vector_len_and_iteration() -> i32 {
+    let movers: *Vector<*dyn Mover> = Vector::new();
+    let d: *Dog = Dog { name: "rex" };
+    let c: *Car = Car { brand: "vw" };
+    movers.push(d as *dyn Mover);
+    movers.push(c as *dyn Mover);
+    assert_eq!(movers.len(), 2);
+    let mut all: string = "";
+    for let i: i32 = 0; i < movers.len(); i++ {
+        let m: *dyn Mover = movers.get(i);
+        all = all.concat(m.move_it());
+    }
+    assert_str_eq!(all, "trotvroom");
+    return 0;
+}
