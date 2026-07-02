@@ -1673,6 +1673,63 @@ fn callee_param_ty(g: *CG, e: *Expr, i: i32) -> *Type {
     return null;
 }
 
+// The type params of an EX_CALL's callee (`fn take<T>(...)` -> ["T"]), or
+// null for a non-generic / unknown callee. Mirrors callee_param_ty's
+// resolution so the two can be used together.
+fn callee_type_params(g: *CG, e: *Expr) -> *Vector<string> {
+    if e == null || e.lhs == null {
+        return null;
+    }
+    let callee: *Expr = e.lhs;
+    if callee.kind == EX_IDENT && callee.str_val != null && g.fns.contains(callee.str_val) {
+        let sig: Stmt = g.fns.get(callee.str_val);
+        return sig.type_params;
+    }
+    if callee.kind == EX_MEMBER && callee.lhs != null {
+        let rt: *Type = infer_for_codegen(g, callee.lhs);
+        let stripped: *Type = strip_ptr(rt);
+        if stripped != null && (stripped.kind == TY_NAMED || stripped.kind == TY_GENERIC) {
+            let mname: string = stripped.name.concat("_").concat(callee.field);
+            if g.fns.contains(mname) {
+                let sig: Stmt = g.fns.get(mname);
+                return sig.type_params;
+            }
+            if g.generic_fns.contains(mname) {
+                let sig: Stmt = g.generic_fns.get(mname);
+                return sig.type_params;
+            }
+        }
+    }
+    return null;
+}
+
+// True when `t` mentions one of `params` (a generic template's type-param
+// names) anywhere in its shape — i.e. it is not yet a concrete type.
+fn _ty_mentions_param(t: *Type, params: *Vector<string>) -> bool {
+    if t == null || params == null {
+        return false;
+    }
+    if t.kind == TY_NAMED {
+        for let i: i32 = 0; i < params.len(); i++ {
+            if params.get(i).eq(t.name) {
+                return true;
+            }
+        }
+    }
+    if t.inner != null && _ty_mentions_param(t.inner, params) {
+        return true;
+    }
+    if t.args != null {
+        for let i: i32 = 0; i < t.args.len(); i++ {
+            let a: Type = t.args.get(i);
+            if _ty_mentions_param(&a, params) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // Lower a `vec_of!(a, b, c)` macro node in place into a block-expression that
 // allocates a `*Vector<T>`, pushes each element, and yields it:
 //
@@ -3693,6 +3750,38 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                     let _mpt: *Type = callee_param_ty(g, e, _mi);
                     if _mpt != null && _mpt.kind == TY_POINTER {
                         g.moved_locals.insert(_ma.str_val, true);
+                    }
+                }
+            }
+        }
+        // Ctor in argument position: `take(none())` / `take(err("m"))` have
+        // no payload to infer from, so propagate the callee's declared param
+        // type — same monomorphization as `let x: ?T = none()`. Skips params
+        // that still mention an unsubstituted type param (the payload
+        // inference below covers `take_generic(some(5))`). The rewrite
+        // mutates the shared `lhs` node, so it survives the copy from get().
+        if e.args != null {
+            let _ctp: *Vector<string> = callee_type_params(g, e);
+            for let _ri: i32 = 0; _ri < e.args.len(); _ri++ {
+                let _ra: Expr = e.args.get(_ri);
+                if _ra.kind == EX_CALL && _ra.lhs != null && _ra.lhs.kind == EX_IDENT {
+                    let _rn: string = _ra.lhs.str_val;
+                    if _rn.eq("some") || _rn.eq("none") || _rn.eq("ok") || _rn.eq("err") {
+                        let mut _rpt: *Type = callee_param_ty(g, e, _ri);
+                        // A still-generic param (`Vector<?i32>.push(x: T)`)
+                        // resolves through the receiver's instantiation args
+                        // when they bind every template param.
+                        if _rpt != null && _ty_mentions_param(_rpt, _ctp) && e.lhs.kind == EX_MEMBER && e.lhs.lhs != null {
+                            let _rrt: *Type = strip_ptr(infer_for_codegen(g, e.lhs.lhs));
+                            if _rrt != null && _rrt.kind == TY_GENERIC && _rrt.args != null && _ctp != null && _rrt.args.len() >= _ctp.len() {
+                                _rpt = subst_type(_rpt, _ctp, _rrt.args);
+                            } else {
+                                _rpt = null;
+                            }
+                        }
+                        if _rpt != null && !_ty_mentions_param(_rpt, _ctp) {
+                            _rewrite_opt_ctor(&_ra, _rpt);
+                        }
                     }
                 }
             }

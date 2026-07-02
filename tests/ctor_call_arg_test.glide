@@ -1,0 +1,77 @@
+// some()/none()/ok()/err() passed directly as call arguments. Pre-fix, the
+// payload-less ctors (`none()`, `err(m)`) had no type context in argument
+// position and leaked into the C as undefined calls — they had to be bound
+// to an annotated `let` first. The callee's declared param type now
+// propagates, including through a generic receiver's instantiation args.
+import stdlib::testing::*;
+
+fn take_opt(o: ?i32) -> i32 {
+    if o.is_some() { return o.unwrap(); }
+    return -1;
+}
+
+fn take_res(r: !i32) -> i32 {
+    if r.is_ok() { return r.unwrap(); }
+    return -1;
+}
+
+fn take_optres(o: ?!i32) -> i32 {
+    if o.is_some() { return o.unwrap(); }
+    if o.is_err() { return -2; }
+    return -1;
+}
+
+fn take_two(a: ?i32, b: !string) -> i32 {
+    let mut n: i32 = 0;
+    if a.is_some() { n = n + a.unwrap(); }
+    if b.is_ok() { n = n + 100; }
+    return n;
+}
+
+pub struct Holder { pub v: i32 }
+
+impl Holder {
+    fn accept(self: *Holder, o: ?i32) -> i32 {
+        if o.is_some() { return o.unwrap(); }
+        return -1;
+    }
+}
+
+fn test_ctor_as_plain_fn_arg() -> i32 {
+    assert_eq!(take_opt(some(5)), 5);
+    assert_eq!(take_opt(none()), -1);
+    assert_eq!(take_res(ok(9)), 9);
+    assert_eq!(take_res(err("nope")), -1);
+    return 0;
+}
+
+fn test_ctor_as_method_arg() -> i32 {
+    let h: *Holder = Holder { v: 1 };
+    assert_eq!(h.accept(some(4)), 4);
+    assert_eq!(h.accept(none()), -1);
+    return 0;
+}
+
+fn test_ctor_as_optres_arg() -> i32 {
+    assert_eq!(take_optres(some(6)), 6);
+    assert_eq!(take_optres(none()), -1);
+    assert_eq!(take_optres(err("x")), -2);
+    return 0;
+}
+
+fn test_ctors_in_multiple_arg_slots() -> i32 {
+    assert_eq!(take_two(some(2), err("no")), 2);
+    assert_eq!(take_two(none(), ok("yes")), 100);
+    return 0;
+}
+
+// Generic receiver: `Vector<?i32>.push(x: T)` resolves T from the
+// receiver's instantiation, so a payload-less ctor works there too.
+fn test_ctor_into_generic_container() -> i32 {
+    let v: *Vector<?i32> = Vector::new();
+    v.push(some(3));
+    v.push(none());
+    assert_eq!(v.get(0).unwrap_or(-1), 3);
+    assert_eq!(v.get(1).unwrap_or(-1), -1);
+    return 0;
+}
