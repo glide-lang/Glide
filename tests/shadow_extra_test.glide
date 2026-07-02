@@ -1,0 +1,138 @@
+// Variable shadowing beyond the basics: a `let name = ...` rebinds `name`
+// (possibly to a new type); the RHS reads the OLD binding; a nested-scope
+// shadow is restored on exit; a parameter can be shadowed. Codegen
+// alpha-renames each shadow to a unique C name.
+import stdlib::testing::*;
+
+fn test_shadow_same_type_reads_old() -> i32 {
+    let x = 10;
+    let x = x + 5;   // reads old x (10)
+    let x = x * 2;   // reads old x (15)
+    assert_eq!(x, 30);
+    return 0;
+}
+
+fn test_shadow_changes_type_int_to_string() -> i32 {
+    let v = 65;
+    let v = if v == 65 { "A" } else { "?" };
+    assert_str_eq!(v, "A");
+    return 0;
+}
+
+fn test_shadow_string_to_len() -> i32 {
+    let s = "hello";
+    let s = s.len();     // string -> i32 (usize-ish), reads old s
+    assert_eq!(s as i32, 5);
+    return 0;
+}
+
+fn _opt(n: i32) -> ?i32 {
+    if n > 0 { return some(n * 2); }
+    return none();
+}
+
+fn test_shadow_through_option_unwrap() -> i32 {
+    let r = _opt(21);        // ?i32
+    assert!(r.has);
+    let r = r.val;           // i32 (reads old r)
+    let r = r + 1;           // i32
+    assert_eq!(r, 43);
+    return 0;
+}
+
+fn _mkres(b: bool) -> !string {
+    if b { return ok("done"); }
+    return err("fail");
+}
+
+fn test_shadow_through_result_unwrap() -> i32 {
+    let r = _mkres(true);    // !string
+    assert!(r.ok);
+    let r = r.val;           // string
+    assert_str_eq!(r, "done");
+    return 0;
+}
+
+fn test_shadow_nested_block_restores() -> i32 {
+    let x = 100;
+    let mut inner_seen = 0;
+    {
+        let x = 5;
+        inner_seen = x;
+    }
+    // outer x is back after the block
+    assert_eq!(inner_seen, 5);
+    assert_eq!(x, 100);
+    return 0;
+}
+
+fn test_shadow_in_if_branch_scoped() -> i32 {
+    let x = 1;
+    let mut branch_val = 0;
+    if x == 1 {
+        let x = 9;
+        branch_val = x;
+    }
+    assert_eq!(branch_val, 9);
+    assert_eq!(x, 1);   // outer x untouched
+    return 0;
+}
+
+fn _param_shadow(n: i32) -> i32 {
+    let n = n * 10;     // shadow the parameter, reads the param value
+    let n = n + 1;
+    return n;
+}
+
+fn test_shadow_parameter() -> i32 {
+    assert_eq!(_param_shadow(4), 41);
+    return 0;
+}
+
+fn test_shadow_double_nested_block() -> i32 {
+    let x = 1;
+    let mut seen = 0;
+    {
+        let x = 2;
+        {
+            let x = 3;
+            seen = x;
+        }
+    }
+    assert_eq!(seen, 3);
+    assert_eq!(x, 1);   // outer restored after both blocks
+    return 0;
+}
+
+fn test_shadow_immutable_to_mutable() -> i32 {
+    let n = 5;
+    let mut n = n + 5;   // now mutable
+    n = n + 90;
+    assert_eq!(n, 100);
+    return 0;
+}
+
+fn _double(x: i32) -> i32 { return x * 2; }
+
+fn test_shadow_with_function_result() -> i32 {
+    let v = 7;
+    let v = _double(v);   // reads old v
+    let v = _double(v);
+    assert_eq!(v, 28);
+    return 0;
+}
+
+fn test_shadow_bool_then_int() -> i32 {
+    let flag = true;
+    let flag = if flag { 1 } else { 0 };  // bool -> i32
+    assert_eq!(flag, 1);
+    return 0;
+}
+
+fn test_shadow_multiple_types_in_sequence() -> i32 {
+    let a = "42";         // string
+    let a = a.len();      // i32-ish length = 2
+    let a = a as i32 + 8; // i32
+    assert_eq!(a, 10);
+    return 0;
+}

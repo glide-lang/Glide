@@ -1,0 +1,163 @@
+// `as` casts: numeric widening / narrowing (signed + unsigned), float<->int,
+// char<->int, and pointer casts through `*void`.
+import stdlib::testing::*;
+
+// ----- widening -----
+
+fn test_widen_i8_to_i64() -> i32 {
+    let a: i8 = 0 - 5;
+    let b: i64 = a as i64;
+    assert_eq!(b as i32, 0 - 5);
+    return 0;
+}
+
+fn test_widen_i32_to_i64() -> i32 {
+    let a: i32 = 123456;
+    let b: i64 = a as i64;
+    assert_eq!(b as i32, 123456);
+    return 0;
+}
+
+fn test_widen_u8_to_u32() -> i32 {
+    let a: u8 = 200 as u8;
+    let b: u32 = a as u32;
+    assert_eq!(b as i32, 200);
+    return 0;
+}
+
+fn test_widen_preserves_positive() -> i32 {
+    let a: i16 = 1000 as i16;
+    let b: i64 = a as i64;
+    assert_eq!(b as i32, 1000);
+    return 0;
+}
+
+// ----- narrowing / truncation -----
+
+fn test_narrow_i32_to_u8_wraps() -> i32 {
+    let n: i32 = 300;
+    let b: u8 = n as u8;
+    assert_eq!(b as i32, 44);
+    return 0;
+}
+
+fn test_narrow_u16_to_u8() -> i32 {
+    let n: u16 = 258 as u16;
+    let b: u8 = n as u8;
+    assert_eq!(b as i32, 2);
+    return 0;
+}
+
+fn test_narrow_i64_to_i32() -> i32 {
+    let big: i64 = 4294967297 as i64;   // 2^32 + 1
+    let small: i32 = big as i32;
+    assert_eq!(small, 1);
+    return 0;
+}
+
+// ----- signed / unsigned reinterpretation -----
+
+fn test_negative_to_unsigned() -> i32 {
+    let n: i32 = 0 - 1;
+    let u: u8 = n as u8;
+    assert_eq!(u as i32, 255);
+    return 0;
+}
+
+fn test_unsigned_high_bit_to_signed() -> i32 {
+    let u: u8 = 200 as u8;
+    let s: i8 = u as i8;
+    // 200 as i8 = 200 - 256 = -56
+    assert_eq!(s as i32, 0 - 56);
+    return 0;
+}
+
+// ----- float <-> int -----
+
+fn test_float_to_int_truncates() -> i32 {
+    let f: f64 = 3.9;
+    let i: i32 = f as i32;
+    assert_eq!(i, 3);
+    return 0;
+}
+
+fn test_negative_float_to_int_truncates_toward_zero() -> i32 {
+    let f: f64 = 0.0 - 2.7;
+    let i: i32 = f as i32;
+    assert_eq!(i, 0 - 2);
+    return 0;
+}
+
+fn test_int_to_float() -> i32 {
+    let i: i32 = 7;
+    let f: f64 = i as f64;
+    let half: f64 = f / 2.0;
+    assert!(half > 3.4);
+    assert!(half < 3.6);
+    return 0;
+}
+
+fn test_f32_to_f64_roundtrip() -> i32 {
+    let a: f32 = 1.5 as f32;
+    let b: f64 = a as f64;
+    assert!(b > 1.49);
+    assert!(b < 1.51);
+    return 0;
+}
+
+// ----- char <-> int -----
+
+fn test_char_to_int() -> i32 {
+    let c: char = 'A';
+    assert_eq!(c as i32, 65);
+    return 0;
+}
+
+fn test_int_to_char() -> i32 {
+    let n: i32 = 97;
+    let c: char = n as char;
+    assert_eq!(c as i32, 97);
+    return 0;
+}
+
+// ----- pointer casts -----
+
+fn test_pointer_roundtrip_through_void() -> i32 {
+    let p: *u8 = malloc(4 as usize) as *u8;
+    p[0] = 65 as u8;
+    p[1] = 66 as u8;
+    let opaque: *void = p as *void;
+    let back: *u8 = opaque as *u8;
+    assert_eq!(back[0] as i32, 65);
+    assert_eq!(back[1] as i32, 66);
+    free(p as *void);
+    return 0;
+}
+
+fn test_usize_cast_for_alloc() -> i32 {
+    let n: i32 = 8;
+    let p: *u8 = malloc(n as usize) as *u8;
+    p[0] = 1 as u8;
+    p[7] = 9 as u8;
+    assert_eq!(p[0] as i32, 1);
+    assert_eq!(p[7] as i32, 9);
+    free(p as *void);
+    return 0;
+}
+
+// ----- chained casts -----
+
+fn test_chained_casts() -> i32 {
+    let f: f64 = 65.7;
+    let c: char = (f as i32) as char;
+    assert_eq!(c as i32, 65);
+    return 0;
+}
+
+fn test_narrow_then_widen_loses_high_bits() -> i32 {
+    let original: i32 = 513;          // 0x201
+    let narrowed: u8 = original as u8; // 0x01 = 1
+    let widened: i32 = narrowed as i32;
+    assert_eq!(widened, 1);
+    return 0;
+}

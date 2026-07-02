@@ -1,0 +1,231 @@
+// Enums (with and without payloads) and `match`. Match arms use the bare
+// variant name (no enum prefix); a payload binds positionally as `V(a, b)`;
+// `_` is the catch-all. As an expression each arm is a block ending in
+// `return <expr>;`. Also covers matching option/result variants.
+import stdlib::testing::*;
+
+enum Dir { North, South, East, West }
+
+enum Shape { Circle(i32), Rect(i32, i32), Dot }
+
+enum Val { I(i32), S(string), Nil }
+
+struct Tagged { tag: Shape, id: i32 }
+
+// ----- payload-free enums -----
+
+fn _dir_dx(d: Dir) -> i32 {
+    match d {
+        East => { return 1; }
+        West => { return 0 - 1; }
+        _ => { return 0; }
+    }
+    return 99;
+}
+
+fn test_enum_no_payload_all_arms() -> i32 {
+    let n: Dir = Dir::North;
+    let s: Dir = Dir::South;
+    let e: Dir = Dir::East;
+    let w: Dir = Dir::West;
+    assert_eq!(_dir_dx(e), 1);
+    assert_eq!(_dir_dx(w), 0 - 1);
+    assert_eq!(_dir_dx(n), 0);
+    assert_eq!(_dir_dx(s), 0);
+    return 0;
+}
+
+fn test_enum_wildcard_catch_all() -> i32 {
+    let d: Dir = Dir::North;
+    let mut hit: i32 = 0;
+    match d {
+        East => { hit = 1; }
+        _ => { hit = 2; }
+    }
+    assert_eq!(hit, 2);
+    return 0;
+}
+
+// ----- enums with payloads -----
+
+fn _area(s: Shape) -> i32 {
+    match s {
+        Circle(r) => { return 3 * r * r; }
+        Rect(w, h) => { return w * h; }
+        Dot => { return 0; }
+    }
+    return 0 - 1;
+}
+
+fn test_payload_single_field() -> i32 {
+    let c: Shape = Shape::Circle(2);
+    assert_eq!(_area(c), 12);
+    return 0;
+}
+
+fn test_payload_multiple_fields() -> i32 {
+    let r: Shape = Shape::Rect(3, 4);
+    assert_eq!(_area(r), 12);
+    return 0;
+}
+
+fn test_payload_free_variant_in_mixed_enum() -> i32 {
+    let d: Shape = Shape::Dot;
+    assert_eq!(_area(d), 0);
+    return 0;
+}
+
+fn _kind(v: Val) -> string {
+    match v {
+        I(n) => { return "int"; }
+        S(s) => { return "str"; }
+        Nil => { return "nil"; }
+    }
+    return "?";
+}
+
+fn test_mixed_payload_types() -> i32 {
+    let a: Val = Val::I(7);
+    let b: Val = Val::S("hi");
+    let c: Val = Val::Nil;
+    assert_str_eq!(_kind(a), "int");
+    assert_str_eq!(_kind(b), "str");
+    assert_str_eq!(_kind(c), "nil");
+    return 0;
+}
+
+fn test_payload_binding_is_usable() -> i32 {
+    let v: Val = Val::I(21);
+    let mut doubled: i32 = 0;
+    match v {
+        I(n) => { doubled = n * 2; }
+        S(s) => { doubled = 0 - 1; }
+        Nil => { doubled = 0; }
+    }
+    assert_eq!(doubled, 42);
+    return 0;
+}
+
+fn test_payload_string_binding() -> i32 {
+    let v: Val = Val::S("glide");
+    let mut got: string = "";
+    match v {
+        I(n) => { got = "num"; }
+        S(s) => { got = s; }
+        Nil => { got = "nil"; }
+    }
+    assert_str_eq!(got, "glide");
+    return 0;
+}
+
+// ----- match as an expression -----
+
+fn test_match_as_expression() -> i32 {
+    let s: Shape = Shape::Rect(5, 6);
+    let n: i32 = match s {
+        Circle(r) => { return r; }
+        Rect(w, h) => { return w + h; }
+        Dot => { return 0; }
+    };
+    assert_eq!(n, 11);
+    return 0;
+}
+
+fn test_match_expr_wildcard() -> i32 {
+    let d: Dir = Dir::West;
+    let label: string = match d {
+        North => { return "n"; }
+        _ => { return "other"; }
+    };
+    assert_str_eq!(label, "other");
+    return 0;
+}
+
+// ----- nested match -----
+
+fn test_nested_match() -> i32 {
+    let outer: Val = Val::I(3);
+    let inner: Shape = Shape::Circle(4);
+    let mut total: i32 = 0;
+    match outer {
+        I(n) => {
+            match inner {
+                Circle(r) => { total = n + r; }
+                _ => { total = n; }
+            }
+        }
+        _ => { total = 0; }
+    }
+    assert_eq!(total, 7);
+    return 0;
+}
+
+// ----- enums as struct fields and in collections -----
+
+fn _mk_tagged(sh: Shape, id: i32) -> *Tagged {
+    let t: *Tagged = Tagged { tag: sh, id: id };
+    return t;
+}
+
+fn test_enum_in_struct_field() -> i32 {
+    let sh: Shape = Shape::Rect(2, 8);
+    let t: *Tagged = _mk_tagged(sh, 99);
+    assert_eq!(_area(t.tag), 16);
+    assert_eq!(t.id, 99);
+    return 0;
+}
+
+fn test_enum_in_vector() -> i32 {
+    let v: *Vector<Shape> = Vector::new();
+    v.push(Shape::Circle(1));
+    v.push(Shape::Rect(2, 3));
+    v.push(Shape::Dot);
+    let mut sum: i32 = 0;
+    for let i: i32 = 0; i < v.len(); i++ {
+        sum = sum + _area(v.get(i));
+    }
+    assert_eq!(sum, 9);
+    return 0;
+}
+
+// ----- match on built-in option / result -----
+
+fn _opt_or(o: ?i32, d: i32) -> i32 {
+    match o {
+        some(x) => { return x; }
+        none() => { return d; }
+    }
+    return d;
+}
+
+fn test_match_option_some() -> i32 {
+    let o: ?i32 = some(15);
+    assert_eq!(_opt_or(o, 0), 15);
+    return 0;
+}
+
+fn test_match_option_none() -> i32 {
+    let o: ?i32 = none();
+    assert_eq!(_opt_or(o, 7), 7);
+    return 0;
+}
+
+fn _res_val(r: !i32) -> i32 {
+    match r {
+        ok(v) => { return v; }
+        err(e) => { return 0 - 1; }
+    }
+    return 0 - 2;
+}
+
+fn test_match_result_ok() -> i32 {
+    let r: !i32 = ok(88);
+    assert_eq!(_res_val(r), 88);
+    return 0;
+}
+
+fn test_match_result_err() -> i32 {
+    let r: !i32 = err("nope");
+    assert_eq!(_res_val(r), 0 - 1);
+    return 0;
+}

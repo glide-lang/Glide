@@ -1,0 +1,186 @@
+// `defer expr;` runs at function exit in LIFO order. `defer_err expr;` runs
+// only on error-return paths (`return err(...)` and `?` propagation), not on
+// success. Effects are observed through a borrowed counter/log so a caller can
+// assert what the deferred code did after the callee returns.
+import stdlib::testing::*;
+
+struct Ctr { n: i32 }
+
+fn _mk_ctr() -> *Ctr { let c: *Ctr = Ctr { n: 0 }; return c; }
+fn _bump(c: &mut Ctr) { c.n = c.n + 1; }
+fn _push(v: &mut Vector<i32>, x: i32) { v.push(x); }
+
+// ----- plain defer -----
+
+fn _one_defer(c: &mut Ctr) { defer _bump(c); }
+
+fn test_defer_runs_at_exit() -> i32 {
+    let c: *Ctr = _mk_ctr();
+    _one_defer(c);
+    assert_eq!(c.n, 1);
+    return 0;
+}
+
+fn _three_defers(c: &mut Ctr) {
+    defer _bump(c);
+    defer _bump(c);
+    defer _bump(c);
+    _bump(c);
+}
+
+fn test_defer_multiple() -> i32 {
+    let c: *Ctr = _mk_ctr();
+    _three_defers(c);
+    assert_eq!(c.n, 4);
+    return 0;
+}
+
+fn _ordered(v: &mut Vector<i32>) {
+    defer _push(v, 1);
+    defer _push(v, 2);
+    defer _push(v, 3);
+    _push(v, 0);
+}
+
+fn test_defer_lifo_order() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    _ordered(v);
+    // body pushes 0 first, then defers fire 3, 2, 1 (LIFO).
+    assert_eq!(v.get(0), 0);
+    assert_eq!(v.get(1), 3);
+    assert_eq!(v.get(2), 2);
+    assert_eq!(v.get(3), 1);
+    return 0;
+}
+
+fn _early_return(c: &mut Ctr, flag: bool) {
+    defer _bump(c);
+    if flag { return; }
+    _bump(c);
+}
+
+fn test_defer_runs_on_early_return() -> i32 {
+    let c: *Ctr = _mk_ctr();
+    _early_return(c, true);
+    // only the deferred bump ran (early return skipped the body bump)
+    assert_eq!(c.n, 1);
+    return 0;
+}
+
+fn test_defer_runs_on_normal_return() -> i32 {
+    let c: *Ctr = _mk_ctr();
+    _early_return(c, false);
+    // body bump + deferred bump
+    assert_eq!(c.n, 2);
+    return 0;
+}
+
+fn _inner(c: &mut Ctr) { defer _bump(c); _bump(c); }
+
+fn test_defer_across_independent_calls() -> i32 {
+    let c: *Ctr = _mk_ctr();
+    _inner(c);   // body bump + deferred bump
+    _inner(c);   // again
+    assert_eq!(c.n, 4);
+    return 0;
+}
+
+fn _outer(c: &mut Ctr) { defer _bump(c); _inner(c); _bump(c); }
+
+fn test_defer_nested_calls() -> i32 {
+    let c: *Ctr = _mk_ctr();
+    _outer(c);   // inner (2) + outer body (1) + outer defer (1)
+    assert_eq!(c.n, 4);
+    return 0;
+}
+
+// ----- defer_err -----
+
+fn _de_ok(c: &mut Ctr) -> !i32 {
+    defer_err _bump(c);
+    return ok(1);
+}
+
+fn _de_err(c: &mut Ctr) -> !i32 {
+    defer_err _bump(c);
+    return err("boom");
+}
+
+fn test_defer_err_skipped_on_ok() -> i32 {
+    let c: *Ctr = _mk_ctr();
+    let r: !i32 = _de_ok(c);
+    assert!(r.ok);
+    assert_eq!(c.n, 0);
+    return 0;
+}
+
+fn test_defer_err_fires_on_err() -> i32 {
+    let c: *Ctr = _mk_ctr();
+    let r: !i32 = _de_err(c);
+    assert!(!r.ok);
+    assert_eq!(c.n, 1);
+    return 0;
+}
+
+fn _inner_fail() -> !i32 { return err("inner"); }
+
+fn _de_propagate(c: &mut Ctr) -> !i32 {
+    defer_err _bump(c);
+    let v: i32 = _inner_fail()?;
+    return ok(v);
+}
+
+fn test_defer_err_fires_on_propagation() -> i32 {
+    let c: *Ctr = _mk_ctr();
+    let r: !i32 = _de_propagate(c);
+    assert!(!r.ok);
+    assert_eq!(c.n, 1);
+    return 0;
+}
+
+fn _inner_ok() -> !i32 { return ok(5); }
+
+fn _de_propagate_ok(c: &mut Ctr) -> !i32 {
+    defer_err _bump(c);
+    let v: i32 = _inner_ok()?;
+    return ok(v + 1);
+}
+
+fn test_defer_err_skipped_when_propagation_succeeds() -> i32 {
+    let c: *Ctr = _mk_ctr();
+    let r: !i32 = _de_propagate_ok(c);
+    assert!(r.ok);
+    assert_eq!(r.val, 6);
+    assert_eq!(c.n, 0);
+    return 0;
+}
+
+// ----- defer and defer_err together -----
+
+fn _both_err(c: &mut Ctr) -> !i32 {
+    defer _bump(c);       // always
+    defer_err _bump(c);   // only on error
+    return err("x");
+}
+
+fn _both_ok(c: &mut Ctr) -> !i32 {
+    defer _bump(c);       // always
+    defer_err _bump(c);   // only on error
+    return ok(0);
+}
+
+fn test_defer_and_defer_err_on_err() -> i32 {
+    let c: *Ctr = _mk_ctr();
+    let r: !i32 = _both_err(c);
+    assert!(!r.ok);
+    assert_eq!(c.n, 2);
+    return 0;
+}
+
+fn test_defer_and_defer_err_on_ok() -> i32 {
+    let c: *Ctr = _mk_ctr();
+    let r: !i32 = _both_ok(c);
+    assert!(r.ok);
+    assert_eq!(c.n, 1);
+    return 0;
+}

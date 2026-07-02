@@ -1,0 +1,137 @@
+// `if` as an expression (both branches a single expression, `else` required)
+// and block-as-expression (`{ ...; return v; }` yields v). Codegen lowers the
+// if-expression to a C ternary.
+import stdlib::testing::*;
+
+fn test_if_expr_string() -> i32 {
+    let x: i32 = 5;
+    let label: string = if x > 3 { "big" } else { "small" };
+    assert_str_eq!(label, "big");
+    return 0;
+}
+
+fn test_if_expr_string_else_branch() -> i32 {
+    let x: i32 = 1;
+    let label: string = if x > 3 { "big" } else { "small" };
+    assert_str_eq!(label, "small");
+    return 0;
+}
+
+fn test_if_expr_int() -> i32 {
+    let x: i32 = 4;
+    let v: i32 = if x > 0 { 10 } else { 0 - 10 };
+    assert_eq!(v, 10);
+    return 0;
+}
+
+fn test_if_expr_in_arithmetic() -> i32 {
+    let x: i32 = 2;
+    let r: i32 = (if x > 0 { 10 } else { 0 - 10 }) * 2;
+    assert_eq!(r, 20);
+    return 0;
+}
+
+fn test_if_expr_else_if_chain() -> i32 {
+    let x: i32 = 0;
+    let category: string =
+        if x < 0 { "negative" } else if x == 0 { "zero" } else { "positive" };
+    assert_str_eq!(category, "zero");
+    return 0;
+}
+
+fn test_if_expr_else_if_chain_last() -> i32 {
+    let x: i32 = 42;
+    let category: string =
+        if x < 0 { "negative" } else if x == 0 { "zero" } else { "positive" };
+    assert_str_eq!(category, "positive");
+    return 0;
+}
+
+fn test_if_expr_bool_result() -> i32 {
+    let n: i32 = 8;
+    let even: bool = if n % 2 == 0 { true } else { false };
+    assert!(even);
+    return 0;
+}
+
+fn test_if_expr_nested() -> i32 {
+    let a: i32 = 3;
+    let b: i32 = 7;
+    let max: i32 = if a > b { a } else { if b > a { b } else { a } };
+    assert_eq!(max, 7);
+    return 0;
+}
+
+fn _classify(n: i32) -> string {
+    return if n < 10 { "low" } else if n < 100 { "mid" } else { "high" };
+}
+
+fn test_if_expr_as_return() -> i32 {
+    assert_str_eq!(_classify(5), "low");
+    assert_str_eq!(_classify(50), "mid");
+    assert_str_eq!(_classify(500), "high");
+    return 0;
+}
+
+fn _abs(n: i32) -> i32 {
+    return if n < 0 { 0 - n } else { n };
+}
+
+fn test_if_expr_return_arithmetic() -> i32 {
+    assert_eq!(_abs(0 - 9), 9);
+    assert_eq!(_abs(9), 9);
+    return 0;
+}
+
+fn test_if_expr_as_argument() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    let flag: bool = true;
+    v.push(if flag { 100 } else { 200 });
+    assert_eq!(v.get(0), 100);
+    return 0;
+}
+
+// ----- block as expression -----
+
+fn test_block_expr_simple() -> i32 {
+    let n: i32 = { return 42; };
+    assert_eq!(n, 42);
+    return 0;
+}
+
+fn test_block_expr_multi_statement() -> i32 {
+    let n: i32 = {
+        let a: i32 = 5;
+        let b: i32 = 6;
+        return a * b;
+    };
+    assert_eq!(n, 30);
+    return 0;
+}
+
+fn test_block_expr_string() -> i32 {
+    let s: string = {
+        let base: string = "gli";
+        return base.concat("de");
+    };
+    assert_str_eq!(s, "glide");
+    return 0;
+}
+
+fn test_nested_block_expr() -> i32 {
+    let n: i32 = {
+        let a: i32 = { let x: i32 = 3; return x + 1; };
+        return a * 10;
+    };
+    assert_eq!(n, 40);
+    return 0;
+}
+
+fn test_if_expr_choosing_computation() -> i32 {
+    let use_sum: bool = false;
+    let a: i32 = 4;
+    let b: i32 = 5;
+    let r: i32 = if use_sum { a + b } else { a * b };
+    assert_eq!(r, 20);
+    return 0;
+}

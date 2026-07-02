@@ -1,0 +1,154 @@
+// Anonymous function expressions (`fn(x: i32) -> i32 { ... }`) and function
+// pointers (`fn(A) -> R`). Anonymous fns are plain function pointers passed to
+// higher-order functions; they take their inputs as parameters (no captures).
+import stdlib::testing::*;
+import stdlib::iter::*;
+
+// ----- higher-order helpers taking fn pointers -----
+
+fn _apply(f: fn(i32) -> i32, x: i32) -> i32 { return f(x); }
+fn _apply2(f: fn(i32, i32) -> i32, a: i32, b: i32) -> i32 { return f(a, b); }
+
+fn _map_i(v: *Vector<i32>, f: fn(i32) -> i32) -> *Vector<i32> {
+    let out: *Vector<i32> = Vector::new();
+    for let i: i32 = 0; i < v.len(); i++ { out.push(f(v.get(i))); }
+    return out;
+}
+
+fn _filter_i(v: *Vector<i32>, p: fn(i32) -> bool) -> *Vector<i32> {
+    let out: *Vector<i32> = Vector::new();
+    for let i: i32 = 0; i < v.len(); i++ {
+        let x: i32 = v.get(i);
+        if p(x) { out.push(x); }
+    }
+    return out;
+}
+
+fn _fold_i(v: *Vector<i32>, init: i32, f: fn(i32, i32) -> i32) -> i32 {
+    let mut acc: i32 = init;
+    for let i: i32 = 0; i < v.len(); i++ { acc = f(acc, v.get(i)); }
+    return acc;
+}
+
+fn _count_if(v: *Vector<i32>, p: fn(i32) -> bool) -> i32 {
+    let mut n: i32 = 0;
+    for let i: i32 = 0; i < v.len(); i++ {
+        if p(v.get(i)) { n = n + 1; }
+    }
+    return n;
+}
+
+// named fns for the "pass a named fn" cases
+fn _triple(x: i32) -> i32 { return x * 3; }
+fn _is_odd(x: i32) -> bool { return x % 2 == 1; }
+
+// ----- tests -----
+
+fn test_anon_fn_apply() -> i32 {
+    let r: i32 = _apply(fn(x: i32) -> i32 { return x + 100; }, 5);
+    assert_eq!(r, 105);
+    return 0;
+}
+
+fn test_anon_fn_two_params() -> i32 {
+    let r: i32 = _apply2(fn(a: i32, b: i32) -> i32 { return a * b; }, 6, 7);
+    assert_eq!(r, 42);
+    return 0;
+}
+
+fn test_anon_fn_map() -> i32 {
+    let v: *Vector<i32> = vec_of!(1, 2, 3, 4);
+    let m: *Vector<i32> = _map_i(v, fn(x: i32) -> i32 { return x * x; });
+    assert_eq!(m.len(), 4);
+    assert_eq!(m.get(0), 1);
+    assert_eq!(m.get(3), 16);
+    return 0;
+}
+
+fn test_anon_fn_filter() -> i32 {
+    let v: *Vector<i32> = vec_of!(1, 2, 3, 4, 5, 6);
+    let evens: *Vector<i32> = _filter_i(v, fn(x: i32) -> bool { return x % 2 == 0; });
+    assert_eq!(evens.len(), 3);
+    assert_eq!(evens.get(0), 2);
+    assert_eq!(evens.get(2), 6);
+    return 0;
+}
+
+fn test_anon_fn_fold_sum() -> i32 {
+    let v: *Vector<i32> = vec_of!(1, 2, 3, 4, 5);
+    let total: i32 = _fold_i(v, 0, fn(acc: i32, x: i32) -> i32 { return acc + x; });
+    assert_eq!(total, 15);
+    return 0;
+}
+
+fn test_anon_fn_fold_product() -> i32 {
+    let v: *Vector<i32> = vec_of!(1, 2, 3, 4);
+    let prod: i32 = _fold_i(v, 1, fn(acc: i32, x: i32) -> i32 { return acc * x; });
+    assert_eq!(prod, 24);
+    return 0;
+}
+
+fn test_anon_fn_count_if() -> i32 {
+    let v: *Vector<i32> = vec_of!(10, 15, 20, 25, 30);
+    let c: i32 = _count_if(v, fn(x: i32) -> bool { return x > 18; });
+    assert_eq!(c, 3);
+    return 0;
+}
+
+fn test_pass_named_fn() -> i32 {
+    let r: i32 = _apply(_triple, 4);
+    assert_eq!(r, 12);
+    return 0;
+}
+
+fn test_named_fn_predicate() -> i32 {
+    let v: *Vector<i32> = vec_of!(1, 2, 3, 4, 5);
+    assert_eq!(_count_if(v, _is_odd), 3);
+    return 0;
+}
+
+fn test_fn_pointer_in_let() -> i32 {
+    let f: fn(i32) -> i32 = _triple;
+    assert_eq!(f(5), 15);
+    return 0;
+}
+
+fn test_fn_pointer_reassigned() -> i32 {
+    let mut f: fn(i32) -> i32 = _triple;
+    assert_eq!(f(2), 6);
+    f = fn(x: i32) -> i32 { return x + 1; };
+    assert_eq!(f(2), 3);
+    return 0;
+}
+
+fn test_anon_returns_bool() -> i32 {
+    let pred: fn(i32) -> bool = fn(x: i32) -> bool { return x >= 0; };
+    assert!(pred(5));
+    assert!(!pred(0 - 3));
+    return 0;
+}
+
+fn test_anon_fn_iter_map_stdlib() -> i32 {
+    let v: *Vector<i32> = iter_range(1, 5);
+    let m: *Vector<i32> = iter_map(v, fn(x: i32) -> i32 { return x + 10; });
+    assert_eq!(m.get(0), 11);
+    assert_eq!(m.get(3), 14);
+    return 0;
+}
+
+fn test_anon_fn_iter_filter_stdlib() -> i32 {
+    let v: *Vector<i32> = iter_range(0, 10);
+    let big: *Vector<i32> = iter_filter(v, fn(x: i32) -> bool { return x >= 5; });
+    assert_eq!(big.len(), 5);
+    assert_eq!(big.get(0), 5);
+    return 0;
+}
+
+fn test_compose_map_then_filter() -> i32 {
+    let v: *Vector<i32> = vec_of!(1, 2, 3, 4, 5);
+    let squared: *Vector<i32> = _map_i(v, fn(x: i32) -> i32 { return x * x; });
+    let big: *Vector<i32> = _filter_i(squared, fn(x: i32) -> bool { return x > 5; });
+    assert_eq!(big.len(), 3);
+    assert_eq!(big.get(0), 9);
+    return 0;
+}

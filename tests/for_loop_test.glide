@@ -1,0 +1,185 @@
+// `for` in all three shapes: C-style (`for init; cond; step`), range
+// (`for i in a..b`), and collection iteration (`for x in vec`). Plus
+// break / continue and nesting.
+import stdlib::testing::*;
+
+// ----- C-style -----
+
+fn test_cstyle_sum() -> i32 {
+    let mut sum: i32 = 0;
+    for let i: i32 = 0; i < 5; i++ { sum = sum + i; }
+    assert_eq!(sum, 10);
+    return 0;
+}
+
+fn test_cstyle_count_iterations() -> i32 {
+    let mut n: i32 = 0;
+    for let i: i32 = 0; i < 100; i++ { n = n + 1; }
+    assert_eq!(n, 100);
+    return 0;
+}
+
+fn test_cstyle_descending() -> i32 {
+    let mut seq: *Vector<i32> = Vector::new();
+    for let i: i32 = 3; i > 0; i = i - 1 { seq.push(i); }
+    assert_eq!(seq.get(0), 3);
+    assert_eq!(seq.get(1), 2);
+    assert_eq!(seq.get(2), 1);
+    assert_eq!(seq.len(), 3);
+    return 0;
+}
+
+fn test_cstyle_step_by_two() -> i32 {
+    let mut sum: i32 = 0;
+    for let i: i32 = 0; i < 10; i = i + 2 { sum = sum + i; }
+    assert_eq!(sum, 20);
+    return 0;
+}
+
+fn test_cstyle_never_runs() -> i32 {
+    let mut n: i32 = 0;
+    for let i: i32 = 0; i < 0; i++ { n = n + 1; }
+    assert_eq!(n, 0);
+    return 0;
+}
+
+// ----- range for -----
+
+fn test_range_sum() -> i32 {
+    let mut sum: i32 = 0;
+    for i in 0..5 { sum = sum + i; }
+    assert_eq!(sum, 10);
+    return 0;
+}
+
+fn test_range_is_half_open() -> i32 {
+    let mut last: i32 = 0 - 1;
+    let mut count: i32 = 0;
+    for i in 0..4 { last = i; count = count + 1; }
+    assert_eq!(count, 4);
+    assert_eq!(last, 3);
+    return 0;
+}
+
+fn test_range_with_variables() -> i32 {
+    let a: i32 = 2;
+    let b: i32 = 7;
+    let mut sum: i32 = 0;
+    for i in a..b { sum = sum + i; }
+    assert_eq!(sum, 20);
+    return 0;
+}
+
+fn test_range_empty_when_equal() -> i32 {
+    let mut n: i32 = 0;
+    for i in 5..5 { n = n + 1; }
+    assert_eq!(n, 0);
+    return 0;
+}
+
+fn test_range_empty_when_reversed() -> i32 {
+    let mut n: i32 = 0;
+    for i in 7..3 { n = n + 1; }
+    assert_eq!(n, 0);
+    return 0;
+}
+
+// ----- collection iteration -----
+
+fn test_for_in_vector_ints() -> i32 {
+    let v: *Vector<i32> = vec_of!(10, 20, 30, 40);
+    let mut sum: i32 = 0;
+    for x in v { sum = sum + x; }
+    assert_eq!(sum, 100);
+    return 0;
+}
+
+fn test_for_in_vector_strings() -> i32 {
+    let v: *Vector<string> = vec_of!("a", "b", "c");
+    let mut joined: string = "";
+    for s in v { joined = joined.concat(s); }
+    assert_str_eq!(joined, "abc");
+    return 0;
+}
+
+fn test_for_in_empty_vector() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    let mut n: i32 = 0;
+    for x in v { n = n + 1; }
+    assert_eq!(n, 0);
+    return 0;
+}
+
+// ----- break / continue -----
+
+fn test_break_in_cstyle() -> i32 {
+    let mut sum: i32 = 0;
+    for let i: i32 = 0; i < 100; i++ {
+        if i == 5 { break; }
+        sum = sum + i;
+    }
+    assert_eq!(sum, 10);
+    return 0;
+}
+
+fn test_continue_in_cstyle() -> i32 {
+    let mut sum: i32 = 0;
+    for let i: i32 = 0; i < 10; i++ {
+        if i % 2 == 0 { continue; }
+        sum = sum + i;
+    }
+    assert_eq!(sum, 25);
+    return 0;
+}
+
+fn test_break_in_range() -> i32 {
+    let mut last: i32 = 0 - 1;
+    for i in 0..1000 {
+        if i == 3 { break; }
+        last = i;
+    }
+    assert_eq!(last, 2);
+    return 0;
+}
+
+fn test_continue_in_range() -> i32 {
+    let mut count: i32 = 0;
+    for i in 0..10 {
+        if i < 5 { continue; }
+        count = count + 1;
+    }
+    assert_eq!(count, 5);
+    return 0;
+}
+
+fn test_break_in_collection() -> i32 {
+    let v: *Vector<i32> = vec_of!(1, 2, 3, 4, 5);
+    let mut sum: i32 = 0;
+    for x in v {
+        if x > 3 { break; }
+        sum = sum + x;
+    }
+    assert_eq!(sum, 6);
+    return 0;
+}
+
+// ----- nesting -----
+
+fn test_nested_for() -> i32 {
+    let mut count: i32 = 0;
+    for i in 0..3 {
+        for j in 0..4 { count = count + 1; }
+    }
+    assert_eq!(count, 12);
+    return 0;
+}
+
+fn test_nested_for_multiplication_table() -> i32 {
+    let mut sum: i32 = 0;
+    for let i: i32 = 1; i <= 3; i++ {
+        for let j: i32 = 1; j <= 3; j++ { sum = sum + i * j; }
+    }
+    // (1+2+3) * (1+2+3) = 36
+    assert_eq!(sum, 36);
+    return 0;
+}
