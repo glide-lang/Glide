@@ -1,0 +1,45 @@
+// TLS 1.3 handshake messages: ClientHello construction (round-tripped
+// through the handshake reader and structurally checked) and ServerHello
+// parsing against a real ServerHello captured from a live TLS 1.3 server
+// (Cloudflare). The live end-to-end negotiation is exercised out of band.
+import stdlib::testing::*;
+import stdlib::net::tls13::handshake::*;
+import stdlib::hex::*;
+
+fn _h(s: string) -> string { return hex_decode(s).unwrap(); }
+
+fn test_client_hello_is_well_formed() -> i32 {
+    let pk: string = _h("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20");
+    let alpn: *Vector<string> = Vector::new();
+    alpn.push("h2");
+    let ch: !string = build_client_hello("example.com", pk, alpn, _h("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"));
+    assert!(ch.is_ok());
+    // parses as a handshake message of type client_hello
+    let m: !*HsMessage = read_handshake(ch.unwrap(), 0);
+    assert!(m.is_ok());
+    assert_eq!(m.unwrap().msg_type, HS_CLIENT_HELLO);
+    // body begins with legacy_version 0x0303 then the 32-byte random
+    let body: string = m.unwrap().body;
+    assert_eq!(body.at(0).to_int() & 255, 3);
+    assert_eq!(body.at(1).to_int() & 255, 3);
+    return 0;
+}
+
+// A real ServerHello (from Cloudflare): AES-128-GCM, X25519 key share.
+fn test_parse_real_server_hello() -> i32 {
+    let sh_body: string = _h("03030fff54f5e9c67feeba6617eac6324071de1fc3ead6b007be26a3df5f627c446100130100002e00330024001d002048d5226893970673f720d5972e312f727976d53818920388d92040c16d86453d002b00020304");
+    let sh: !*ServerHello = parse_server_hello(sh_body);
+    assert!(sh.is_ok());
+    assert_eq!(sh.unwrap().cipher_suite, TLS_AES_128_GCM_SHA256);
+    assert_eq!(sh.unwrap().key_share_group, GROUP_X25519);
+    assert_eq!(sh.unwrap().server_key_share.len(), 32);
+    assert!(!sh.unwrap().is_hello_retry);
+    return 0;
+}
+
+fn test_read_handshake_bounds() -> i32 {
+    // truncated header / body must error, not misread
+    assert!(read_handshake(_h("0100"), 0).is_err());
+    assert!(read_handshake(_h("01000005aabb"), 0).is_err());   // claims 5 bytes, has 2
+    return 0;
+}
