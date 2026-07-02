@@ -1411,6 +1411,57 @@ case_completion_absent("match arm completion skips an already-written arm",
     {"line":4,"character":8},
     ["ok(v) => {}"])
 
+# Dedup sees arms BELOW the cursor too: cursor at the top of a match whose
+# ok/err arms are already written must not re-offer them.
+case_completion_absent("match arm completion sees arms below the cursor",
+    'fn f() -> !i32 { return ok(1); }\n'
+    'fn main() -> i32 {\n'
+    '    match f() {\n'
+    '        \n'
+    '        ok(v) => {}\n'
+    '        err(e) => {}\n'
+    '    }\n'
+    '    return 0;\n'
+    '}',
+    {"line":3,"character":8},
+    ["ok(v) => {}","err(e) => {}"])
+
+# A match-arm binding carries the scrutinee-derived type: member completion on
+# `p.` inside `ok(p) => { ... }` lists the struct's fields.
+case_completion_has("match binding gets member completion",
+    'struct P { x: i32, y: i32 }\n'
+    'fn get() -> !*P { return err("no"); }\n'
+    'fn main() -> i32 {\n'
+    '    match get() {\n'
+    '        ok(p) => {\n'
+    '            p.\n'
+    '        }\n'
+    '        err(e) => {}\n'
+    '    }\n'
+    '    return 0;\n'
+    '}',
+    {"line":5,"character":14},
+    ["x","y"])
+
+# Hover on a match-arm binding shows its derived type.
+case_feature("hover on a match binding shows its type",
+    'struct P { x: i32 }\n'
+    'fn get() -> !*P { return err("no"); }\n'
+    'fn main() -> i32 {\n'
+    '    match get() {\n'
+    '        ok(p) => {\n'
+    '            p.x = 1;\n'
+    '        }\n'
+    '        err(e) => {}\n'
+    '    }\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/hover",
+     "params":{"position":{"line":5,"character":12}}},  # on `p` in the body
+    lambda r: check("hover shows `p: *P`",
+        "p: *P" in (((r or {}).get("result") or {}).get("contents", {}) or {}).get("value", ""),
+        f"got: {(((r or {}).get('result') or {}).get('contents', {}) or {}).get('value', '')!r}"))
+
 # ---- expected-type completion in a struct-literal field value ----
 
 # `Style { color: | }` where `color: Color` -> the enum's variants on top.

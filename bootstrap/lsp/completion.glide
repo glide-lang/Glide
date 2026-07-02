@@ -1496,6 +1496,89 @@ fn _toplevel_const_type(stmts: *Vector<Stmt>, var: string) -> *Type {
     return null;
 }
 
+// Type of a match-arm binding, derived from the scrutinee's type: `ok(f)` on a
+// `!T` binds T, `err(e)` binds string (the error channel), `some(v)` on `?T`
+// binds T, and an enum variant binds its payload field at the binding's index.
+fn _match_bind_ty(scrut_ty: *Type, variant: string, bind_idx: i32, root: *Vector<Stmt>) -> *Type {
+    if scrut_ty == null || variant == null {
+        return null;
+    }
+    if scrut_ty.kind == TY_RESULT || scrut_ty.kind == TY_OPT_RESULT {
+        if variant.eq("ok") {
+            return scrut_ty.inner;
+        }
+        if variant.eq("err") {
+            return ty_named("string");
+        }
+    }
+    if scrut_ty.kind == TY_OPTION && variant.eq("some") {
+        return scrut_ty.inner;
+    }
+    let named: *Type = _strip_ptr_borrow(scrut_ty);
+    if named == null || named.kind != TY_NAMED || named.name == null {
+        return null;
+    }
+    let d: *Stmt = find_top_decl(root, named.name);
+    if d == null || d.kind != ST_ENUM || d.enum_variants == null {
+        return null;
+    }
+    for let i: i32 = 0; i < d.enum_variants.len(); i++ {
+        let ev: EnumVariant = d.enum_variants.get(i);
+        if ev.name != null && ev.name.eq(variant) && ev.fields != null && bind_idx >= 0 && bind_idx < ev.fields.len() {
+            let ft: Type = ev.fields.get(bind_idx);
+            let p: *Type = malloc(sizeof(Type)) as *Type;
+            *p = ft;
+            return p;
+        }
+    }
+    return null;
+}
+
+// True when `line0` falls within the arm body's statement span. Used to pick
+// the right arm when two arms bind the same name.
+fn _arm_body_contains(body: *Vector<Stmt>, line0: i32) -> bool {
+    if body == null || body.len() == 0 {
+        return false;
+    }
+    let first: Stmt = body.get(0);
+    let last: Stmt = body.get(body.len() - 1);
+    return first.line - 1 <= line0 && line0 <= last.line - 1;
+}
+
+// Resolve `var` against a match's arms: an inner `let` in the arm containing
+// `line0` wins (shadowing), then the arm's own payload binding. Shared by the
+// statement (ST_MATCH) and expression (EX_MATCH) forms.
+fn _match_var_node(scrutinee: *Expr, arms: *Vector<MatchArm>, line0: i32, var: string, root: *Vector<Stmt>, path: string, depth: i32) -> *Type {
+    if arms == null {
+        return null;
+    }
+    let mut fallback: *Type = null;
+    for let j: i32 = 0; j < arms.len(); j++ {
+        let arm: MatchArm = arms.get(j);
+        let ra: *Type = _scope_var_node(arm.body, line0, var, root, path, depth);
+        if ra != null {
+            return ra;
+        }
+        if arm.bindings != null {
+            for let k: i32 = 0; k < arm.bindings.len(); k++ {
+                if arm.bindings.get(k).eq(var) {
+                    let sty: *Type = _expr_type_node(scrutinee, root, line0, path, depth + 1);
+                    let bt: *Type = _match_bind_ty(sty, arm.variant, k, root);
+                    if bt != null {
+                        if _arm_body_contains(arm.body, line0) {
+                            return bt;
+                        }
+                        if fallback == null {
+                            fallback = bt;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return fallback;
+}
+
 fn _scope_var_node(body: *Vector<Stmt>, line0: i32, var: string, root: *Vector<Stmt>, path: string, depth: i32) -> *Type {
     if body == null {
         return null;
@@ -1532,12 +1615,9 @@ fn _scope_var_node(body: *Vector<Stmt>, line0: i32, var: string, root: *Vector<S
             return r2;
         }
         if s.kind == ST_MATCH && s.arms != null {
-            for let j: i32 = 0; j < s.arms.len(); j++ {
-                let arm: MatchArm = s.arms.get(j);
-                let ra: *Type = _scope_var_node(arm.body, line0, var, root, path, depth);
-                if ra != null {
-                    return ra;
-                }
+            let rm: *Type = _match_var_node(s.scrutinee, s.arms, line0, var, root, path, depth);
+            if rm != null {
+                return rm;
             }
         }
         let re1: *Type = _expr_var_node(s.let_value, line0, var, root, path, depth);
@@ -1578,6 +1658,14 @@ fn _expr_var_node(e: *Expr, line0: i32, var: string, root: *Vector<Stmt>, path: 
             if rb != null {
                 return rb;
             }
+        }
+    }
+    // Expression-form match (`let res = match … { ok(f) => { … } }`): the arm
+    // bindings and arm-body lets are in scope inside each arm.
+    if e.kind == EX_MATCH && e.match_arms != null {
+        let rm: *Type = _match_var_node(e.lhs, e.match_arms, line0, var, root, path, depth);
+        if rm != null {
+            return rm;
         }
     }
     let r1: *Type = _expr_var_node(e.lhs, line0, var, root, path, depth);
@@ -3525,8 +3613,13 @@ fn _expected_type_at(text: string, host: *Stmt, line0: i32, col0: i32) -> *Type 
 // body's brace, whose preceding token is `=>` (not `match <expr>`), so it
 // correctly returns -1 and ordinary completion runs there.
 fn _match_arm_ctx(text: string, line0: i32, col0: i32, covered: *HashMap<bool>) -> i32 {
+    // Lex the WHOLE text, remembering how many tokens precede the cursor: the
+    // enclosing-match detection walks backward from the cursor, but the
+    // covered-arm scan must also see arms written BELOW it (a cursor at the top
+    // of the block otherwise re-offers every arm already present).
     let toks: *Vector<Token> = Vector::new();
     let lex: *Lexer = Lexer::new(text);
+    let mut n_cur: i32 = -1;
     while true {
         let tok: Token = lex.next_token();
         if tok.kind == TOK_EOF {
@@ -3534,15 +3627,15 @@ fn _match_arm_ctx(text: string, line0: i32, col0: i32, covered: *HashMap<bool>) 
         }
         let tline: i32 = tok.line - 1;
         let tcol: i32 = tok.column - 1;
-        if tline > line0 {
-            break;
-        }
-        if tline == line0 && tcol >= col0 {
-            break;
+        if n_cur < 0 && (tline > line0 || (tline == line0 && tcol >= col0)) {
+            n_cur = toks.len();
         }
         toks.push(tok);
     }
-    let n: i32 = toks.len();
+    if n_cur < 0 {
+        n_cur = toks.len();
+    }
+    let n: i32 = n_cur;
     if n == 0 {
         return -1;
     }
@@ -3607,14 +3700,16 @@ fn _match_arm_ctx(text: string, line0: i32, col0: i32, covered: *HashMap<bool>) 
     if match_idx < 0 || match_idx > open_idx - 2 {
         return -1; // no `match`, or an empty scrutinee (`match {`)
     }
-    // Collect the constructor of every arm already written between `{` and the
-    // cursor, so completion can skip an arm the user already has. An arm head
-    // is an ident at the match-brace level (outside any arm body / binding)
-    // immediately followed by `(` or `=>`.
+    // Collect the constructor of every arm already written in the WHOLE match
+    // block (above and below the cursor — the scan runs over the full token
+    // list, stopping at the match's own closing brace), so completion never
+    // re-offers an arm the user already has. An arm head is an ident at the
+    // match-brace level (outside any arm body / binding) immediately followed
+    // by `(` or `=>`.
     if covered != null {
         let mut bdepth: i32 = 0;
         let mut pdepth: i32 = 0;
-        for let k: i32 = open_idx + 1; k < n; k = k + 1 {
+        for let k: i32 = open_idx + 1; k < toks.len(); k = k + 1 {
             let tk: Token = toks.get(k);
             if tk.kind == TOK_OP {
                 if tk.lexeme.eq("{") {
@@ -3623,6 +3718,8 @@ fn _match_arm_ctx(text: string, line0: i32, col0: i32, covered: *HashMap<bool>) 
                     if tk.lexeme.eq("}") {
                         if bdepth > 0 {
                             bdepth = bdepth - 1;
+                        } else {
+                            break; // the match's own closing brace
                         }
                     } else {
                         if tk.lexeme.eq("(") || tk.lexeme.eq("[") {
@@ -3638,7 +3735,7 @@ fn _match_arm_ctx(text: string, line0: i32, col0: i32, covered: *HashMap<bool>) 
                 }
                 continue;
             }
-            if bdepth == 0 && pdepth == 0 && (tk.kind == TOK_IDENT || tk.kind == TOK_KEYWORD) && k + 1 < n {
+            if bdepth == 0 && pdepth == 0 && (tk.kind == TOK_IDENT || tk.kind == TOK_KEYWORD) && k + 1 < toks.len() {
                 let nx: Token = toks.get(k + 1);
                 if nx.kind == TOK_OP && (nx.lexeme.eq("(") || nx.lexeme.eq("=>")) {
                     covered.insert(tk.lexeme, true);

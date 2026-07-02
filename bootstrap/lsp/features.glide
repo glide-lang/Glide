@@ -3079,6 +3079,15 @@ pub fn handle_hover(req: *JsonValue, state: *LspState) {
                     content = render_hover_for_let(doc.stmts, host, lst);
                 }
             }
+            // Not a `let` or a param — a match-arm binding (`f` in `ok(f) =>`)
+            // or another scope-only name. The *Type resolver knows those; render
+            // its answer so hover works inside match arms.
+            if content.eq("") {
+                let mbt: *Type = _local_type_node(doc.stmts, line0, word, uri_to_path(uri));
+                if mbt != null {
+                    content = "```glide\n".concat(word).concat(": ").concat(type_to_string_pretty(mbt)).concat("\n```");
+                }
+            }
         }
     }
     // Impl method: hover on a method name in either the decl site or a call
