@@ -1,0 +1,88 @@
+// Integer / string / char literal patterns in `match`. Pre-fix, the parser
+// only accepted variant idents and `_` in pattern position, so `match n
+// { 1 => ... }` died with expected-token errors. Literal arms lower to an
+// equality if/else chain (strings compare by bytes) ending in the required
+// `_` arm.
+import stdlib::testing::*;
+
+fn describe(n: i32) -> string {
+    match n {
+        0 => { return "zero"; }
+        1 => { return "one"; }
+        _ => { return "many"; }
+    }
+}
+
+fn test_int_literal_arms() -> i32 {
+    assert_str_eq!(describe(0), "zero");
+    assert_str_eq!(describe(1), "one");
+    assert_str_eq!(describe(42), "many");
+    return 0;
+}
+
+fn sign_name(n: i32) -> string {
+    // Expression-position match with a negative literal arm.
+    let s: string = match n {
+        -1 => "minus"
+        0 => "zero"
+        1 => "plus"
+        _ => "far"
+    };
+    return s;
+}
+
+fn test_negative_literal_and_expr_match() -> i32 {
+    assert_str_eq!(sign_name(-1), "minus");
+    assert_str_eq!(sign_name(0), "zero");
+    assert_str_eq!(sign_name(1), "plus");
+    assert_str_eq!(sign_name(99), "far");
+    return 0;
+}
+
+fn method_code(s: string) -> i32 {
+    let n: i32 = match s {
+        "GET" => 1
+        "POST" => 2
+        _ => 0
+    };
+    return n;
+}
+
+fn test_string_literal_arms() -> i32 {
+    assert_eq!(method_code("GET"), 1);
+    assert_eq!(method_code("POST"), 2);
+    assert_eq!(method_code("PUT"), 0);
+    return 0;
+}
+
+fn is_vowel(c: char) -> bool {
+    match c {
+        'a' => { return true; }
+        'e' => { return true; }
+        'i' => { return true; }
+        'o' => { return true; }
+        'u' => { return true; }
+        _ => { return false; }
+    }
+}
+
+fn test_char_literal_arms() -> i32 {
+    assert!(is_vowel('a'));
+    assert!(is_vowel('u'));
+    assert!(!is_vowel('z'));
+    return 0;
+}
+
+// A literal arm body can be a multi-statement block.
+fn test_literal_arm_block_body() -> i32 {
+    let mut acc: i32 = 0;
+    match 2 {
+        2 => {
+            let bump: i32 = 40;
+            acc = bump + 2;
+        }
+        _ => { acc = -1; }
+    }
+    assert_eq!(acc, 42);
+    return 0;
+}

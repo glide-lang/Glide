@@ -2571,6 +2571,147 @@ fn emit_arm_typeof_probe(g: *CG, arms: *Vector<MatchArm>) {
     print!("); })");
 }
 
+// `match` on a value scrutinee with literal-pattern arms (`1 =>`, `"s" =>`)
+// lowers to an if/else-if chain on equality — strings compare by bytes,
+// everything else natively — ending in the `_` arm (the typer guarantees
+// one). Returns false when no arm carries a literal so the caller falls
+// through to the enum switch path.
+
+fn _match_has_literal_arm(arms: *Vector<MatchArm>) -> bool {
+    if arms == null {
+        return false;
+    }
+    for let i: i32 = 0; i < arms.len(); i++ {
+        let a: MatchArm = arms.get(i);
+        if a.lit != null {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn _match_wildcard_idx(arms: *Vector<MatchArm>) -> i32 {
+    if arms == null {
+        return 0 - 1;
+    }
+    for let i: i32 = 0; i < arms.len(); i++ {
+        let a: MatchArm = arms.get(i);
+        if a.lit == null && a.variant.eq("_") {
+            return i;
+        }
+    }
+    return 0 - 1;
+}
+
+fn _emit_match_lit_cmp(g: *CG, scrut_ty: *Type, a: *MatchArm) {
+    if _is_string_ty(scrut_ty) {
+        print!("__glide_string_eq(__m, ");
+        emit_expr(g, a.lit);
+        print!(")");
+        return;
+    }
+    print!("(__m == ");
+    emit_expr(g, a.lit);
+    print!(")");
+}
+
+fn _emit_match_literal_stmt(g: *CG, s: *Stmt, scrut_ty: *Type, depth: i32) -> bool {
+    if !_match_has_literal_arm(s.arms) {
+        return false;
+    }
+    let mut cty: string = "int";
+    if scrut_ty != null {
+        cty = type_to_c(scrut_ty);
+    }
+    ind(depth);
+    println!("{");
+    ind(depth + 1);
+    print!(cty, " __m = ");
+    emit_expr(g, s.scrutinee);
+    println!(";");
+    let mut first: bool = true;
+    for let i: i32 = 0; i < s.arms.len(); i++ {
+        let a: MatchArm = s.arms.get(i);
+        if a.lit == null {
+            continue;
+        }
+        ind(depth + 1);
+        if first {
+            print!("if (");
+        } else {
+            print!("} else if (");
+        }
+        first = false;
+        _emit_match_lit_cmp(g, scrut_ty, &a);
+        println!(") {");
+        if a.body != null {
+            for let k: i32 = 0; k < a.body.len(); k++ {
+                let b: Stmt = a.body.get(k);
+                emit_stmt(g, &b, depth + 2);
+            }
+        }
+    }
+    let wi: i32 = _match_wildcard_idx(s.arms);
+    ind(depth + 1);
+    println!("} else {");
+    if wi >= 0 {
+        let w: MatchArm = s.arms.get(wi);
+        if w.body != null {
+            for let k: i32 = 0; k < w.body.len(); k++ {
+                let b: Stmt = w.body.get(k);
+                emit_stmt(g, &b, depth + 2);
+            }
+        }
+    }
+    ind(depth + 1);
+    println!("}");
+    ind(depth);
+    println!("}");
+    return true;
+}
+
+fn _emit_match_literal_expr(g: *CG, e: *Expr, scrut_ty: *Type) -> bool {
+    if !_match_has_literal_arm(e.match_arms) {
+        return false;
+    }
+    let mut cty: string = "int";
+    if scrut_ty != null {
+        cty = type_to_c(scrut_ty);
+    }
+    print!("({ ", cty, " __m = ");
+    emit_expr(g, e.lhs);
+    print!("; __typeof__(");
+    emit_arm_typeof_probe(g, e.match_arms);
+    print!(") __r; ");
+    let mut first: bool = true;
+    for let i: i32 = 0; i < e.match_arms.len(); i++ {
+        let a: MatchArm = e.match_arms.get(i);
+        if a.lit == null {
+            continue;
+        }
+        if first {
+            print!("if (");
+        } else {
+            print!(" else if (");
+        }
+        first = false;
+        _emit_match_lit_cmp(g, scrut_ty, &a);
+        print!(") { ");
+        emit_match_arm_value(g, &a);
+        print!(" }");
+    }
+    print!(" else { ");
+    let wi: i32 = _match_wildcard_idx(e.match_arms);
+    if wi >= 0 {
+        let w: MatchArm = e.match_arms.get(wi);
+        emit_match_arm_value(g, &w);
+    } else {
+        print!("__r = 0;");
+    }
+    print!(" } __r; })");
+    return true;
+}
+
 // `match` over a ?T/!T scrutinee lowers to an if/else on the .has/.ok
 // discriminant rather than the user-enum `switch (.tag)` path: Option and
 // Result are plain structs (`{int has; T val;}` / `{int ok; T val; const
@@ -3238,6 +3379,10 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         let scrut_ty: *Type = infer_for_codegen(g, e.lhs);
         // ?T / !T scrutinees lower to an if/else on .has/.ok (no .tag/.data).
         if _emit_match_opt_res_expr(g, e, scrut_ty) {
+            return;
+        }
+        // Literal-pattern arms lower to an equality if/else chain.
+        if _emit_match_literal_expr(g, e, scrut_ty) {
             return;
         }
         let mut enum_name: string = "X";
@@ -5634,6 +5779,10 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
         // ?T / !T scrutinees lower to an if/else on .has/.ok — they have no
         // .tag/.data union, so the user-enum switch path below can't apply.
         if _emit_match_opt_res_stmt(g, s, scrut_ty, depth) {
+            return;
+        }
+        // Literal-pattern arms lower to an equality if/else chain.
+        if _emit_match_literal_stmt(g, s, scrut_ty, depth) {
             return;
         }
         ind(depth);

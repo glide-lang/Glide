@@ -246,11 +246,12 @@ pub struct EnumVariant {
 }
 
 pub struct MatchArm {
-    pub variant: string, // variant name; "_" = wildcard
+    pub variant: string, // variant name; "_" = wildcard; literal source text when `lit` is set
     pub bindings: *Vector<string>, // names to bind for payload
     pub body: *Vector<Stmt>,
     pub lead: string, // comments above the arm (fmt)
     pub trail: string, // same-line comment after the arm (fmt)
+    pub lit: *Expr, // literal pattern (`1 =>`, `"s" =>`, `'c' =>`); null for variant/wildcard arms
 }
 
 pub struct MacroParam {

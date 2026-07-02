@@ -91,6 +91,9 @@ while cond { ... }
 for init; cond; step { ... }
 { ... }                           // block
 match scrutinee { Variant(b) => { ... } _ => { ... } }
+match value { 1 => { ... } "s" => { ... } 'c' => { ... } _ => { ... } }
+                                  // literal arms compare by value (strings
+                                  // by bytes); a `_` arm is required
 
 defer expr;                       // run at fn end / before return (LIFO)
 spawn fn_call(args);              // run fn on the M:N coroutine scheduler

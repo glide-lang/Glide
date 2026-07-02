@@ -3042,11 +3042,26 @@ fn _check_match_coverage(t: *Typer, scrut_ty: *Type, arms: *Vector<MatchArm>, li
         }
     }
     let mut has_wildcard: bool = false;
+    let mut has_literal: bool = false;
     let covered: *HashMap<bool> = HashMap::new();
     for let i: i32 = 0; i < arms.len(); i++ {
         let a: MatchArm = arms.get(i);
         if a.variant.eq("_") {
             has_wildcard = true;
+            continue;
+        }
+        // Literal pattern (`1 =>`, `"s" =>`): only valid against a value
+        // scrutinee, and it must match the scrutinee's type.
+        if a.lit != null {
+            has_literal = true;
+            if is_enum || is_opt || is_res {
+                t.err_code(line, col, "invalid-pattern", "literal pattern `".concat(a.variant).concat("` cannot match a `").concat(type_to_string(scrut_ty)).concat("` scrutinee"));
+                continue;
+            }
+            let lt: *Type = infer_expr(t, a.lit);
+            if scrut_ty != null && !types_compat(scrut_ty, lt) {
+                t.err_code(line, col, "pattern-type-mismatch", "literal pattern `".concat(a.variant).concat("` has type `").concat(type_to_string(lt)).concat("`, but the match scrutinee is `").concat(type_to_string(scrut_ty)).concat("`"));
+            }
             continue;
         }
         covered.insert(a.variant, true);
@@ -3074,6 +3089,11 @@ fn _check_match_coverage(t: *Typer, scrut_ty: *Type, arms: *Vector<MatchArm>, li
                 }
             }
         }
+    }
+    // Literal arms can never cover a whole value domain, so they demand a
+    // catch-all sibling.
+    if has_literal && !has_wildcard {
+        t.err_code(line, col, "match-not-exhaustive", "match with literal patterns is not exhaustive; add a `_ =>` arm");
     }
     if !has_wildcard && is_enum && parts != null {
         let mut missing: string = "";

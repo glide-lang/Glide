@@ -1841,6 +1841,44 @@ fn parse_match(p: *Parser) -> *Stmt {
         let arm_lead: string = p.current.lead;
         let mut variant: string = "_";
         let bindings: *Vector<string> = Vector::new();
+        // Literal pattern: `0 =>`, `-3 =>`, `"s" =>`, `'c' =>`. The arm
+        // dispatches on value equality (codegen lowers to an if/else chain),
+        // so the typer requires a `_` arm alongside. `variant` keeps the
+        // literal's source text for the formatter round-trip.
+        let mut lit: *Expr = null;
+        let lit_line: i32 = p.current.line;
+        let lit_col: i32 = p.current.column;
+        let mut lit_neg: bool = false;
+        if p.at_op("-") {
+            // In pattern position a `-` can only start a numeric literal.
+            p.advance();
+            lit_neg = true;
+        }
+        if p.current.kind == TOK_INT {
+            let lit_lex: string = p.current.lexeme;
+            p.advance();
+            let mut lit_v: i64 = parse_int_lexeme(lit_lex);
+            variant = lit_lex;
+            if lit_neg {
+                lit_v = 0 - lit_v;
+                variant = "-".concat(lit_lex);
+            }
+            lit = expr_int(lit_v, lit_line, lit_col);
+        } else if p.current.kind == TOK_STRING && !lit_neg {
+            let lit_lex: string = p.current.lexeme;
+            p.advance();
+            let lit_inner: string = lit_lex.substring(1, lit_lex.len() - 1);
+            lit = build_string_or_interp(p, lit_inner, lit_line, lit_col);
+            variant = lit_lex;
+        } else if p.current.kind == TOK_CHAR && !lit_neg {
+            let lit_lex: string = p.current.lexeme;
+            p.advance();
+            let lit_inner: string = lit_lex.substring(1, lit_lex.len() - 1);
+            lit = expr_char(decode_char_inner(lit_inner), lit_line, lit_col);
+            variant = lit_lex;
+        } else if lit_neg {
+            p.err("expected a numeric literal after `-` in a match pattern");
+        }
         if p.current.kind == TOK_IDENT {
             let first: string = p.current.lexeme;
             p.advance();
@@ -1873,7 +1911,7 @@ fn parse_match(p: *Parser) -> *Stmt {
             let ass: *Expr = parse_maybe_assign(p, e);
             body.push(*stmt_expr(ass));
         }
-        let mut arm: MatchArm = MatchArm { variant: variant, bindings: bindings, body: body, lead: arm_lead, trail: "" };
+        let mut arm: MatchArm = MatchArm { variant: variant, bindings: bindings, body: body, lead: arm_lead, trail: "", lit: lit };
         p.eat_op(",");
         if p.current.trail != null && !p.current.trail.eq("") {
             arm.trail = p.current.trail;
@@ -1903,6 +1941,44 @@ fn parse_match_expr(p: *Parser) -> *Expr {
         let arm_lead: string = p.current.lead;
         let mut variant: string = "_";
         let bindings: *Vector<string> = Vector::new();
+        // Literal pattern: `0 =>`, `-3 =>`, `"s" =>`, `'c' =>`. The arm
+        // dispatches on value equality (codegen lowers to an if/else chain),
+        // so the typer requires a `_` arm alongside. `variant` keeps the
+        // literal's source text for the formatter round-trip.
+        let mut lit: *Expr = null;
+        let lit_line: i32 = p.current.line;
+        let lit_col: i32 = p.current.column;
+        let mut lit_neg: bool = false;
+        if p.at_op("-") {
+            // In pattern position a `-` can only start a numeric literal.
+            p.advance();
+            lit_neg = true;
+        }
+        if p.current.kind == TOK_INT {
+            let lit_lex: string = p.current.lexeme;
+            p.advance();
+            let mut lit_v: i64 = parse_int_lexeme(lit_lex);
+            variant = lit_lex;
+            if lit_neg {
+                lit_v = 0 - lit_v;
+                variant = "-".concat(lit_lex);
+            }
+            lit = expr_int(lit_v, lit_line, lit_col);
+        } else if p.current.kind == TOK_STRING && !lit_neg {
+            let lit_lex: string = p.current.lexeme;
+            p.advance();
+            let lit_inner: string = lit_lex.substring(1, lit_lex.len() - 1);
+            lit = build_string_or_interp(p, lit_inner, lit_line, lit_col);
+            variant = lit_lex;
+        } else if p.current.kind == TOK_CHAR && !lit_neg {
+            let lit_lex: string = p.current.lexeme;
+            p.advance();
+            let lit_inner: string = lit_lex.substring(1, lit_lex.len() - 1);
+            lit = expr_char(decode_char_inner(lit_inner), lit_line, lit_col);
+            variant = lit_lex;
+        } else if lit_neg {
+            p.err("expected a numeric literal after `-` in a match pattern");
+        }
         if p.current.kind == TOK_IDENT {
             let first: string = p.current.lexeme;
             p.advance();
@@ -1934,7 +2010,7 @@ fn parse_match_expr(p: *Parser) -> *Expr {
             let e: *Expr = parse_expr(p, 0);
             body.push(*stmt_return(e, line, col));
         }
-        let mut arm: MatchArm = MatchArm { variant: variant, bindings: bindings, body: body, lead: arm_lead, trail: "" };
+        let mut arm: MatchArm = MatchArm { variant: variant, bindings: bindings, body: body, lead: arm_lead, trail: "", lit: lit };
         p.eat_op(",");
         if p.current.trail != null && !p.current.trail.eq("") {
             arm.trail = p.current.trail;
