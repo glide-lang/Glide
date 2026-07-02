@@ -1,0 +1,56 @@
+// CSPRNG: the OS-backed entropy source. Can't assert distribution, but
+// can pin the contract — right length, fresh bytes each call, binary-safe
+// (may contain NULs), and a working u64 path.
+import stdlib::testing::*;
+import stdlib::crypto::csprng::*;
+
+fn test_random_bytes_length() -> i32 {
+    let r: !string = random_bytes(32);
+    assert!(r.is_ok());
+    assert_eq!(r.unwrap().len(), 32);
+    let r2: !string = random_bytes(1);
+    assert!(r2.is_ok());
+    assert_eq!(r2.unwrap().len(), 1);
+    return 0;
+}
+
+fn test_zero_length_ok() -> i32 {
+    let r: !string = random_bytes(0);
+    assert!(r.is_ok());
+    assert_eq!(r.unwrap().len(), 0);
+    return 0;
+}
+
+fn test_negative_length_errs() -> i32 {
+    let r: !string = random_bytes(0 - 1);
+    assert!(r.is_err());
+    return 0;
+}
+
+fn test_two_draws_differ() -> i32 {
+    // A 32-byte collision from a real CSPRNG has probability 2^-256 — a
+    // repeat here means the source is broken, not unlucky.
+    let a: !string = random_bytes(32);
+    let b: !string = random_bytes(32);
+    assert!(a.is_ok());
+    assert!(b.is_ok());
+    assert!(!a.unwrap().eq(b.unwrap()));
+    return 0;
+}
+
+fn test_u64_works_and_varies() -> i32 {
+    let a: !u64 = random_u64();
+    let b: !u64 = random_u64();
+    assert!(a.is_ok());
+    assert!(b.is_ok());
+    assert!(a.unwrap() != b.unwrap());
+    return 0;
+}
+
+// A large draw exercises the getrandom loop / getentropy 256-byte chunking.
+fn test_large_draw() -> i32 {
+    let r: !string = random_bytes(1000);
+    assert!(r.is_ok());
+    assert_eq!(r.unwrap().len(), 1000);
+    return 0;
+}

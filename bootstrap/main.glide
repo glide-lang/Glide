@@ -3295,7 +3295,8 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     // GNU ld resolves one-pass left-to-right, and libcrypto.a pulls
     // winsock symbols (gai_strerrorA et al.) out of libws2_32.a.
     if win_target {
-        cmd = cmd.concat(" -lws2_32 -lmswsock -ldbghelp -lpsapi");
+        // bcrypt backs the CSPRNG (BCryptGenRandom) used by stdlib::crypto.
+        cmd = cmd.concat(" -lws2_32 -lmswsock -ldbghelp -lpsapi -lbcrypt");
         // Crypt32 backs the Windows cert store bridge used by stdlib::
         // net::tls when SSL is in play — OpenSSL on MSYS2/mingw has an
         // empty default verify path, so every HTTPS verify falls back

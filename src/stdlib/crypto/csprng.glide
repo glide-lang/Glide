@@ -1,0 +1,130 @@
+// Cryptographically-secure random bytes, sourced from the operating
+// system's CSPRNG. This is the one entropy primitive that cannot be
+// pure Glide — it must call the kernel:
+//
+//   Linux            getrandom(2), falling back to /dev/urandom
+//   macOS / *BSD     getentropy(3) (256-byte cap, looped)
+//   Windows          BCryptGenRandom (system-preferred RNG)
+//
+// Every other crypto primitive (key generation, nonces, blinding)
+// draws its randomness from here. Failure is surfaced as an err, never
+// swallowed — weak randomness is a silent catastrophe, so callers must
+// see an entropy failure rather than get predictable bytes.
+//
+// ```glide
+// import stdlib::crypto::csprng::*;
+//
+// let key: !string = random_bytes(32);   // 256-bit key
+// let n:   !u64    = random_u64();
+// ```
+
+c_raw! {
+    #ifndef GLIDE_CSPRNG_DEFINED
+    #define GLIDE_CSPRNG_DEFINED
+    #include <stdint.h>
+    #include <string.h>
+    #include <stdlib.h>
+
+    #if defined(_WIN32)
+        #include <windows.h>
+        #include <bcrypt.h>
+    #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
+        #include <sys/random.h>
+    #else
+        #include <sys/syscall.h>
+        #include <unistd.h>
+        #include <errno.h>
+        #include <fcntl.h>
+    #endif
+
+    // Fill `buf` with `n` CSPRNG bytes. Returns 0 on success, -1 on failure.
+    static int __glide_csprng_fill(unsigned char* buf, int n) {
+        if (n <= 0) return 0;
+    #if defined(_WIN32)
+        if (BCryptGenRandom(NULL, buf, (ULONG)n,
+                            BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0) return 0;
+        return -1;
+    #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
+        int off = 0;
+        while (off < n) {
+            int chunk = n - off;
+            if (chunk > 256) chunk = 256;      /* getentropy caps at 256 */
+            if (getentropy(buf + off, (size_t)chunk) != 0) return -1;
+            off += chunk;
+        }
+        return 0;
+    #else
+        /* Linux: prefer the getrandom syscall (no fd, works in a chroot);
+           fall back to /dev/urandom when the kernel is too old (ENOSYS). */
+        int off = 0;
+        while (off < n) {
+            long r = syscall(SYS_getrandom, buf + off, (size_t)(n - off), 0);
+            if (r < 0) {
+                if (errno == EINTR) continue;
+                break;   /* ENOSYS / other -> urandom fallback below */
+            }
+            off += (int)r;
+        }
+        if (off >= n) return 0;
+        int fd = open("/dev/urandom", O_RDONLY);
+        if (fd < 0) return -1;
+        while (off < n) {
+            ssize_t r = read(fd, buf + off, (size_t)(n - off));
+            if (r < 0) { if (errno == EINTR) continue; close(fd); return -1; }
+            if (r == 0) { close(fd); return -1; }
+            off += (int)r;
+        }
+        close(fd);
+        return 0;
+    #endif
+    }
+
+    // A raw malloc'd buffer of `n` random bytes, or NULL on failure. The
+    // Glide wrapper copies it into a managed string and frees this.
+    static void* __glide_csprng_raw(int n) {
+        if (n < 0) n = 0;
+        unsigned char* tmp = (unsigned char*)malloc((size_t)(n > 0 ? n : 1));
+        if (!tmp) return 0;
+        if (__glide_csprng_fill(tmp, n) != 0) { free(tmp); return 0; }
+        return (void*)tmp;
+    }
+
+    static uint64_t __glide_csprng_u64(int* ok) {
+        uint64_t v = 0;
+        *ok = (__glide_csprng_fill((unsigned char*)&v, 8) == 0) ? 1 : 0;
+        return v;
+    }
+    #endif
+}
+
+extern fn __glide_csprng_raw(n: i32) -> *void;
+extern fn __glide_csprng_u64(ok: *i32) -> u64;
+extern fn __glide_string_from_buf(p: *void, n: i32) -> string;
+
+/// `n` cryptographically-secure random bytes as a binary-safe string.
+/// Errors if the OS entropy source fails (never returns weak bytes).
+///
+/// ```glide
+/// let key: !string = random_bytes(32);
+/// if key.is_ok() { /* 32-byte key */ }
+/// ```
+pub fn random_bytes(n: i32) -> !string {
+    if n < 0 { return err("csprng: negative length"); }
+    let p: *void = __glide_csprng_raw(n);
+    if p == null { return err("csprng: OS entropy source failed"); }
+    let s: string = __glide_string_from_buf(p, n);
+    free(p);
+    return ok(s);
+}
+
+/// A cryptographically-secure random u64.
+///
+/// ```glide
+/// let r: !u64 = random_u64();
+/// ```
+pub fn random_u64() -> !u64 {
+    let mut ok_flag: i32 = 0;
+    let v: u64 = __glide_csprng_u64(&mut ok_flag);
+    if ok_flag == 0 { return err("csprng: OS entropy source failed"); }
+    return ok(v);
+}
