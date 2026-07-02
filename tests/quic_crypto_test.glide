@@ -1,0 +1,52 @@
+// QUIC packet protection (RFC 9001) against the Appendix A worked example:
+// the Initial key derivation, the AES header-protection mask, a ChaCha20
+// header mask, and an AEAD seal/open round-trip.
+import stdlib::testing::*;
+import stdlib::net::quic::crypto::*;
+import stdlib::net::tls13::record::*;
+import stdlib::hex::*;
+
+fn _h(s: string) -> string { return hex_decode(s).unwrap(); }
+
+// RFC 9001 A.1/A.2: DCID 8394c8f03e515708 -> the client Initial keys.
+fn test_initial_keys() -> i32 {
+    let ck: *QuicKeys = quic_client_initial_keys(_h("8394c8f03e515708")).unwrap();
+    assert_str_eq!(hex_encode(ck.key), "1f369613dd76d5467730efcbe3b1a22d");
+    assert_str_eq!(hex_encode(ck.iv), "fa044b2f42a3fd3b46fb255c");
+    assert_str_eq!(hex_encode(ck.hp), "9f50449e04a0e810283a1e9933adedd2");
+    let sk: *QuicKeys = quic_server_initial_keys(_h("8394c8f03e515708")).unwrap();
+    assert_str_eq!(hex_encode(sk.key), "cf3a5331653c364c88f0f379b6067e37");
+    return 0;
+}
+
+// RFC 9001 A.2: AES header-protection mask from the ciphertext sample.
+fn test_aes_hp_mask() -> i32 {
+    let hp: string = _h("9f50449e04a0e810283a1e9933adedd2");
+    let sample: string = _h("d1b1c98dd7689fb8ec11d242b123dc9b");
+    let mask: string = quic_hp_mask(AEAD_AES128_GCM, hp, sample).unwrap();
+    assert_str_eq!(hex_encode(mask), "437b9aec36");
+    return 0;
+}
+
+// ChaCha20 header-protection mask (counter||nonce from the sample).
+fn test_chacha_hp_mask() -> i32 {
+    let hp: string = _h("25a282b9e82f06f21f488917a4fc8f1b9f50449e04a0e810283a1e9933adedd2");
+    let sample: string = _h("5e5cd55c41f69080575d7999c25a5bfb");
+    let mask: string = quic_hp_mask(AEAD_CHACHA20_POLY1305, hp, sample).unwrap();
+    assert_str_eq!(hex_encode(mask), "4301e41db6");
+    return 0;
+}
+
+// AEAD seal then open round-trips with the packet header as AAD.
+fn test_packet_seal_open() -> i32 {
+    let ck: *QuicKeys = quic_client_initial_keys(_h("8394c8f03e515708")).unwrap();
+    let header: string = _h("c300000001088394c8f03e5157080000449e00000002");
+    let payload: string = "CRYPTO frame payload\x00binary";
+    let sealed: string = quic_seal(AEAD_AES128_GCM, ck.key, ck.iv, 2, header, payload).unwrap();
+    let opened: !string = quic_open(AEAD_AES128_GCM, ck.key, ck.iv, 2, header, sealed);
+    assert!(opened.is_ok());
+    assert!(opened.unwrap().eq(payload));
+    // wrong packet number => wrong nonce => auth failure
+    assert!(quic_open(AEAD_AES128_GCM, ck.key, ck.iv, 3, header, sealed).is_err());
+    return 0;
+}

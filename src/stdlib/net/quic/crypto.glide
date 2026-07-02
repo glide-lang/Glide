@@ -1,0 +1,153 @@
+// QUIC packet protection (RFC 9001) — pure Glide. The cryptographic core
+// of QUIC: derive the Initial keys from a connection ID, protect/unprotect
+// packet payloads with an AEAD, and mask/unmask the packet header. Reuses
+// the TLS 1.3 HKDF-Expand-Label (QUIC uses the same KDF with "quic *"
+// labels) and the existing AEADs.
+//
+// ```glide
+// import stdlib::net::quic::crypto::*;
+//
+// let ck: *QuicKeys = quic_client_initial_keys(dcid).unwrap();
+// let prot: string = quic_seal(AEAD_AES128_GCM, ck.key, ck.iv, pn, header, payload).unwrap();
+// ```
+
+import stdlib::net::tls13::schedule::*;    // hkdf_expand_label
+import stdlib::net::tls13::record::*;      // AEAD_* constants
+import stdlib::crypto::hkdf::*;            // hkdf_extract
+import stdlib::crypto::aes_gcm::*;         // aes_gcm_encrypt/decrypt, aes_ecb_block
+import stdlib::crypto::chacha20poly1305::*;
+import stdlib::bytes::*;
+
+// QUIC v1 Initial salt (RFC 9001 §5.2).
+pub const QUIC_V1_SALT: string = "\x38\x76\x2c\xf7\xf5\x59\x34\xb3\x4d\x17\x9a\xe6\xa4\xc8\x0c\xad\xcc\xbb\x7f\x0a";
+
+pub struct QuicKeys {
+    pub key: string,   // AEAD key
+    pub iv: string,    // 12-byte packet IV
+    pub hp: string,    // header-protection key
+}
+
+fn _qb(s: string, i: i32) -> i32 { return s.at(i).to_int() & 255; }
+
+/// The Initial secret: HKDF-Extract(QUIC_V1_SALT, Destination CID).
+pub fn quic_initial_secret(dcid: string) -> string {
+    return hkdf_extract(QUIC_V1_SALT, dcid);
+}
+
+/// Derive an AEAD key / IV / header-protection key from a QUIC traffic
+/// secret. `key_len` is 16 for AES-128-GCM (Initial) or ChaCha20 uses 32.
+pub fn quic_derive_keys(secret: string, key_len: i32) -> !*QuicKeys {
+    let k: string = hkdf_expand_label(secret, "quic key", "", key_len)?;
+    let iv: string = hkdf_expand_label(secret, "quic iv", "", 12)?;
+    let hp: string = hkdf_expand_label(secret, "quic hp", "", key_len)?;
+    let out: *QuicKeys = malloc(sizeof(QuicKeys)) as *QuicKeys;
+    out.key = k; out.iv = iv; out.hp = hp;
+    return ok(out);
+}
+
+/// Client Initial keys derived from the Destination Connection ID.
+pub fn quic_client_initial_keys(dcid: string) -> !*QuicKeys {
+    let secret: string = hkdf_expand_label(quic_initial_secret(dcid), "client in", "", 32)?;
+    return quic_derive_keys(secret, 16);
+}
+/// Server Initial keys derived from the Destination Connection ID.
+pub fn quic_server_initial_keys(dcid: string) -> !*QuicKeys {
+    let secret: string = hkdf_expand_label(quic_initial_secret(dcid), "server in", "", 32)?;
+    return quic_derive_keys(secret, 16);
+}
+
+/// Per-packet AEAD nonce: the 12-byte IV XOR the packet number (RFC 9001
+/// §5.3), the packet number right-aligned as a 62-bit big-endian value.
+pub fn quic_packet_nonce(iv: string, packet_number: u64) -> string {
+    let bb: *ByteBuffer = ByteBuffer::new();
+    for let i: i32 = 0; i < iv.len(); i++ {
+        let shift: i32 = (iv.len() - 1 - i) * 8;
+        let pb: i32 = if shift < 64 { ((packet_number >> shift) & (255 as u64)) as i32 } else { 0 };
+        bb.push((_qb(iv, i) ^ pb) as u8);
+    }
+    let n: string = bb.to_string();
+    bb.free();
+    return n;
+}
+
+/// AEAD-protect a packet payload. `header` (the packet header up to and
+/// including the packet number) is the AAD. Returns ciphertext || 16-byte
+/// tag.
+pub fn quic_seal(aead: i32, key: string, iv: string, packet_number: u64,
+                 header: string, payload: string) -> !string {
+    let nonce: string = quic_packet_nonce(iv, packet_number);
+    if aead == AEAD_CHACHA20_POLY1305 { return aead_encrypt(key, nonce, payload, header); }
+    return aes_gcm_encrypt(key, nonce, payload, header);
+}
+
+/// AEAD-unprotect a packet payload (ciphertext || tag). Fails closed on a
+/// bad tag.
+pub fn quic_open(aead: i32, key: string, iv: string, packet_number: u64,
+                 header: string, ciphertext: string) -> !string {
+    let nonce: string = quic_packet_nonce(iv, packet_number);
+    if aead == AEAD_CHACHA20_POLY1305 { return aead_decrypt(key, nonce, ciphertext, header); }
+    return aes_gcm_decrypt(key, nonce, ciphertext, header);
+}
+
+/// The 5-byte header-protection mask from a 16-byte ciphertext `sample`
+/// (RFC 9001 §5.4). AES uses ECB(hp, sample); ChaCha20 uses the sample as
+/// counter||nonce over 5 zero bytes.
+pub fn quic_hp_mask(aead: i32, hp: string, sample: string) -> !string {
+    if aead == AEAD_CHACHA20_POLY1305 {
+        // sample = counter(4, little-endian) || nonce(12); keystream over 5 zeros.
+        let counter: string = sample.substring(0, 4);
+        let nonce: string = sample.substring(4, 16);
+        let zeros: *ByteBuffer = ByteBuffer::new();
+        for let i: i32 = 0; i < 5; i++ { zeros.push(0 as u8); }
+        let z: string = zeros.to_string(); zeros.free();
+        let ks: string = _chacha20_keystream(hp, counter, nonce, z);
+        return ok(ks.substring(0, 5));
+    }
+    let block: string = aes_ecb_block(hp, sample)?;
+    return ok(block.substring(0, 5));
+}
+
+// Self-contained ChaCha20 keystream (first 5 bytes) for QUIC ChaCha header
+// protection — a minimal block function so this module doesn't depend on
+// the AEAD's file-local helper.
+c_raw! {
+    #ifndef GLIDE_QUIC_CHACHA_HP
+    #define GLIDE_QUIC_CHACHA_HP
+    #include <stdint.h>
+    #include <string.h>
+    #include <stdlib.h>
+    #define QHP_ROTL(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
+    #define QHP_QR(a, b, c, d) \
+        a += b; d ^= a; d = QHP_ROTL(d, 16); c += d; b ^= c; b = QHP_ROTL(b, 12); \
+        a += b; d ^= a; d = QHP_ROTL(d, 8);  c += d; b ^= c; b = QHP_ROTL(b, 7)
+    static void* __glide_quic_hp_chacha(void* key, void* counter4, void* nonce12) {
+        const uint8_t* k = (const uint8_t*)key;
+        const uint8_t* cn = (const uint8_t*)counter4;
+        const uint8_t* nc = (const uint8_t*)nonce12;
+        uint32_t s[16];
+        s[0]=0x61707865; s[1]=0x3320646e; s[2]=0x79622d32; s[3]=0x6b206574;
+        for (int i=0;i<8;i++) s[4+i]=(uint32_t)k[i*4]|((uint32_t)k[i*4+1]<<8)|((uint32_t)k[i*4+2]<<16)|((uint32_t)k[i*4+3]<<24);
+        s[12]=(uint32_t)cn[0]|((uint32_t)cn[1]<<8)|((uint32_t)cn[2]<<16)|((uint32_t)cn[3]<<24);
+        for (int i=0;i<3;i++) s[13+i]=(uint32_t)nc[i*4]|((uint32_t)nc[i*4+1]<<8)|((uint32_t)nc[i*4+2]<<16)|((uint32_t)nc[i*4+3]<<24);
+        uint32_t x[16]; memcpy(x, s, sizeof(x));
+        for (int i=0;i<10;i++) {
+            QHP_QR(x[0],x[4],x[8], x[12]); QHP_QR(x[1],x[5],x[9], x[13]);
+            QHP_QR(x[2],x[6],x[10],x[14]); QHP_QR(x[3],x[7],x[11],x[15]);
+            QHP_QR(x[0],x[5],x[10],x[15]); QHP_QR(x[1],x[6],x[11],x[12]);
+            QHP_QR(x[2],x[7],x[8], x[13]); QHP_QR(x[3],x[4],x[9], x[14]);
+        }
+        uint8_t* out = (uint8_t*)malloc(5);
+        for (int i=0;i<5;i++) { uint32_t v = x[i/4] + s[i/4]; out[i] = (uint8_t)(v >> ((i%4)*8)); }
+        return out;
+    }
+    #endif
+}
+extern fn __glide_quic_hp_chacha(key: *void, counter4: *void, nonce12: *void) -> *void;
+extern fn __glide_string_from_buf(p: *void, n: i32) -> string;
+
+fn _chacha20_keystream(key: string, counter: string, nonce: string, zeros: string) -> string {
+    let p: *void = __glide_quic_hp_chacha(key as *void, counter as *void, nonce as *void);
+    let s: string = __glide_string_from_buf(p, 5);
+    free(p);
+    return s;
+}

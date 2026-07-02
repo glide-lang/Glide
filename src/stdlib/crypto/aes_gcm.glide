@@ -231,7 +231,32 @@ c_raw! {
         *out = pt;
         return clen;
     }
+
+    // Single-block AES-ECB encrypt (16 bytes). Used for QUIC header
+    // protection (RFC 9001 §5.4.3), where the mask is AES-ECB(hp_key, sample).
+    static void* __glide_aes_ecb_block(void* key, int keylen, void* in16) {
+        int nk = keylen / 4, nr;
+        uint8_t rk[240];
+        __glide_aes_expand((const uint8_t*)key, nk, rk, &nr);
+        uint8_t* out = (uint8_t*)malloc(16);
+        __glide_aes_encrypt(rk, nr, (const uint8_t*)in16, out);
+        return out;
+    }
     #endif
+}
+
+extern fn __glide_aes_ecb_block(key: *void, keylen: i32, in16: *void) -> *void;
+
+/// AES-ECB encrypt one 16-byte block. `key` is 16 or 32 bytes. Used for
+/// QUIC header protection; not a general-purpose mode (ECB is unsafe for
+/// bulk data).
+pub fn aes_ecb_block(key: string, block: string) -> !string {
+    if key.len() != 16 && key.len() != 32 { return err("aes-ecb: key must be 16 or 32 bytes"); }
+    if block.len() != 16 { return err("aes-ecb: block must be 16 bytes"); }
+    let p: *void = __glide_aes_ecb_block(key as *void, key.len(), block as *void);
+    let s: string = __glide_string_from_buf(p, 16);
+    free(p);
+    return ok(s);
 }
 
 extern fn __glide_aes_gcm_seal(key: *void, keylen: i32, nonce: *void, pt: *void, ptlen: i32, aad: *void, aadlen: i32) -> *void;
