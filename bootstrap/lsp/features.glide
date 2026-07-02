@@ -869,7 +869,13 @@ pub fn lsp_infer_expr(stmts: *Vector<Stmt>, host: *Stmt, e: *Expr) -> *Type {
             return _fn_ret_type(stmts, e.lhs.str_val);
         }
         if e.lhs.kind == EX_PATH {
-            return _impl_method_ret(stmts, e.lhs.str_val, e.lhs.field);
+            let mret: *Type = _impl_method_ret(stmts, e.lhs.str_val, e.lhs.field);
+            if mret != null {
+                return mret;
+            }
+            // `e.lhs.str_val` may be a MODULE, not a type (e.g. `fs::fs_read`) —
+            // a module-qualified free function. Fall back to the free-fn type.
+            return _fn_ret_type(stmts, e.lhs.field);
         }
         if e.lhs.kind == EX_MEMBER && e.lhs.lhs != null {
             let recv: *Type = lsp_infer_expr(stmts, host, e.lhs.lhs);
@@ -1220,15 +1226,17 @@ fn render_hover_for_let(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt) -> string {
     } else {
         if s.let_value != null {
             let e: *Expr = s.let_value;
-            if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_PATH {
+            if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_PATH && find_generic_impl(stmts, e.lhs.str_val) != null {
                 // `Type::new()` form. For a GENERIC type, show the type argument
                 // (resolved from a later use of `s.name`, or `?` when it can't be
                 // pinned down). For a NON-generic type there are no type arguments,
                 // so render `*Type` without a spurious `<?>`.
+                // Guarded on `find_generic_impl != null`: only a real TYPE carries
+                // an impl. A `module::func()` call (e.g. `fs::fs_read`) has no impl
+                // named for the module, so it falls through to the shared
+                // inferencer below instead of rendering a bogus `*module`.
                 let gen_name: string = e.lhs.str_val;
                 let imp: *Stmt = find_generic_impl(stmts, gen_name);
-                // `find_generic_impl` matches any impl by name, so check that the
-                // type actually HAS type parameters before rendering `<...>`.
                 let is_generic: bool = imp != null && imp.type_params != null && imp.type_params.len() > 0;
                 if is_generic {
                     let mut t_str: string = "?";

@@ -1328,6 +1328,25 @@ fn _method_ret_type(stmts: *Vector<Stmt>, recv: *Type, method_name: string) -> *
     if x == null {
         return null;
     }
+    // Intrinsic methods of `!T` / `?T` / `?!T`: the unwrappers reach the
+    // payload (so `r.unwrap().<method>` resolves the inner type), the
+    // predicates are bool. Mirrors the virtual `.val`/`.ok` fields in
+    // _struct_field_type — without this the guard below rejected the
+    // Result/Option receiver and member completion after `.unwrap().` died.
+    if x.kind == TY_RESULT || x.kind == TY_OPTION || x.kind == TY_OPT_RESULT {
+        if method_name.eq("unwrap") || method_name.eq("expect")
+            || method_name.eq("unwrap_or") || method_name.eq("unwrap_or_else") {
+            return x.inner;
+        }
+        if method_name.eq("is_ok") || method_name.eq("is_err")
+            || method_name.eq("is_some") || method_name.eq("is_none") {
+            return ty_named("bool");
+        }
+        if method_name.eq("unwrap_err") {
+            return ty_named("string");
+        }
+        return null;
+    }
     if x.kind != TY_NAMED && x.kind != TY_GENERIC {
         return null;
     }
@@ -1855,7 +1874,14 @@ pub fn _chain_resolve_type(text: string, end_pos: i32, stmts: *Vector<Stmt>, lin
                 return null;
             }
             let type_name: string = text.substring(t_start, t_end);
-            return _impl_method_ret(stmts, type_name, method_name);
+            let mret: *Type = _impl_method_ret(stmts, type_name, method_name);
+            if mret != null {
+                return mret;
+            }
+            // `type_name` may be a MODULE, not a type (e.g. `fs::fs_read`) —
+            // a module-qualified free function. Fall back to the free-fn
+            // return type so `fs::fs_read("x").<member>` keeps resolving.
+            return _fn_ret_type(stmts, method_name);
         }
         return _fn_ret_type(stmts, method_name);
     }

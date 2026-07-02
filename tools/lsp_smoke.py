@@ -547,6 +547,43 @@ case_feature("completion suggests locals + top-level",
             r and any(it.get("label")=="x" for it in r.get("result",[]))),
     ))
 
+case_feature("member completion after a module-qualified call: fs::fs_read(...).",
+    'import stdlib::fs;\n'
+    'fn main() -> i32 {\n'
+    '    let r = fs::fs_read("x").\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/completion",
+     "params":{"position":{"line":2,"character":29}}},  # after the trailing '.'
+    lambda r: (lambda labs: check("string methods, not the global dump",
+        "contains" in labs and "i32" not in labs and len(labs) < 100,
+        f"got {len(labs)} items: {labs[:6]}"))([it.get("label") for it in (r.get("result",[]) if r else [])]))
+
+case_feature("member completion after .unwrap() on a Result<string>",
+    'fn getit() -> !string { return ok("hi"); }\n'
+    'fn main() -> i32 {\n'
+    '    let b = getit().unwrap().\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/completion",
+     "params":{"position":{"line":2,"character":29}}},  # after the trailing '.'
+    lambda r: (lambda labs: check("string methods, not the global dump",
+        "contains" in labs and "i32" not in labs and len(labs) < 100,
+        f"got {len(labs)} items: {labs[:6]}"))([it.get("label") for it in (r.get("result",[]) if r else [])]))
+
+case_feature("hover on a let bound to a module-qualified call is its return type, not *module",
+    'import stdlib::fs;\n'
+    'fn main() -> i32 {\n'
+    '    let res = fs::fs_read("x");\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/hover",
+     "params":{"position":{"line":2,"character":9}}},
+    lambda r: check("hover shows string, not *fs",
+        r and r.get("result") and "string" in r["result"]["contents"]["value"]
+          and "*fs" not in r["result"]["contents"]["value"],
+        f"got {r.get('result') if r else None}"))
+
 case_feature("references finds 2 sites",
     'fn helper() -> i32 { return 1; }\n'
     'fn main() -> i32 { return helper(); }',
