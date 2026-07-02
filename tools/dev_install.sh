@@ -10,11 +10,12 @@
 #
 #   bash tools/dev_install.sh
 #
-# Why the --target build instead of a plain host build: the host `cc`
-# (ucrt64) ships no zlib.h, and the compiler uses stdlib::compress. A
-# host-triple --target build rides the native mingw gcc against a tiny
-# staged sysroot (real zlib + a stub openssl header the compiler never
-# links) with -static, yielding a binary with no mingw DLL dependencies.
+# Why the --target build instead of a plain host build: it rides the
+# native mingw gcc against a tiny staged sysroot (a stub openssl header
+# the compiler never links) with -static, yielding a binary with no
+# mingw DLL dependencies. The compiler itself links no third-party C
+# libs (stdlib::compress is pure Glide), so the stub is only there to
+# satisfy the sysroot probe.
 set -e
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -25,11 +26,9 @@ INSTALL="$HOME/.glide/bin"
 MG=/c/msys64/mingw64
 AR="$MG/bin/ar"
 
-# --- stage a minimal windows-gnu sysroot (zlib real + openssl stub) ---
+# --- stage a minimal windows-gnu sysroot (openssl stub only) ---
 SR="$HOME/.glide/targets/x86_64-windows-gnu"
 rm -rf "$SR"; mkdir -p "$SR/include/openssl" "$SR/lib"
-cp "$MG/include/zlib.h" "$MG/include/zconf.h" "$SR/include/"
-cp "$MG/lib/libz.a" "$SR/lib/"
 printf '/* stub: satisfies the sysroot probe; openssl is not linked */\n' > "$SR/include/openssl/ssl.h"
 "$AR" rc "$SR/lib/libssl.a"; "$AR" rc "$SR/lib/libcrypto.a"
 

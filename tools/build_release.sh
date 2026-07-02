@@ -14,7 +14,7 @@ set -e
 
 VERSION="${VERSION:-0.2.0}"
 # Path to a directory of static libs to bundle into the release tarball
-# (under `lib/`). Expected to contain libssl.a, libcrypto.a, libz.a,
+# (under `lib/`). Expected to contain libssl.a, libcrypto.a,
 # libngtcp2.a, libngtcp2_crypto_ossl.a, libnghttp3.a — once present
 # bootstrap/main.glide prefers these over system dynamic libs, so end
 # users don't need `apt install libssl-dev libngtcp2-dev` to build
@@ -90,7 +90,7 @@ cp LICENSE "$STAGE/" 2>/dev/null || true
 # ---- Stage bundled static libs (optional) ----
 # When `--bundle-libs=<dir>` was given, copy the .a files into `lib/`
 # so bootstrap/main.glide picks them up via `_host_lib_bundle_dir`.
-# Required set: libssl libcrypto libz libngtcp2 libngtcp2_crypto_ossl
+# Required set: libssl libcrypto libngtcp2 libngtcp2_crypto_ossl
 # libnghttp3. Missing entries are tolerated — the linker falls back to
 # system dynamic libs for whatever isn't bundled (so the install still
 # builds non-h3 code on hosts without ngtcp2).
@@ -101,7 +101,7 @@ if [ -n "$BUNDLE_LIBS" ] && [ -d "$BUNDLE_LIBS" ]; then
     # sibling include/); older flat layouts are still accepted.
     src="$BUNDLE_LIBS"
     [ -d "$BUNDLE_LIBS/lib" ] && src="$BUNDLE_LIBS/lib"
-    for lib in libssl.a libcrypto.a libz.a libngtcp2.a libngtcp2_crypto_ossl.a libnghttp3.a; do
+    for lib in libssl.a libcrypto.a libngtcp2.a libngtcp2_crypto_ossl.a libnghttp3.a; do
         if [ -f "$src/$lib" ]; then
             cp "$src/$lib" "$STAGE/lib/"
             echo "   + $lib"
