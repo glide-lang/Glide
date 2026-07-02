@@ -13,7 +13,7 @@
 
 set -e
 
-VERSION="${VERSION:-0.6.1}"
+VERSION="${VERSION:-0.7.0}"
 ARCHIVE=""
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/share/glide}"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
