@@ -23,6 +23,14 @@ set -e
 VERSION="${VERSION:-0.3.1}"
 TARGET=""
 
+# HTTP/3 stack + openssl versions for the from-source linux-musl build.
+# ngtcp2's ossl crypto backend needs openssl >= 3.5 (QUIC TLS API), which
+# is newer than any distro static package — so those three are built from
+# source with the bundled zig as a musl cross compiler.
+OPENSSL_VER="${OPENSSL_VER:-3.5.7}"
+NGHTTP3_VER="${NGHTTP3_VER:-1.17.0}"
+NGTCP2_VER="${NGTCP2_VER:-1.24.0}"
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --target=*) TARGET="${1#--target=}"; shift ;;
@@ -54,23 +62,101 @@ rm -rf "$STAGING" "$SYSROOT" "$OUT"
 mkdir -p "$STAGING" "$SYSROOT/include" "$SYSROOT/lib"
 
 # -------------------------------------------------------------------------
-# Linux (musl): pull static libs from Alpine APKs. Works on any host
-# because the APKs are plain tar.gz; the script doesn't need an Alpine
-# environment to extract them.
+# Linux (musl): zlib comes from Alpine APKs (plain tar.gz, works on any
+# host). openssl + the HTTP/3 stack (nghttp3, ngtcp2 with the ossl crypto
+# backend) are built from source with zig as a musl cross compiler —
+# distro packages ship neither openssl 3.5 static nor ngtcp2_crypto_ossl,
+# and stdlib::http::h3 links exactly those. Falls back to the Alpine
+# openssl (no h3 libs) when zig isn't available.
 # -------------------------------------------------------------------------
+
+_find_zig_for_sysroot() {
+    if [ -x "runtime/zig/zig" ]; then echo "$PWD/runtime/zig/zig"; return; fi
+    command -v zig 2>/dev/null || true
+}
+
+# Build openssl + nghttp3 + ngtcp2 as static musl libs into ${SYSROOT}.
+# $1 = target arch (x86_64 | aarch64), $2 = zig binary.
+build_h3_stack_musl() {
+    local arch="$1" zig="$2"
+    local triple="${arch}-linux-musl"
+    local ossl_target="linux-${arch}"
+    [ "$arch" = "aarch64" ] && ossl_target="linux-aarch64"
+    # openssl's Configure requires an absolute --prefix, and the zig shims
+    # must stay reachable after cd'ing into each source tree.
+    local work="$(pwd)/${STAGING}/h3src"
+    local prefix="$(pwd)/${STAGING}/h3prefix"
+    local bindir="${work}/bin"
+    mkdir -p "$work" "$prefix" "$bindir"
+
+    # zig-as-toolchain shims — configure scripts want single-word CC/AR.
+    printf '#!/bin/sh\nexec "%s" cc -target %s "$@"\n' "$zig" "$triple" > "$bindir/zcc"
+    printf '#!/bin/sh\nexec "%s" ar "$@"\n' "$zig" > "$bindir/zar"
+    printf '#!/bin/sh\nexec "%s" ranlib "$@"\n' "$zig" > "$bindir/zranlib"
+    chmod +x "$bindir"/z*
+    local jobs; jobs="$(nproc 2>/dev/null || echo 4)"
+
+    echo ">> Building openssl ${OPENSSL_VER} (static, ${triple})"
+    curl -fsSL -o "$work/openssl.tar.gz" \
+        "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VER}/openssl-${OPENSSL_VER}.tar.gz"
+    tar -xzf "$work/openssl.tar.gz" -C "$work"
+    ( cd "$work/openssl-${OPENSSL_VER}" && \
+      PATH="$bindir:$PATH" ./Configure "$ossl_target" no-shared no-tests no-apps no-docs \
+          --prefix="$prefix" --libdir=lib CC=zcc AR=zar RANLIB=zranlib > build.log 2>&1 && \
+      PATH="$bindir:$PATH" make -j"$jobs" >> build.log 2>&1 && \
+      PATH="$bindir:$PATH" make install_sw >> build.log 2>&1 ) \
+      || { echo "openssl build failed — see $work/openssl-${OPENSSL_VER}/build.log" >&2; exit 1; }
+
+    echo ">> Building nghttp3 ${NGHTTP3_VER} (static, ${triple})"
+    curl -fsSL -o "$work/nghttp3.tar.gz" \
+        "https://github.com/ngtcp2/nghttp3/releases/download/v${NGHTTP3_VER}/nghttp3-${NGHTTP3_VER}.tar.gz"
+    tar -xzf "$work/nghttp3.tar.gz" -C "$work"
+    ( cd "$work/nghttp3-${NGHTTP3_VER}" && \
+      PATH="$bindir:$PATH" CC=zcc ./configure --enable-lib-only --enable-static \
+          --disable-shared --prefix="$prefix" --host="$triple" > build.log 2>&1 && \
+      PATH="$bindir:$PATH" make -j"$jobs" >> build.log 2>&1 && \
+      PATH="$bindir:$PATH" make install >> build.log 2>&1 ) \
+      || { echo "nghttp3 build failed — see $work/nghttp3-${NGHTTP3_VER}/build.log" >&2; exit 1; }
+
+    echo ">> Building ngtcp2 ${NGTCP2_VER} (static, ${triple}, crypto_ossl)"
+    curl -fsSL -o "$work/ngtcp2.tar.gz" \
+        "https://github.com/ngtcp2/ngtcp2/releases/download/v${NGTCP2_VER}/ngtcp2-${NGTCP2_VER}.tar.gz"
+    tar -xzf "$work/ngtcp2.tar.gz" -C "$work"
+    ( cd "$work/ngtcp2-${NGTCP2_VER}" && \
+      PATH="$bindir:$PATH" CC=zcc PKG_CONFIG_PATH="$prefix/lib/pkgconfig" \
+          ./configure --enable-lib-only --enable-static --disable-shared \
+          --with-openssl --prefix="$prefix" --host="$triple" > build.log 2>&1 && \
+      PATH="$bindir:$PATH" make -j"$jobs" >> build.log 2>&1 && \
+      PATH="$bindir:$PATH" make install >> build.log 2>&1 ) \
+      || { echo "ngtcp2 build failed — see $work/ngtcp2-${NGTCP2_VER}/build.log" >&2; exit 1; }
+    [ -f "$prefix/lib/libngtcp2_crypto_ossl.a" ] \
+      || { echo "ngtcp2 built without crypto_ossl (openssl >= 3.5 not detected?)" >&2; exit 1; }
+
+    cp -r "$prefix/include/openssl" "$prefix/include/ngtcp2" "$prefix/include/nghttp3" "${SYSROOT}/include/"
+    cp "$prefix/lib/libssl.a" "$prefix/lib/libcrypto.a" \
+       "$prefix/lib/libngtcp2.a" "$prefix/lib/libngtcp2_crypto_ossl.a" \
+       "$prefix/lib/libnghttp3.a" "${SYSROOT}/lib/"
+}
+
 build_linux_musl() {
     local arch="$1"
     local alpine_ver="${ALPINE_VER:-v3.20}"
     local openssl_pkg="openssl-3.3.7-r0"
     local zlib_pkg="zlib-1.3.2-r0"
     local base="https://dl-cdn.alpinelinux.org/alpine/${alpine_ver}/main/${arch}"
+
+    local zig; zig="$(_find_zig_for_sysroot)"
+    local pkgs="${zlib_pkg//zlib-/zlib-dev-} ${zlib_pkg//zlib-/zlib-static-}"
+    if [ -z "$zig" ]; then
+        echo ">> WARNING: zig not found (runtime/zig/ or PATH) — shipping Alpine" >&2
+        echo ">>          openssl and NO HTTP/3 libs. stdlib::http::h3 programs" >&2
+        echo ">>          will not link against this sysroot. Install zig with" >&2
+        echo ">>          tools/install_toolchain.sh and rebuild to include them." >&2
+        pkgs="$pkgs ${openssl_pkg//openssl-/openssl-dev-} ${openssl_pkg//openssl-/openssl-libs-static-}"
+    fi
+
     echo ">> Fetching Alpine packages from $base"
-    for pkg in \
-        "${openssl_pkg//openssl-/openssl-dev-}" \
-        "${openssl_pkg//openssl-/openssl-libs-static-}" \
-        "${zlib_pkg//zlib-/zlib-dev-}" \
-        "${zlib_pkg//zlib-/zlib-static-}"
-    do
+    for pkg in $pkgs; do
         local file="${pkg}.apk"
         echo "   $file"
         if ! curl -fsSL "${base}/${file}" -o "${STAGING}/${file}"; then
@@ -82,19 +168,23 @@ build_linux_musl() {
     done
 
     echo ">> Assembling sysroot"
-    [ -d "${STAGING}/usr/include/openssl" ] || { echo "openssl headers missing" >&2; exit 1; }
     [ -f "${STAGING}/usr/include/zlib.h" ]  || { echo "zlib.h missing" >&2; exit 1; }
-    cp -r "${STAGING}/usr/include/openssl" "${SYSROOT}/include/"
     cp "${STAGING}/usr/include/zlib.h" "${SYSROOT}/include/"
     [ -f "${STAGING}/usr/include/zconf.h" ] || { echo "zconf.h missing" >&2; exit 1; }
     cp "${STAGING}/usr/include/zconf.h" "${SYSROOT}/include/"
-
-    [ -f "${STAGING}/usr/lib/libssl.a" ]    || { echo "libssl.a missing" >&2; exit 1; }
-    [ -f "${STAGING}/usr/lib/libcrypto.a" ] || { echo "libcrypto.a missing" >&2; exit 1; }
     [ -f "${STAGING}/lib/libz.a" ]          || { echo "libz.a missing" >&2; exit 1; }
-    cp "${STAGING}/usr/lib/libssl.a" "${SYSROOT}/lib/"
-    cp "${STAGING}/usr/lib/libcrypto.a" "${SYSROOT}/lib/"
     cp "${STAGING}/lib/libz.a" "${SYSROOT}/lib/"
+
+    if [ -n "$zig" ]; then
+        build_h3_stack_musl "$arch" "$zig"
+    else
+        [ -d "${STAGING}/usr/include/openssl" ] || { echo "openssl headers missing" >&2; exit 1; }
+        cp -r "${STAGING}/usr/include/openssl" "${SYSROOT}/include/"
+        [ -f "${STAGING}/usr/lib/libssl.a" ]    || { echo "libssl.a missing" >&2; exit 1; }
+        [ -f "${STAGING}/usr/lib/libcrypto.a" ] || { echo "libcrypto.a missing" >&2; exit 1; }
+        cp "${STAGING}/usr/lib/libssl.a" "${SYSROOT}/lib/"
+        cp "${STAGING}/usr/lib/libcrypto.a" "${SYSROOT}/lib/"
+    fi
 }
 
 # -------------------------------------------------------------------------
