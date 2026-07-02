@@ -130,6 +130,34 @@ case_diagnostics("exhaustive Option match is clean",
     '}',
     expect_codes_absent=["match-not-exhaustive"])
 
+# A fn used only inside a match (scrutinee/arm) is NOT "never called".
+case_diagnostics("fn used only in a match is not unused",
+    'fn helper() -> !i32 { return ok(1); }\n'
+    'fn main() -> i32 {\n'
+    '    match helper() {\n'
+    '        ok(v) => { return v; }\n'
+    '        err(e) => { return 0; }\n'
+    '    }\n'
+    '}',
+    expect_codes_absent=["unused-fn"])
+
+# Comparing incompatible types is an error (was a silent wrong answer / ICE).
+case_diagnostics("incompatible comparison is flagged",
+    'fn main() -> i32 {\n'
+    '    if 5 == "x" { return 1; }\n'
+    '    return 0;\n'
+    '}',
+    expect_codes_present=["cmp-type-mismatch"])
+
+# A null check on a string stays legal.
+case_diagnostics("null comparison stays legal",
+    'fn main() -> i32 {\n'
+    '    let s: string = "x";\n'
+    '    if s == null { return 1; }\n'
+    '    return 0;\n'
+    '}',
+    expect_codes_absent=["cmp-type-mismatch"])
+
 case_diagnostics("for-in over a scalar (bare int var)",
     'fn main() -> i32 {\n    let n: i32 = 5;\n    for i in n { println!(i); }\n    return 0;\n}',
     expect_codes_present=["for-in-not-iterable"])

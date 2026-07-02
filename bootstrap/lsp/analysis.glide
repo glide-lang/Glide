@@ -918,6 +918,25 @@ fn collect_calls_stmt(s: *Stmt, out: *HashMap<bool>) {
             collect_calls_stmt(&b, out);
         }
     }
+    // `match` statement: the scrutinee and every arm body carry calls too. Without
+    // this a fn called only inside a match is wrongly reported "never called".
+    if s.scrutinee != null {
+        collect_calls_expr(s.scrutinee, out);
+    }
+    if s.arms != null {
+        for let i: i32 = 0; i < s.arms.len(); i++ {
+            let a: MatchArm = s.arms.get(i);
+            if a.lit != null {
+                collect_calls_expr(a.lit, out);
+            }
+            if a.body != null {
+                for let k: i32 = 0; k < a.body.len(); k++ {
+                    let ab: Stmt = a.body.get(k);
+                    collect_calls_stmt(&ab, out);
+                }
+            }
+        }
+    }
 }
 
 fn collect_calls_expr(e: *Expr, out: *HashMap<bool>) {
@@ -957,6 +976,22 @@ fn collect_calls_expr(e: *Expr, out: *HashMap<bool>) {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
             collect_calls_expr(&a, out);
+        }
+    }
+    // Expression-form `match` (`let x = match … { … }`): recurse into arm bodies
+    // so a call used only inside one is still seen as a call.
+    if e.match_arms != null {
+        for let i: i32 = 0; i < e.match_arms.len(); i++ {
+            let ma: MatchArm = e.match_arms.get(i);
+            if ma.lit != null {
+                collect_calls_expr(ma.lit, out);
+            }
+            if ma.body != null {
+                for let k: i32 = 0; k < ma.body.len(); k++ {
+                    let mb: Stmt = ma.body.get(k);
+                    collect_calls_stmt(&mb, out);
+                }
+            }
         }
     }
 }

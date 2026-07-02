@@ -3929,6 +3929,15 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                     t.err_code(e.line, e.column, "no-operator", "no `".concat(_op_symbol(op)).concat("` operator for `").concat(ls.name).concat("`; implement `fn cmp(self: *").concat(ls.name).concat(", other: *").concat(ls.name).concat(") -> i32`"));
                 }
             }
+            // Operands must be comparable. Without this, `5 == "x"` compiled to a
+            // silent wrong answer and `EnumA == EnumB` ICE'd in cc. Comparing to
+            // null (`*void`) is always allowed — it's a null / identity check,
+            // and `string` (a char*) legitimately compares against null.
+            let l_voidp: bool = lt != null && lt.kind == TY_POINTER && lt.inner != null && lt.inner.kind == TY_NAMED && lt.inner.name != null && lt.inner.name.eq("void");
+            let r_voidp: bool = rt != null && rt.kind == TY_POINTER && rt.inner != null && rt.inner.kind == TY_NAMED && rt.inner.name != null && rt.inner.name.eq("void");
+            if !types_compat(lt, rt) && !l_voidp && !r_voidp {
+                t.err_code(e.line, e.column, "cmp-type-mismatch", "cannot compare `".concat(type_to_string(lt)).concat("` with `").concat(type_to_string(rt)).concat("`"));
+            }
             return ty_named("bool");
         }
         if op == OP_AND || op == OP_OR {
