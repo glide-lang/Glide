@@ -1,0 +1,44 @@
+import stdlib::testing::*;
+
+struct Acc { total: i32, n: i32 }
+
+// Returning an owned local wrapped in ok()/some() must NOT free it before the
+// caller reads it (regression: the auto-drop used to dangle the pointer).
+fn mk_res() -> !*Acc { let a: *Acc = Acc { total: 42, n: 7 }; return ok(a); }
+fn mk_opt() -> ?*Acc { let a: *Acc = Acc { total: 99, n: 3 }; return some(a); }
+
+fn test_result_ptr_val() -> i32 {
+    let r: !*Acc = mk_res();
+    assert!(r.ok);
+    assert_eq!(r.val.total, 42);
+    assert_eq!(r.val.n, 7);
+    return 0;
+}
+
+fn test_result_ptr_unwrap() -> i32 {
+    let r: !*Acc = mk_res();
+    let p: *Acc = r.unwrap();
+    assert_eq!(p.total, 42);
+    return 0;
+}
+
+fn test_result_ptr_chained_unwrap() -> i32 {
+    assert_eq!(mk_res().unwrap().total, 42);
+    return 0;
+}
+
+fn test_option_ptr_val() -> i32 {
+    let o: ?*Acc = mk_opt();
+    assert!(o.has);
+    assert_eq!(o.val.total, 99);
+    assert_eq!(o.unwrap().n, 3);
+    return 0;
+}
+
+// `?` propagation of a pointer-carrying Result across a hop.
+fn _hop() -> !i32 { let a: *Acc = mk_res()?; return ok(a.total); }
+fn test_result_ptr_propagate() -> i32 {
+    let r: !i32 = _hop();
+    assert_eq!(r.unwrap(), 42);
+    return 0;
+}

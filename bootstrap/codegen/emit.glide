@@ -4860,11 +4860,31 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
         let has_err_defers: bool = is_err_return && g.err_defer_stack.len() > 0;
         let has_cleanup: bool = g.defer_stack.len() > 0 || g.auto_drop_stack.len() > 0 || has_err_defers;
         // `return <local>` moves that local out to the caller; skip its auto-drop
-        // here so the returned pointer does not dangle. Only the direct ident
-        // form is a move (a wrapped `return ok(v)` is left to its own path).
+        // here so the returned pointer does not dangle. A wrapped
+        // `return ok(v)` / `some(v)` / `err(v)` also escapes the owned local `v`
+        // into the returned Result/Option — skip its drop too, else the wrapped
+        // pointer is freed before the caller sees it. The skip is local to this
+        // return, so a conditional fall-through path still drops it.
         let mut ret_name: string = "";
         if s.expr_value != null && s.expr_value.kind == EX_IDENT {
             ret_name = s.expr_value.str_val;
+        } else if s.expr_value != null && s.expr_value.kind == EX_CALL && s.expr_value.args != null && s.expr_value.lhs != null && s.expr_value.lhs.kind == EX_IDENT {
+            // Only the Option/Result constructors retain the pointer (already
+            // rewritten to `__glide_ok_*` / `some` / `err` / `optres_*` above).
+            // Restricting to them avoids skipping the drop for an auto-borrow
+            // arg (`&T` param), which would leak.
+            let cn: string = s.expr_value.lhs.str_val;
+            let is_wrapper: bool = cn.starts_with("__glide_ok_") || cn.starts_with("__glide_some_") || cn.starts_with("__glide_err_") || cn.starts_with("__glide_optres_");
+            if is_wrapper {
+                let mut ai: i32 = 0;
+                while ai < s.expr_value.args.len() && ret_name.eq("") {
+                    let a: Expr = s.expr_value.args.get(ai);
+                    if a.kind == EX_IDENT && _is_owned_local(g, a.str_val) {
+                        ret_name = a.str_val;
+                    }
+                    ai = ai + 1;
+                }
+            }
         }
         if s.expr_value != null && has_cleanup {
             ind(depth);
