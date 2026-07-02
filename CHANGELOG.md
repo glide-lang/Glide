@@ -82,6 +82,39 @@
   first. The callee's declared param type now propagates, including through
   a generic receiver: `v.push(none())` on a `Vector<?i32>` works.
 - **Generic-fn call arguments no longer trip a false use-after-move.**
+- **HTTP/3 server survives concurrent slow handlers.** The packet demuxer
+  decoded short-header (1-RTT) DCIDs with the wrong length, so every
+  post-handshake ACK/keepalive was dropped; the server retransmitted into a
+  shrinking window and a response from a handler that took a while never got
+  out before the connection was reaped — clients hung to their 30s deadline.
+  Fast handlers escaped via coalesced handshake datagrams, which is why only
+  parallel + slow traffic caught it.
+- **`Child.stdout/stderr` pipe reads return real strings.** The C helpers
+  handed back a raw `char*`, so `.len()` on the result read a garbage length
+  header (usually 0) even though the content printed fine.
+- **Failed builds exit non-zero again.** POSIX `system()` returns the wait
+  status (exit code << 8); propagating it as a process exit code truncated
+  to 0, so a failed cc under `glide build` exited green and `glide test` ran
+  the missing binary. Wait statuses are now decoded everywhere.
+- **`stdlib::meta` / proc-macro imports work again.** Five stdlib modules
+  (and the interp/proc-macro tests) still imported `bootstrap::ast` /
+  `bootstrap::interp` from before the compiler's layered-module refactor
+  moved them under `bootstrap::syntax::*`; every program touching handlers,
+  routes, `@derive(JsonBind)`, log macros or `stdlib::meta` failed with
+  unresolved-import.
+- **No zig? No silent cross-promotion.** A build linking openssl/zlib
+  auto-routes through the zig+sysroot pipeline when the host sysroot is
+  installed, but without zig it died with a `--target requires zig` error
+  the user never asked for. It now falls back to the host cc + system libs
+  (an explicit `--target=` still requires zig, as before).
+
+### Release infrastructure
+
+- **linux-musl sysroots now ship the HTTP/3 stack.** `tools/build_sysroot.sh`
+  builds openssl 3.5, nghttp3 and ngtcp2 (ossl crypto backend) from source
+  as static musl libs using the bundled zig — published sysroots previously
+  carried only openssl 3.3 + zlib, so no `stdlib::http::h3` program could
+  link against them.
 
 ## 0.6.1 — 2026-07-01
 
