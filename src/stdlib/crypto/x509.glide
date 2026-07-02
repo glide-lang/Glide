@@ -379,3 +379,54 @@ pub fn cert_matches_hostname(cert: *Cert, hostname: string) -> bool {
 pub fn cert_is_time_valid(cert: *Cert, now_epoch: i64) -> bool {
     return now_epoch >= cert.not_before && now_epoch <= cert.not_after;
 }
+
+// ---- chain building & verification ------------------------------------
+
+// Find a candidate whose subject Name equals `cert`'s issuer Name. Name
+// matching here is exact-DER (issuers are re-encoded identically by CAs).
+fn _find_issuer(cert: *Cert, candidates: *Vector<*Cert>) -> *Cert {
+    for let i: i32 = 0; i < candidates.len(); i++ {
+        let cand: *Cert = candidates.get(i);
+        if cand.subject_der.eq(cert.issuer_der) { return cand; }
+    }
+    return null as *Cert;
+}
+
+/// Verify `leaf` chains to a trusted root through zero or more
+/// `intermediates`, that every certificate is within its validity window
+/// at `now` (epoch seconds), that non-leaf certificates are CAs, and that
+/// `leaf` is authorized for `hostname`. Returns ok(true) on success, or an
+/// err naming the first failure (fail-closed).
+pub fn verify_chain(leaf: *Cert, intermediates: *Vector<*Cert>,
+                    roots: *Vector<*Cert>, hostname: string, now: i64) -> !bool {
+    if !cert_matches_hostname(leaf, hostname) {
+        return err("x509: hostname does not match certificate");
+    }
+    let mut current: *Cert = leaf;
+    let max_depth: i32 = 10;
+    for let depth: i32 = 0; depth < max_depth; depth++ {
+        if !cert_is_time_valid(current, now) {
+            return err("x509: certificate is expired or not yet valid");
+        }
+        // Anchored? A trusted root that issued `current` ends the chain.
+        let root: *Cert = _find_issuer(current, roots);
+        if root != null {
+            if !cert_is_time_valid(root, now) { return err("x509: trust anchor expired"); }
+            let v: !bool = cert_verify_signature(current, root.pubkey);
+            if !v.ok { return err(v.err); }
+            if !v.val { return err("x509: signature does not verify against trust anchor"); }
+            return ok(true);
+        }
+        // Otherwise step up through the supplied intermediates.
+        let issuer: *Cert = _find_issuer(current, intermediates);
+        if issuer == null {
+            return err("x509: unable to build chain to a trusted root");
+        }
+        if !issuer.is_ca { return err("x509: intermediate is not a CA"); }
+        let v: !bool = cert_verify_signature(current, issuer.pubkey);
+        if !v.ok { return err(v.err); }
+        if !v.val { return err("x509: intermediate signature does not verify"); }
+        current = issuer;
+    }
+    return err("x509: certificate chain too long");
+}

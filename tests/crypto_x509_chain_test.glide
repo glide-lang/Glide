@@ -1,0 +1,46 @@
+// X.509 chain verification against a real OpenSSL-generated P-256 chain:
+// a "Glide Root CA" and a leaf (CN=api.glide.dev) signed by it.
+import stdlib::testing::*;
+import stdlib::crypto::x509::*;
+import stdlib::hex::*;
+
+fn _ca() -> *Cert { return cert_parse(hex_decode("308201853082012ba0030201020214285528d0ab680c8c3391e44789446d25bcc599a6300a06082a8648ce3d04030230183116301406035504030c0d476c69646520526f6f74204341301e170d3236303730323039343232395a170d3336303632393039343232395a30183116301406035504030c0d476c69646520526f6f742043413059301306072a8648ce3d020106082a8648ce3d0301070342000400254d1d0047df2179dbbdb82c687625a93a73e784deae4825bc2e79939ca0ae7b96df8117a8bfb1fc053e52231ef3d248e0f500c67a0964163c242cd484ffb6a3533051301d0603551d0e0416041458220c7d15bd499c5eb21fba0f32c32e7c7040f2301f0603551d2304183016801458220c7d15bd499c5eb21fba0f32c32e7c7040f2300f0603551d130101ff040530030101ff300a06082a8648ce3d0403020348003045022046d6d93ae9908b2bf9d42333b0b59595ebe8b37797b3cc49e54d871725e21570022100dfaf7551da5f63ff95e44be2b4015b319426d08aa186d4aef255bbcc7922ce38").unwrap()).unwrap(); }
+fn _leaf() -> *Cert { return cert_parse(hex_decode("3082019a3082013fa0030201020214270867f3d700c35028a2f247cfe190f2ecc1abd6300a06082a8648ce3d04030230183116301406035504030c0d476c69646520526f6f74204341301e170d3236303730323039343232395a170d3237303730323039343232395a30183116301406035504030c0d6170692e676c6964652e6465763059301306072a8648ce3d020106082a8648ce3d030107034200044c8fbc442abb567aa6e2260f832334567f37f2c74c6c17884d9e09ec11377353b602720e87e493abb72c5dc6889a37eca87c5b900542c5ab598a847f22c9772fa367306530180603551d110411300f820d6170692e676c6964652e64657630090603551d1304023000301d0603551d0e04160414a3e641133c0d6254d31ebb2388afb8ffe18317a2301f0603551d2304183016801458220c7d15bd499c5eb21fba0f32c32e7c7040f2300a06082a8648ce3d0403020349003046022100bb25fc54b38e5bcab97b8753bcd5f710540bb3e3a2c5b56256ff90e0cb6fb39d022100f5041e40c8402476ea69212c07eb707ab3f9c3195fb68dfefe28eeebc1cda27f").unwrap()).unwrap(); }
+fn _roots() -> *Vector<*Cert> { let v: *Vector<*Cert> = Vector::new(); v.push(_ca()); return v; }
+fn _empty() -> *Vector<*Cert> { return Vector::new(); }
+
+fn test_valid_chain() -> i32 {
+    let leaf: *Cert = _leaf();
+    let now: i64 = leaf.not_before + 1000;
+    let v: !bool = verify_chain(leaf, _empty(), _roots(), "api.glide.dev", now);
+    assert!(v.is_ok());
+    assert!(v.unwrap());
+    return 0;
+}
+
+fn test_rejects_wrong_hostname() -> i32 {
+    let leaf: *Cert = _leaf();
+    assert!(verify_chain(leaf, _empty(), _roots(), "evil.com", leaf.not_before + 1000).is_err());
+    return 0;
+}
+
+fn test_rejects_untrusted_root() -> i32 {
+    let leaf: *Cert = _leaf();
+    // no trust anchors supplied -> chain cannot be built
+    assert!(verify_chain(leaf, _empty(), _empty(), "api.glide.dev", leaf.not_before + 1000).is_err());
+    return 0;
+}
+
+fn test_rejects_expired() -> i32 {
+    let leaf: *Cert = _leaf();
+    assert!(verify_chain(leaf, _empty(), _roots(), "api.glide.dev", leaf.not_after + 100).is_err());
+    assert!(verify_chain(leaf, _empty(), _roots(), "api.glide.dev", leaf.not_before - 100).is_err());
+    return 0;
+}
+
+fn test_ca_flag_and_leaf_cn() -> i32 {
+    assert!(_ca().is_ca);
+    assert!(!_leaf().is_ca);
+    assert_str_eq!(_leaf().subject_cn, "api.glide.dev");
+    return 0;
+}
