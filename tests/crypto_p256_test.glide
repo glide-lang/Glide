@@ -1,0 +1,82 @@
+// NIST P-256 ECDH + ECDSA against reference vectors, plus round-trips.
+import stdlib::testing::*;
+import stdlib::crypto::p256::*;
+import stdlib::hex::*;
+
+fn _h(s: string) -> string {
+    let r: !string = hex_decode(s);
+    if !r.is_ok() { return ""; }
+    return r.unwrap();
+}
+
+// Public key derivation KAT (secret d1 -> uncompressed pubkey).
+fn test_pubkey_derivation() -> i32 {
+    let d1: string = _h("c88f01f510d9ac3f70a292daa2316de544e9aab8afe84049c62a9c3564e4c9a6");
+    let pk: !string = p256_pubkey(d1);
+    assert!(pk.is_ok());
+    assert_str_eq!(hex_encode(pk.unwrap()),
+        "04fdc0857effd31496834383c53775bcbba5e97d4859ebbc313f1a299e52089ebff96997317e78ed76ac691a3acd5ddb0b649263a4d9b6308e3abdf6c8e7115b65");
+    return 0;
+}
+
+// ECDH agreement (two fixed keypairs) against the reference shared X.
+fn test_ecdh_vector() -> i32 {
+    let d1: string = _h("c88f01f510d9ac3f70a292daa2316de544e9aab8afe84049c62a9c3564e4c9a6");
+    let d2: string = _h("c6ef9c5d78ae012a011164acb397ce2088685d8f06bf9be0b283ab46476bee53");
+    let pk1: string = p256_pubkey(d1).unwrap();
+    let pk2: string = p256_pubkey(d2).unwrap();
+    let s1: !string = p256_ecdh(d1, pk2);
+    let s2: !string = p256_ecdh(d2, pk1);
+    assert!(s1.is_ok());
+    assert!(s2.is_ok());
+    assert_str_eq!(hex_encode(s1.unwrap()),
+        "21b8d98cc43d18961f7748d4a0984221f092638e81dcca94ddf9d37480bd045e");
+    assert!(s1.unwrap().eq(s2.unwrap()));
+    return 0;
+}
+
+// ECDSA verify interop KAT: a (pubkey, hash, r||s) triple produced by an
+// independent implementation (Python `cryptography` over SECP256R1 with a
+// prehashed SHA-256 digest). Verifying it here proves cross-impl interop.
+fn test_ecdsa_verify_vector() -> i32 {
+    let pub: string = _h("041ccbe91c075fc7f4f033bfa248db8fccd3565de94bbfb12f3c59ff46c271bf83ce4014c68811f9a21a1fdb2c0e6113e06db7ca93b7404e78dc7ccd5ca89a4ca9");
+    let z: string   = _h("c4fb448ce0b4564379de0bb80b311c8bb551ab8a81d8e8cd86214fa72edbda08");
+    let sig: string = _h("4dd2d5a1f7d056740ae70138fc2458540faea7d6bbc86de03dc011256558a21f094a9b701e5dacc979643da2b52d77b224a8aaf31b54807a4f98aba7cba22a66");
+    let v: !i32 = ecdsa_verify(pub, z, sig);
+    assert!(v.is_ok());
+    assert_eq!(v.unwrap(), 1);
+    return 0;
+}
+
+// A tampered hash must NOT verify.
+fn test_ecdsa_verify_rejects_wrong_hash() -> i32 {
+    let pub: string = _h("041ccbe91c075fc7f4f033bfa248db8fccd3565de94bbfb12f3c59ff46c271bf83ce4014c68811f9a21a1fdb2c0e6113e06db7ca93b7404e78dc7ccd5ca89a4ca9");
+    let bad: string = _h("0000000000000000000000000000000000000000000000000000000000000001");
+    let sig: string = _h("4dd2d5a1f7d056740ae70138fc2458540faea7d6bbc86de03dc011256558a21f094a9b701e5dacc979643da2b52d77b224a8aaf31b54807a4f98aba7cba22a66");
+    assert_eq!(ecdsa_verify(pub, bad, sig).unwrap(), 0);
+    return 0;
+}
+
+// Sign then verify round-trip with a generated key.
+fn test_sign_verify_roundtrip() -> i32 {
+    let sk: string = p256_generate().unwrap();
+    let pk: string = p256_pubkey(sk).unwrap();
+    let hash: string = _h("af2bdbe1aa9b6ec1e2ade1d694f41fc71a831d0268e9891562113d8a62add1bf");
+    let sig: !string = ecdsa_sign(sk, hash);
+    assert!(sig.is_ok());
+    let sg: string = sig.unwrap();
+    assert_eq!(sg.len(), 64);
+    assert_eq!(ecdsa_verify(pk, hash, sg).unwrap(), 1);
+    // a different hash must fail against the same signature
+    let other: string = _h("0000000000000000000000000000000000000000000000000000000000000002");
+    assert_eq!(ecdsa_verify(pk, other, sg).unwrap(), 0);
+    return 0;
+}
+
+// Off-curve peer point is rejected by ECDH.
+fn test_ecdh_rejects_offcurve() -> i32 {
+    let sk: string = _h("c88f01f510d9ac3f70a292daa2316de544e9aab8afe84049c62a9c3564e4c9a6");
+    let bad: string = _h("04" .concat("11").concat("11".repeat(63)));
+    assert!(p256_ecdh(sk, bad).is_err());
+    return 0;
+}

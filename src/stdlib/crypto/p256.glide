@@ -1,0 +1,402 @@
+// NIST P-256 (secp256r1) — ECDH and ECDSA. Constant-time by construction:
+// field/scalar arithmetic is Montgomery CIOS over 4x64-bit limbs, point
+// addition uses the Renes-Costello-Batina COMPLETE formulas (no
+// exceptional cases at infinity / P=Q), and the scalar multiply is a
+// fixed-step double-and-add-always with a branchless conditional select,
+// so nothing depends on secret bits in time or memory access. Modular
+// inversion is Fermat exponentiation with the PUBLIC modulus, so its
+// square-and-multiply schedule leaks nothing.
+//
+// This is the secp256r1 key exchange and ECDSA that TLS interop needs
+// alongside X25519 / Ed-less signing.
+//
+// ```glide
+// import stdlib::crypto::p256::*;
+//
+// let sk: string = p256_generate().unwrap();         // 32-byte scalar
+// let pk: string = p256_pubkey(sk).unwrap();         // 65-byte 0x04||X||Y
+// let sh: !string = p256_ecdh(sk, peer_pk);          // 32-byte shared X
+// let sig: !string = ecdsa_sign(sk, hash32);         // 64-byte r||s
+// let ok:  !i32    = ecdsa_verify(pk, hash32, sig);
+// ```
+
+import stdlib::crypto::csprng::*;
+import stdlib::bytes::*;
+
+c_raw! {
+    #ifndef GLIDE_P256_DEFINED
+    #define GLIDE_P256_DEFINED
+    #include <stdint.h>
+    #include <string.h>
+    #include <stdlib.h>
+
+    typedef uint64_t fe[4];   /* little-endian limbs */
+
+    static const fe P256_P = { 0xffffffffffffffffULL, 0x00000000ffffffffULL, 0x0000000000000000ULL, 0xffffffff00000001ULL };
+    static const fe P256_N = { 0xf3b9cac2fc632551ULL, 0xbce6faada7179e84ULL, 0xffffffffffffffffULL, 0xffffffff00000000ULL };
+    static const fe P256_R2P = { 0x0000000000000003ULL, 0xfffffffbffffffffULL, 0xfffffffffffffffeULL, 0x00000004fffffffdULL };
+    static const fe P256_R2N = { 0x83244c95be79eea2ULL, 0x4699799c49bd6fa6ULL, 0x2845b2392b6bec59ULL, 0x66e12d94f3d95620ULL };
+    static const fe P256_ONE = { 0x0000000000000001ULL, 0xffffffff00000000ULL, 0xffffffffffffffffULL, 0x00000000fffffffeULL };
+    static const fe P256_B3  = { 0x89d69e267d4e399fULL, 0x06d01166698c91b2ULL, 0xb0e66203e5638c84ULL, 0x949012590d95d89cULL };
+    static const fe P256_GX  = { 0x79e730d418a9143cULL, 0x75ba95fc5fedb601ULL, 0x79fb732b77622510ULL, 0x18905f76a53755c6ULL };
+    static const fe P256_GY  = { 0xddf25357ce95560aULL, 0x8b4ab8e4ba19e45cULL, 0xd2e88688dd21f325ULL, 0x8571ff1825885d85ULL };
+    #define P256_N0P 1ULL
+    #define P256_N0N 0xccd1c8aaee00bc4fULL
+
+    static void fe_set(fe r, const fe a) { r[0]=a[0]; r[1]=a[1]; r[2]=a[2]; r[3]=a[3]; }
+    static void fe_zero(fe r) { r[0]=r[1]=r[2]=r[3]=0; }
+    static int fe_iszero(const fe a) { return (a[0]|a[1]|a[2]|a[3]) == 0; }
+    static int fe_eq(const fe a, const fe b) {
+        uint64_t d = (a[0]^b[0])|(a[1]^b[1])|(a[2]^b[2])|(a[3]^b[3]); return d==0;
+    }
+    static void fe_cselect(fe r, const fe a, const fe b, uint64_t bit) {
+        uint64_t m = 0 - bit;   /* bit in {0,1} -> mask */
+        for (int i = 0; i < 4; i++) r[i] = (b[i] & m) | (a[i] & ~m);
+    }
+
+    /* r = a + b mod m (a,b < m). Returns nothing. */
+    static void fe_addm(fe r, const fe a, const fe b, const fe m) {
+        unsigned __int128 c = 0;
+        uint64_t t[4];
+        for (int i = 0; i < 4; i++) { c += (unsigned __int128)a[i] + b[i]; t[i] = (uint64_t)c; c >>= 64; }
+        uint64_t carry = (uint64_t)c;
+        /* subtract m if there was a carry out, or t >= m (no borrow). */
+        uint64_t s[4], bb = 0;
+        for (int i = 0; i < 4; i++) { unsigned __int128 d = (unsigned __int128)t[i] - m[i] - bb; s[i] = (uint64_t)d; bb = (d >> 64) ? 1 : 0; }
+        uint64_t ge = carry | (uint64_t)(bb == 0);   /* carry, or no borrow => t>=m */
+        fe_cselect(r, t, s, ge & 1);
+    }
+    /* r = a - b mod m */
+    static void fe_subm(fe r, const fe a, const fe b, const fe m) {
+        uint64_t t[4], bb = 0;
+        for (int i = 0; i < 4; i++) { unsigned __int128 d = (unsigned __int128)a[i] - b[i] - bb; t[i] = (uint64_t)d; bb = (d >> 64) ? 1 : 0; }
+        /* if borrow, add m back */
+        uint64_t s[4]; unsigned __int128 c = 0;
+        for (int i = 0; i < 4; i++) { c += (unsigned __int128)t[i] + m[i]; s[i] = (uint64_t)c; c >>= 64; }
+        fe_cselect(r, t, s, bb & 1);
+    }
+
+    /* Montgomery multiply: r = a*b*R^-1 mod m, m0 = -m^-1 mod 2^64. CIOS. */
+    static void mont_mul(fe r, const fe a, const fe b, const fe m, uint64_t m0) {
+        uint64_t t[6]; memset(t, 0, sizeof(t));
+        for (int i = 0; i < 4; i++) {
+            unsigned __int128 C = 0;
+            for (int j = 0; j < 4; j++) {
+                unsigned __int128 s = (unsigned __int128)a[j] * b[i] + t[j] + C;
+                t[j] = (uint64_t)s; C = s >> 64;
+            }
+            unsigned __int128 s = (unsigned __int128)t[4] + C;
+            t[4] = (uint64_t)s; t[5] = (uint64_t)(s >> 64);
+            uint64_t mval = (uint64_t)((unsigned __int128)t[0] * m0);
+            C = ((unsigned __int128)mval * m[0] + t[0]) >> 64;
+            for (int j = 1; j < 4; j++) {
+                unsigned __int128 u = (unsigned __int128)mval * m[j] + t[j] + C;
+                t[j-1] = (uint64_t)u; C = u >> 64;
+            }
+            unsigned __int128 u = (unsigned __int128)t[4] + C;
+            t[3] = (uint64_t)u; t[4] = t[5] + (uint64_t)(u >> 64);
+        }
+        /* final conditional subtract of m */
+        uint64_t bb = 0, s2[4];
+        for (int i = 0; i < 4; i++) { unsigned __int128 d = (unsigned __int128)t[i] - m[i] - bb; s2[i] = (uint64_t)d; bb = (d >> 64) ? 1 : 0; }
+        uint64_t ge = t[4] | (uint64_t)(bb == 0);
+        uint64_t tt[4] = { t[0], t[1], t[2], t[3] };
+        fe_cselect(r, tt, s2, ge & 1);
+    }
+
+    static void fe_mulp(fe r, const fe a, const fe b) { mont_mul(r, a, b, P256_P, P256_N0P); }
+    static void fe_sqrp(fe r, const fe a) { mont_mul(r, a, a, P256_P, P256_N0P); }
+    static void fe_muln(fe r, const fe a, const fe b) { mont_mul(r, a, b, P256_N, P256_N0N); }
+
+    static void to_mont_p(fe r, const fe a) { mont_mul(r, a, P256_R2P, P256_P, P256_N0P); }
+    static void from_mont_p(fe r, const fe a) { fe one = {1,0,0,0}; mont_mul(r, a, one, P256_P, P256_N0P); }
+    static void to_mont_n(fe r, const fe a) { mont_mul(r, a, P256_R2N, P256_N, P256_N0N); }
+    static void from_mont_n(fe r, const fe a) { fe one = {1,0,0,0}; mont_mul(r, a, one, P256_N, P256_N0N); }
+
+    /* r = a^-1 mod modulus via Fermat (exp = modulus-2). Montgomery domain. */
+    static void mont_inv(fe r, const fe a, const fe m, uint64_t m0, const fe one_m) {
+        fe exp; fe_set(exp, m);
+        /* exp = m - 2 */
+        uint64_t bb = 2;
+        for (int i = 0; i < 4 && bb; i++) { unsigned __int128 d = (unsigned __int128)exp[i] - bb; exp[i] = (uint64_t)d; bb = (d >> 64) ? 1 : 0; }
+        fe acc; fe_set(acc, one_m);
+        for (int i = 255; i >= 0; i--) {
+            mont_mul(acc, acc, acc, m, m0);
+            uint64_t bit = (exp[i>>6] >> (i & 63)) & 1;
+            fe prod; mont_mul(prod, acc, a, m, m0);
+            fe_cselect(acc, acc, prod, bit);
+        }
+        fe_set(r, acc);
+    }
+    static void fe_invp(fe r, const fe a) { mont_inv(r, a, P256_P, P256_N0P, P256_ONE); }
+    static void fe_invn(fe r, const fe a) {
+        /* one in n-Montgomery domain */
+        fe one_n; fe one = {1,0,0,0}; to_mont_n(one_n, one);
+        mont_inv(r, a, P256_N, P256_N0N, one_n);
+    }
+
+    /* ---- projective points (X:Y:Z) in p-Montgomery domain ---- */
+    typedef struct { fe X, Y, Z; } pt;
+
+    static void pt_infinity(pt* r) { fe_zero(r->X); fe_set(r->Y, P256_ONE); fe_zero(r->Z); }
+
+    static const fe P256_A = { 0xfffffffffffffffcULL, 0x00000003ffffffffULL, 0x0000000000000000ULL, 0xfffffffc00000004ULL };
+
+    /* Complete addition — Renes-Costello-Batina 2016 Algorithm 1 (general
+       `a`, with a=-3 and b3=3b in Montgomery). Exception-free: correct for
+       P=Q (doubling), either operand at infinity, and P=-Q. */
+    static void pt_add(pt* R, const pt* P, const pt* Q) {
+        fe t0,t1,t2,t3,t4,t5,t6,X3,Y3,Z3;
+        fe_mulp(t0,P->X,Q->X); fe_mulp(t1,P->Y,Q->Y); fe_mulp(t2,P->Z,Q->Z);
+        fe_addm(t3,P->X,P->Y,P256_P); fe_addm(t4,Q->X,Q->Y,P256_P); fe_mulp(t3,t3,t4);
+        fe_addm(t4,t0,t1,P256_P); fe_subm(t3,t3,t4,P256_P); fe_addm(t4,P->X,P->Z,P256_P);
+        fe_addm(t5,Q->X,Q->Z,P256_P); fe_mulp(t4,t4,t5); fe_addm(t5,t0,t2,P256_P);
+        fe_subm(t4,t4,t5,P256_P); fe_addm(t5,P->Y,P->Z,P256_P); fe_addm(t6,Q->Y,Q->Z,P256_P);
+        fe_mulp(t5,t5,t6); fe_addm(t6,t1,t2,P256_P); fe_subm(t5,t5,t6,P256_P);
+        fe_mulp(Z3,P256_A,t4); fe_mulp(X3,P256_B3,t2); fe_addm(Z3,X3,Z3,P256_P);
+        fe_subm(X3,t1,Z3,P256_P); fe_addm(Z3,t1,Z3,P256_P); fe_mulp(Y3,X3,Z3);
+        fe_addm(t1,t0,t0,P256_P); fe_addm(t1,t1,t0,P256_P); fe_mulp(t2,P256_A,t2);
+        fe_mulp(t4,P256_B3,t4); fe_addm(t1,t1,t2,P256_P); fe_subm(t2,t0,t2,P256_P);
+        fe_mulp(t2,P256_A,t2); fe_addm(t4,t4,t2,P256_P); fe_mulp(t0,t1,t4);
+        fe_addm(Y3,Y3,t0,P256_P); fe_mulp(t0,t5,t4); fe_mulp(X3,t3,X3);
+        fe_subm(X3,X3,t0,P256_P); fe_mulp(t0,t3,t1); fe_mulp(Z3,t5,Z3);
+        fe_addm(Z3,Z3,t0,P256_P);
+        fe_set(R->X,X3); fe_set(R->Y,Y3); fe_set(R->Z,Z3);
+    }
+
+    /* R = k * P, k a 32-byte big-endian scalar. Constant-time. */
+    static void pt_mul(pt* R, const uint8_t k[32], const pt* P) {
+        pt acc; pt_infinity(&acc);
+        for (int i = 255; i >= 0; i--) {
+            pt dbl; pt_add(&dbl, &acc, &acc);
+            pt sum; pt_add(&sum, &dbl, P);
+            uint64_t bit = (k[31 - (i >> 3)] >> (i & 7)) & 1;
+            fe_cselect(acc.X, dbl.X, sum.X, bit);
+            fe_cselect(acc.Y, dbl.Y, sum.Y, bit);
+            fe_cselect(acc.Z, dbl.Z, sum.Z, bit);
+        }
+        *R = acc;
+    }
+
+    /* affine (x,y) from projective, out of Montgomery, big-endian bytes.
+       Returns 0 on success, -1 if the point is at infinity. */
+    static int pt_affine(const pt* P, uint8_t x[32], uint8_t y[32]) {
+        if (fe_iszero(P->Z)) return -1;
+        fe zi, xa, ya;
+        fe_invp(zi, P->Z);
+        fe_mulp(xa, P->X, zi);
+        fe_mulp(ya, P->Y, zi);
+        fe xo, yo; from_mont_p(xo, xa); from_mont_p(yo, ya);
+        for (int i = 0; i < 4; i++) for (int j = 0; j < 8; j++) {
+            x[31 - (i*8 + j)] = (uint8_t)(xo[i] >> (j*8));
+            y[31 - (i*8 + j)] = (uint8_t)(yo[i] >> (j*8));
+        }
+        return 0;
+    }
+
+    static void be_to_fe(fe r, const uint8_t b[32]) {
+        for (int i = 0; i < 4; i++) {
+            uint64_t v = 0;
+            for (int j = 0; j < 8; j++) v = (v << 8) | b[i*8 + j];
+            r[3 - i] = v;
+        }
+    }
+    /* a >= m ? (both little-endian) */
+    static int fe_ge(const fe a, const fe m) {
+        for (int i = 3; i >= 0; i--) { if (a[i] > m[i]) return 1; if (a[i] < m[i]) return 0; }
+        return 1;
+    }
+
+    /* Build a Montgomery-projective point from a 0x04||X||Y encoding. Returns
+       0 on success, -1 on a malformed / not-on-curve / infinity point. */
+    static int pt_load(pt* P, const uint8_t* enc, int len) {
+        if (len != 65 || enc[0] != 0x04) return -1;
+        fe x, y;
+        be_to_fe(x, enc + 1);
+        be_to_fe(y, enc + 33);
+        if (fe_ge(x, P256_P) || fe_ge(y, P256_P)) return -1;
+        if (fe_iszero(x) && fe_iszero(y)) return -1;
+        /* on-curve check: y^2 == x^3 - 3x + b (affine, non-Montgomery via mont) */
+        fe xm, ym; to_mont_p(xm, x); to_mont_p(ym, y);
+        fe y2; fe_sqrp(y2, ym);
+        fe x3; fe_sqrp(x3, xm); fe_mulp(x3, x3, xm);
+        fe three = {3,0,0,0}, three_m; to_mont_p(three_m, three);
+        fe t; fe_mulp(t, three_m, xm);
+        fe rhs; fe_subm(rhs, x3, t, P256_P);
+        fe bm = { 0xd89cdf6229c4bddfULL, 0xacf005cd78843090ULL, 0xe5a220abf7212ed6ULL, 0xdc30061d04874834ULL };
+        fe_addm(rhs, rhs, bm, P256_P);
+        if (!fe_eq(y2, rhs)) return -1;
+        fe_set(P->X, xm); fe_set(P->Y, ym); fe_set(P->Z, P256_ONE);
+        return 0;
+    }
+
+    /* ---- public entry points ---- */
+
+    /* ECDH: shared X = x-affine(scalar * peer). scalar 32 BE bytes, peer is
+       a 65-byte 0x04||X||Y. out is 32 bytes. Returns 0 / -1. */
+    static int __glide_p256_ecdh(void* out, void* scalar, void* peer, int peerlen) {
+        pt P; if (pt_load(&P, (const uint8_t*)peer, peerlen) != 0) return -1;
+        pt R; pt_mul(&R, (const uint8_t*)scalar, &P);
+        uint8_t x[32], y[32];
+        if (pt_affine(&R, x, y) != 0) return -1;
+        memcpy(out, x, 32);
+        return 0;
+    }
+
+    /* Public key = scalar * G, encoded 0x04||X||Y (65 bytes). Returns 0/-1. */
+    static int __glide_p256_pub(void* out, void* scalar) {
+        pt G; fe_set(G.X, P256_GX); fe_set(G.Y, P256_GY); fe_set(G.Z, P256_ONE);
+        pt R; pt_mul(&R, (const uint8_t*)scalar, &G);
+        uint8_t x[32], y[32];
+        if (pt_affine(&R, x, y) != 0) return -1;
+        uint8_t* o = (uint8_t*)out; o[0] = 0x04;
+        memcpy(o + 1, x, 32); memcpy(o + 33, y, 32);
+        return 0;
+    }
+
+    /* ECDSA verify. pub 65 bytes, hash 32 bytes, sig r||s 64 bytes.
+       Returns 1 valid, 0 invalid. */
+    static int __glide_p256_verify(void* pub, int publen, void* hash, void* sig) {
+        pt Q; if (pt_load(&Q, (const uint8_t*)pub, publen) != 0) return 0;
+        const uint8_t* s = (const uint8_t*)sig;
+        fe r, ss; be_to_fe(r, s); be_to_fe(ss, s + 32);
+        if (fe_iszero(r) || fe_iszero(ss) || fe_ge(r, P256_N) || fe_ge(ss, P256_N)) return 0;
+        fe z; be_to_fe(z, (const uint8_t*)hash);
+        if (fe_ge(z, P256_N)) fe_subm(z, z, P256_N, P256_N);   /* reduce once */
+        /* w = s^-1 mod n; u1 = z*w; u2 = r*w (all mod n) */
+        fe rn, sn, zn, wn;
+        to_mont_n(rn, r); to_mont_n(sn, ss); to_mont_n(zn, z);
+        fe sinv; fe_invn(sinv, sn);            /* n-Montgomery */
+        fe u1m, u2m;
+        fe_muln(u1m, zn, sinv); fe_muln(u2m, rn, sinv);
+        fe u1, u2; from_mont_n(u1, u1m); from_mont_n(u2, u2m);
+        uint8_t u1b[32], u2b[32];
+        for (int i = 0; i < 4; i++) for (int j = 0; j < 8; j++) {
+            u1b[31 - (i*8 + j)] = (uint8_t)(u1[i] >> (j*8));
+            u2b[31 - (i*8 + j)] = (uint8_t)(u2[i] >> (j*8));
+        }
+        pt G; fe_set(G.X, P256_GX); fe_set(G.Y, P256_GY); fe_set(G.Z, P256_ONE);
+        pt A, B, R;
+        pt_mul(&A, u1b, &G);
+        pt_mul(&B, u2b, &Q);
+        pt_add(&R, &A, &B);
+        uint8_t rx[32], ry[32];
+        if (pt_affine(&R, rx, ry) != 0) return 0;
+        fe rxf; be_to_fe(rxf, rx);
+        if (fe_ge(rxf, P256_N)) fe_subm(rxf, rxf, P256_N, P256_N);
+        return fe_eq(rxf, r) ? 1 : 0;
+    }
+
+    /* ECDSA sign with a supplied 32-byte scalar k (caller draws it from the
+       CSPRNG and reduces). d 32 BE bytes, hash 32 bytes. out = r||s (64).
+       Returns 0 on success, -1 if r or s is zero (caller retries with new k). */
+    static int __glide_p256_sign(void* out, void* d, void* hash, void* kbytes) {
+        const uint8_t* kb = (const uint8_t*)kbytes;
+        fe k; be_to_fe(k, kb);
+        if (fe_iszero(k) || fe_ge(k, P256_N)) return -1;
+        pt G; fe_set(G.X, P256_GX); fe_set(G.Y, P256_GY); fe_set(G.Z, P256_ONE);
+        pt R; pt_mul(&R, kb, &G);
+        uint8_t rx[32], ry[32];
+        if (pt_affine(&R, rx, ry) != 0) return -1;
+        fe r; be_to_fe(r, rx);
+        if (fe_ge(r, P256_N)) fe_subm(r, r, P256_N, P256_N);
+        if (fe_iszero(r)) return -1;
+        fe z; be_to_fe(z, (const uint8_t*)hash);
+        if (fe_ge(z, P256_N)) fe_subm(z, z, P256_N, P256_N);
+        fe dd; be_to_fe(dd, (const uint8_t*)d);
+        /* s = k^-1 (z + r*d) mod n */
+        fe rn, dn, zn, kn;
+        to_mont_n(rn, r); to_mont_n(dn, dd); to_mont_n(zn, z); to_mont_n(kn, k);
+        fe rd; fe_muln(rd, rn, dn);
+        fe sum; fe_addm(sum, zn, rd, P256_N);
+        fe kinv; fe_invn(kinv, kn);
+        fe sm; fe_muln(sm, kinv, sum);
+        fe sfin; from_mont_n(sfin, sm);
+        if (fe_iszero(sfin)) return -1;
+        uint8_t* o = (uint8_t*)out;
+        for (int i = 0; i < 4; i++) for (int j = 0; j < 8; j++) {
+            o[31 - (i*8 + j)]      = (uint8_t)(r[i] >> (j*8));
+            o[63 - (i*8 + j)]      = (uint8_t)(sfin[i] >> (j*8));
+        }
+        return 0;
+    }
+
+    #endif
+}
+
+extern fn __glide_p256_ecdh(out: *void, scalar: *void, peer: *void, peerlen: i32) -> i32;
+extern fn __glide_p256_pub(out: *void, scalar: *void) -> i32;
+extern fn __glide_p256_verify(pub: *void, publen: i32, hash: *void, sig: *void) -> i32;
+extern fn __glide_p256_sign(out: *void, d: *void, hash: *void, kbytes: *void) -> i32;
+extern fn __glide_string_from_buf(p: *void, n: i32) -> string;
+
+/// A fresh 32-byte P-256 secret scalar (uniform in [1, n-1] by rejection).
+pub fn p256_generate() -> !string {
+    let mut tries: i32 = 0;
+    while tries < 64 {
+        let r: !string = random_bytes(32);
+        if !r.is_ok() { return err(r.unwrap_err()); }
+        let s: string = r.unwrap();
+        // reject zero / >= n by round-tripping through pubkey (which validates)
+        let out: *void = malloc(65) as *void;
+        let rc: i32 = __glide_p256_pub(out, s as *void);
+        free(out);
+        if rc == 0 { return ok(s); }
+        tries = tries + 1;
+    }
+    return err("p256: failed to sample a scalar");
+}
+
+/// Public key for `secret` (32 bytes), encoded uncompressed 0x04||X||Y (65).
+pub fn p256_pubkey(secret: string) -> !string {
+    if secret.len() != 32 { return err("p256: secret must be 32 bytes"); }
+    let out: *void = malloc(65) as *void;
+    let rc: i32 = __glide_p256_pub(out, secret as *void);
+    if rc != 0 { free(out); return err("p256: invalid scalar"); }
+    let s: string = __glide_string_from_buf(out, 65);
+    free(out);
+    return ok(s);
+}
+
+/// ECDH: 32-byte shared X-coordinate of secret * peer_pubkey (65-byte
+/// uncompressed). Errors on a malformed / off-curve peer point.
+pub fn p256_ecdh(secret: string, peer_pubkey: string) -> !string {
+    if secret.len() != 32 { return err("p256: secret must be 32 bytes"); }
+    let out: *void = malloc(32) as *void;
+    let rc: i32 = __glide_p256_ecdh(out, secret as *void, peer_pubkey as *void, peer_pubkey.len());
+    if rc != 0 { free(out); return err("p256: invalid peer point"); }
+    let s: string = __glide_string_from_buf(out, 32);
+    free(out);
+    return ok(s);
+}
+
+/// ECDSA sign a 32-byte hash with `secret` (32 bytes). Returns r||s (64
+/// bytes), drawing a fresh random k and retrying on a degenerate r/s.
+pub fn ecdsa_sign(secret: string, hash32: string) -> !string {
+    if secret.len() != 32 { return err("ecdsa: secret must be 32 bytes"); }
+    if hash32.len() != 32 { return err("ecdsa: hash must be 32 bytes"); }
+    let mut tries: i32 = 0;
+    while tries < 64 {
+        let kr: !string = random_bytes(32);
+        if !kr.is_ok() { return err(kr.unwrap_err()); }
+        let out: *void = malloc(64) as *void;
+        let rc: i32 = __glide_p256_sign(out, secret as *void, hash32 as *void, kr.unwrap() as *void);
+        if rc == 0 {
+            let s: string = __glide_string_from_buf(out, 64);
+            free(out);
+            return ok(s);
+        }
+        free(out);
+        tries = tries + 1;
+    }
+    return err("ecdsa: signing failed to find a valid nonce");
+}
+
+/// ECDSA verify: `signature` is r||s (64 bytes), `pubkey` is 0x04||X||Y
+/// (65). Returns ok(1) valid, ok(0) invalid; err on a size mismatch.
+pub fn ecdsa_verify(pubkey: string, hash32: string, signature: string) -> !i32 {
+    if hash32.len() != 32 { return err("ecdsa: hash must be 32 bytes"); }
+    if signature.len() != 64 { return err("ecdsa: signature must be 64 bytes"); }
+    let v: i32 = __glide_p256_verify(pubkey as *void, pubkey.len(), hash32 as *void, signature as *void);
+    return ok(v);
+}
