@@ -1,0 +1,250 @@
+// NIST P-384 (secp384r1) — ECDSA verification and ECDH. Structurally
+// identical to the P-256 module (Montgomery CIOS field arithmetic, the
+// Renes-Costello-Batina complete addition, a fixed-step ladder) but over
+// six 64-bit limbs with the P-384 constants. Needed because a large share
+// of the public PKI roots (and some intermediates) are ECDSA P-384.
+//
+// ```glide
+// import stdlib::crypto::p384::*;
+//
+// let v: !i32 = ecdsa_p384_verify(pubkey97, hash, sig96);
+// ```
+
+import stdlib::crypto::csprng::*;
+
+c_raw! {
+    #ifndef GLIDE_P384_DEFINED
+    #define GLIDE_P384_DEFINED
+    #include <stdint.h>
+    #include <string.h>
+    #include <stdlib.h>
+
+    typedef uint64_t fe6[6];
+
+    static const fe6 P384_P   = { 0x00000000ffffffffULL, 0xffffffff00000000ULL, 0xfffffffffffffffeULL, 0xffffffffffffffffULL, 0xffffffffffffffffULL, 0xffffffffffffffffULL };
+    static const fe6 P384_N   = { 0xecec196accc52973ULL, 0x581a0db248b0a77aULL, 0xc7634d81f4372ddfULL, 0xffffffffffffffffULL, 0xffffffffffffffffULL, 0xffffffffffffffffULL };
+    static const fe6 P384_R2P = { 0xfffffffe00000001ULL, 0x0000000200000000ULL, 0xfffffffe00000000ULL, 0x0000000200000000ULL, 0x0000000000000001ULL, 0x0000000000000000ULL };
+    static const fe6 P384_R2N = { 0x2d319b2419b409a9ULL, 0xff3d81e5df1aa419ULL, 0xbc3e483afcb82947ULL, 0xd40d49174aab1cc5ULL, 0x3fb05b7a28266895ULL, 0x0c84ee012b39bf21ULL };
+    static const fe6 P384_ONE = { 0xffffffff00000001ULL, 0x00000000ffffffffULL, 0x0000000000000001ULL, 0x0000000000000000ULL, 0x0000000000000000ULL, 0x0000000000000000ULL };
+    static const fe6 P384_A   = { 0x00000003fffffffcULL, 0xfffffffc00000000ULL, 0xfffffffffffffffbULL, 0xffffffffffffffffULL, 0xffffffffffffffffULL, 0xffffffffffffffffULL };
+    static const fe6 P384_B3  = { 0x18349952d7c38966ULL, 0xe57d098b6ee498c4ULL, 0x67d661d14b60068eULL, 0xa9a5e3cbbdbaa0a7ULL, 0x228165dc5d0661beULL, 0x671833e220ef3fedULL };
+    static const fe6 P384_BM  = { 0x081188719d412dccULL, 0xf729add87a4c32ecULL, 0x77f2209b1920022eULL, 0xe3374bee94938ae2ULL, 0xb62b21f41f022094ULL, 0xcd08114b604fbff9ULL };
+    static const fe6 P384_GX  = { 0x3dd0756649c0b528ULL, 0x20e378e2a0d6ce38ULL, 0x879c3afc541b4d6eULL, 0x6454868459a30effULL, 0x812ff723614ede2bULL, 0x4d3aadc2299e1513ULL };
+    static const fe6 P384_GY  = { 0x23043dad4b03a4feULL, 0xa1bfa8bf7bb4a9acULL, 0x8bade7562e83b050ULL, 0xc6c3521968f4ffd9ULL, 0xdd8002263969a840ULL, 0x2b78abc25a15c5e9ULL };
+    #define P384_N0P 0x0000000100000001ULL
+    #define P384_N0N 0x6ed46089e88fdc45ULL
+
+    static void f6_set(fe6 r, const fe6 a) { for (int i=0;i<6;i++) r[i]=a[i]; }
+    static void f6_zero(fe6 r) { for (int i=0;i<6;i++) r[i]=0; }
+    static int f6_iszero(const fe6 a) { uint64_t d=0; for (int i=0;i<6;i++) d|=a[i]; return d==0; }
+    static int f6_eq(const fe6 a, const fe6 b) { uint64_t d=0; for (int i=0;i<6;i++) d|=(a[i]^b[i]); return d==0; }
+    static void f6_csel(fe6 r, const fe6 a, const fe6 b, uint64_t bit) {
+        uint64_t m = 0 - bit;
+        for (int i=0;i<6;i++) r[i] = (b[i]&m) | (a[i]&~m);
+    }
+    static void f6_addm(fe6 r, const fe6 a, const fe6 b, const fe6 m) {
+        unsigned __int128 c = 0; uint64_t t[6];
+        for (int i=0;i<6;i++) { c += (unsigned __int128)a[i]+b[i]; t[i]=(uint64_t)c; c>>=64; }
+        uint64_t carry=(uint64_t)c, s[6], bb=0;
+        for (int i=0;i<6;i++) { unsigned __int128 d=(unsigned __int128)t[i]-m[i]-bb; s[i]=(uint64_t)d; bb=(d>>64)?1:0; }
+        uint64_t ge = carry | (uint64_t)(bb==0);
+        f6_csel(r, t, s, ge&1);
+    }
+    static void f6_subm(fe6 r, const fe6 a, const fe6 b, const fe6 m) {
+        uint64_t t[6], bb=0;
+        for (int i=0;i<6;i++) { unsigned __int128 d=(unsigned __int128)a[i]-b[i]-bb; t[i]=(uint64_t)d; bb=(d>>64)?1:0; }
+        uint64_t s[6]; unsigned __int128 c=0;
+        for (int i=0;i<6;i++) { c += (unsigned __int128)t[i]+m[i]; s[i]=(uint64_t)c; c>>=64; }
+        f6_csel(r, t, s, bb&1);
+    }
+    static void m6_mul(fe6 r, const fe6 a, const fe6 b, const fe6 m, uint64_t m0) {
+        uint64_t t[8]; memset(t,0,sizeof(t));
+        for (int i=0;i<6;i++) {
+            unsigned __int128 C=0;
+            for (int j=0;j<6;j++) { unsigned __int128 s=(unsigned __int128)a[j]*b[i]+t[j]+C; t[j]=(uint64_t)s; C=s>>64; }
+            unsigned __int128 s=(unsigned __int128)t[6]+C; t[6]=(uint64_t)s; t[7]=(uint64_t)(s>>64);
+            uint64_t mval=(uint64_t)((unsigned __int128)t[0]*m0);
+            C=((unsigned __int128)mval*m[0]+t[0])>>64;
+            for (int j=1;j<6;j++) { unsigned __int128 u=(unsigned __int128)mval*m[j]+t[j]+C; t[j-1]=(uint64_t)u; C=u>>64; }
+            unsigned __int128 u=(unsigned __int128)t[6]+C; t[5]=(uint64_t)u; t[6]=t[7]+(uint64_t)(u>>64);
+        }
+        uint64_t bb=0, s2[6];
+        for (int i=0;i<6;i++) { unsigned __int128 d=(unsigned __int128)t[i]-m[i]-bb; s2[i]=(uint64_t)d; bb=(d>>64)?1:0; }
+        uint64_t ge=t[6]|(uint64_t)(bb==0);
+        uint64_t tt[6]={t[0],t[1],t[2],t[3],t[4],t[5]};
+        f6_csel(r, tt, s2, ge&1);
+    }
+    static void f6_mulp(fe6 r, const fe6 a, const fe6 b) { m6_mul(r,a,b,P384_P,P384_N0P); }
+    static void f6_sqrp(fe6 r, const fe6 a) { m6_mul(r,a,a,P384_P,P384_N0P); }
+    static void f6_muln(fe6 r, const fe6 a, const fe6 b) { m6_mul(r,a,b,P384_N,P384_N0N); }
+    static void tomp6(fe6 r, const fe6 a) { m6_mul(r,a,P384_R2P,P384_P,P384_N0P); }
+    static void frmp6(fe6 r, const fe6 a) { fe6 one={1,0,0,0,0,0}; m6_mul(r,a,one,P384_P,P384_N0P); }
+    static void tomn6(fe6 r, const fe6 a) { m6_mul(r,a,P384_R2N,P384_N,P384_N0N); }
+    static void frmn6(fe6 r, const fe6 a) { fe6 one={1,0,0,0,0,0}; m6_mul(r,a,one,P384_N,P384_N0N); }
+
+    static void m6_inv(fe6 r, const fe6 a, const fe6 m, uint64_t m0, const fe6 one_m) {
+        fe6 exp; f6_set(exp,m);
+        uint64_t bb=2;
+        for (int i=0;i<6 && bb;i++) { unsigned __int128 d=(unsigned __int128)exp[i]-bb; exp[i]=(uint64_t)d; bb=(d>>64)?1:0; }
+        fe6 acc; f6_set(acc,one_m);
+        for (int i=383;i>=0;i--) {
+            m6_mul(acc,acc,acc,m,m0);
+            uint64_t bit=(exp[i>>6]>>(i&63))&1;
+            fe6 prod; m6_mul(prod,acc,a,m,m0);
+            f6_csel(acc,acc,prod,bit);
+        }
+        f6_set(r,acc);
+    }
+    static void f6_invp(fe6 r, const fe6 a) { m6_inv(r,a,P384_P,P384_N0P,P384_ONE); }
+    static void f6_invn(fe6 r, const fe6 a) {
+        fe6 one_n; fe6 one={1,0,0,0,0,0}; tomn6(one_n,one);
+        m6_inv(r,a,P384_N,P384_N0N,one_n);
+    }
+
+    typedef struct { fe6 X, Y, Z; } pt6;
+    static void pt6_inf(pt6* r) { f6_zero(r->X); f6_set(r->Y,P384_ONE); f6_zero(r->Z); }
+
+    // RCB Algorithm 1 (general a), same as the P-256 module.
+    static void pt6_add(pt6* R, const pt6* P, const pt6* Q) {
+        fe6 t0,t1,t2,t3,t4,t5,t6,X3,Y3,Z3;
+        f6_mulp(t0,P->X,Q->X); f6_mulp(t1,P->Y,Q->Y); f6_mulp(t2,P->Z,Q->Z);
+        f6_addm(t3,P->X,P->Y,P384_P); f6_addm(t4,Q->X,Q->Y,P384_P); f6_mulp(t3,t3,t4);
+        f6_addm(t4,t0,t1,P384_P); f6_subm(t3,t3,t4,P384_P); f6_addm(t4,P->X,P->Z,P384_P);
+        f6_addm(t5,Q->X,Q->Z,P384_P); f6_mulp(t4,t4,t5); f6_addm(t5,t0,t2,P384_P);
+        f6_subm(t4,t4,t5,P384_P); f6_addm(t5,P->Y,P->Z,P384_P); f6_addm(t6,Q->Y,Q->Z,P384_P);
+        f6_mulp(t5,t5,t6); f6_addm(t6,t1,t2,P384_P); f6_subm(t5,t5,t6,P384_P);
+        f6_mulp(Z3,P384_A,t4); f6_mulp(X3,P384_B3,t2); f6_addm(Z3,X3,Z3,P384_P);
+        f6_subm(X3,t1,Z3,P384_P); f6_addm(Z3,t1,Z3,P384_P); f6_mulp(Y3,X3,Z3);
+        f6_addm(t1,t0,t0,P384_P); f6_addm(t1,t1,t0,P384_P); f6_mulp(t2,P384_A,t2);
+        f6_mulp(t4,P384_B3,t4); f6_addm(t1,t1,t2,P384_P); f6_subm(t2,t0,t2,P384_P);
+        f6_mulp(t2,P384_A,t2); f6_addm(t4,t4,t2,P384_P); f6_mulp(t0,t1,t4);
+        f6_addm(Y3,Y3,t0,P384_P); f6_mulp(t0,t5,t4); f6_mulp(X3,t3,X3);
+        f6_subm(X3,X3,t0,P384_P); f6_mulp(t0,t3,t1); f6_mulp(Z3,t5,Z3);
+        f6_addm(Z3,Z3,t0,P384_P);
+        f6_set(R->X,X3); f6_set(R->Y,Y3); f6_set(R->Z,Z3);
+    }
+    static void pt6_mul(pt6* R, const uint8_t k[48], const pt6* P) {
+        pt6 acc; pt6_inf(&acc);
+        for (int i=383;i>=0;i--) {
+            pt6 dbl; pt6_add(&dbl,&acc,&acc);
+            pt6 sum; pt6_add(&sum,&dbl,P);
+            uint64_t bit=(k[47-(i>>3)]>>(i&7))&1;
+            f6_csel(acc.X,dbl.X,sum.X,bit);
+            f6_csel(acc.Y,dbl.Y,sum.Y,bit);
+            f6_csel(acc.Z,dbl.Z,sum.Z,bit);
+        }
+        *R=acc;
+    }
+    static int pt6_affine(const pt6* P, uint8_t x[48], uint8_t y[48]) {
+        if (f6_iszero(P->Z)) return -1;
+        fe6 zi,xa,ya; f6_invp(zi,P->Z); f6_mulp(xa,P->X,zi); f6_mulp(ya,P->Y,zi);
+        fe6 xo,yo; frmp6(xo,xa); frmp6(yo,ya);
+        for (int i=0;i<6;i++) for (int j=0;j<8;j++) {
+            x[47-(i*8+j)]=(uint8_t)(xo[i]>>(j*8));
+            y[47-(i*8+j)]=(uint8_t)(yo[i]>>(j*8));
+        }
+        return 0;
+    }
+    static void be6(fe6 r, const uint8_t b[48]) {
+        for (int i=0;i<6;i++) { uint64_t v=0; for (int j=0;j<8;j++) v=(v<<8)|b[i*8+j]; r[5-i]=v; }
+    }
+    static int f6_ge(const fe6 a, const fe6 m) {
+        for (int i=5;i>=0;i--) { if (a[i]>m[i]) return 1; if (a[i]<m[i]) return 0; }
+        return 1;
+    }
+    static int pt6_load(pt6* P, const uint8_t* enc, int len) {
+        if (len != 97 || enc[0] != 0x04) return -1;
+        fe6 x,y; be6(x,enc+1); be6(y,enc+49);
+        if (f6_ge(x,P384_P) || f6_ge(y,P384_P)) return -1;
+        if (f6_iszero(x) && f6_iszero(y)) return -1;
+        fe6 xm,ym; tomp6(xm,x); tomp6(ym,y);
+        fe6 y2; f6_sqrp(y2,ym);
+        fe6 x3; f6_sqrp(x3,xm); f6_mulp(x3,x3,xm);
+        fe6 three={3,0,0,0,0,0}, tm; tomp6(tm,three);
+        fe6 t; f6_mulp(t,tm,xm);
+        fe6 rhs; f6_subm(rhs,x3,t,P384_P); f6_addm(rhs,rhs,P384_BM,P384_P);
+        if (!f6_eq(y2,rhs)) return -1;
+        f6_set(P->X,xm); f6_set(P->Y,ym); f6_set(P->Z,P384_ONE);
+        return 0;
+    }
+
+    static int __glide_p384_pub(void* out, void* scalar) {
+        pt6 G; f6_set(G.X,P384_GX); f6_set(G.Y,P384_GY); f6_set(G.Z,P384_ONE);
+        pt6 R; pt6_mul(&R,(const uint8_t*)scalar,&G);
+        uint8_t x[48],y[48];
+        if (pt6_affine(&R,x,y)!=0) return -1;
+        uint8_t* o=(uint8_t*)out; o[0]=0x04; memcpy(o+1,x,48); memcpy(o+49,y,48);
+        return 0;
+    }
+    static int __glide_p384_ecdh(void* out, void* scalar, void* peer, int peerlen) {
+        pt6 P; if (pt6_load(&P,(const uint8_t*)peer,peerlen)!=0) return -1;
+        pt6 R; pt6_mul(&R,(const uint8_t*)scalar,&P);
+        uint8_t x[48],y[48];
+        if (pt6_affine(&R,x,y)!=0) return -1;
+        memcpy(out,x,48); return 0;
+    }
+    // ECDSA verify. pub 97, hash 48 (or leftmost-48 of a larger digest), sig r||s 96.
+    static int __glide_p384_verify(void* pub, int publen, void* hash, void* sig) {
+        pt6 Q; if (pt6_load(&Q,(const uint8_t*)pub,publen)!=0) return 0;
+        const uint8_t* s=(const uint8_t*)sig;
+        fe6 r,ss; be6(r,s); be6(ss,s+48);
+        if (f6_iszero(r)||f6_iszero(ss)||f6_ge(r,P384_N)||f6_ge(ss,P384_N)) return 0;
+        fe6 z; be6(z,(const uint8_t*)hash);
+        if (f6_ge(z,P384_N)) f6_subm(z,z,P384_N,P384_N);
+        fe6 rn,sn,zn; tomn6(rn,r); tomn6(sn,ss); tomn6(zn,z);
+        fe6 sinv; f6_invn(sinv,sn);
+        fe6 u1m,u2m; f6_muln(u1m,zn,sinv); f6_muln(u2m,rn,sinv);
+        fe6 u1,u2; frmn6(u1,u1m); frmn6(u2,u2m);
+        uint8_t u1b[48],u2b[48];
+        for (int i=0;i<6;i++) for (int j=0;j<8;j++) {
+            u1b[47-(i*8+j)]=(uint8_t)(u1[i]>>(j*8));
+            u2b[47-(i*8+j)]=(uint8_t)(u2[i]>>(j*8));
+        }
+        pt6 G; f6_set(G.X,P384_GX); f6_set(G.Y,P384_GY); f6_set(G.Z,P384_ONE);
+        pt6 A,B,R; pt6_mul(&A,u1b,&G); pt6_mul(&B,u2b,&Q); pt6_add(&R,&A,&B);
+        uint8_t rx[48],ry[48];
+        if (pt6_affine(&R,rx,ry)!=0) return 0;
+        fe6 rxf; be6(rxf,rx);
+        if (f6_ge(rxf,P384_N)) f6_subm(rxf,rxf,P384_N,P384_N);
+        return f6_eq(rxf,r) ? 1 : 0;
+    }
+    #endif
+}
+
+extern fn __glide_p384_pub(out: *void, scalar: *void) -> i32;
+extern fn __glide_p384_ecdh(out: *void, scalar: *void, peer: *void, peerlen: i32) -> i32;
+extern fn __glide_p384_verify(pub: *void, publen: i32, hash: *void, sig: *void) -> i32;
+extern fn __glide_string_from_buf(p: *void, n: i32) -> string;
+
+/// Public key for a 48-byte P-384 secret, encoded 0x04||X||Y (97 bytes).
+pub fn p384_pubkey(secret: string) -> !string {
+    if secret.len() != 48 { return err("p384: secret must be 48 bytes"); }
+    let out: *void = malloc(97) as *void;
+    let rc: i32 = __glide_p384_pub(out, secret as *void);
+    if rc != 0 { free(out); return err("p384: invalid scalar"); }
+    let s: string = __glide_string_from_buf(out, 97);
+    free(out);
+    return ok(s);
+}
+
+/// ECDH shared X-coordinate (48 bytes) of secret * peer_pubkey (97-byte
+/// uncompressed).
+pub fn p384_ecdh(secret: string, peer_pubkey: string) -> !string {
+    if secret.len() != 48 { return err("p384: secret must be 48 bytes"); }
+    let out: *void = malloc(48) as *void;
+    let rc: i32 = __glide_p384_ecdh(out, secret as *void, peer_pubkey as *void, peer_pubkey.len());
+    if rc != 0 { free(out); return err("p384: invalid peer point"); }
+    let s: string = __glide_string_from_buf(out, 48);
+    free(out);
+    return ok(s);
+}
+
+/// ECDSA-P384 verify. `pubkey` is 0x04||X||Y (97), `hash` is 48 bytes
+/// (the leftmost 384 bits of the message digest), `signature` is r||s (96).
+/// Returns ok(1) valid, ok(0) invalid.
+pub fn ecdsa_p384_verify(pubkey: string, hash48: string, signature: string) -> !i32 {
+    if hash48.len() != 48 { return err("p384: hash must be 48 bytes"); }
+    if signature.len() != 96 { return err("p384: signature must be 96 bytes"); }
+    let v: i32 = __glide_p384_verify(pubkey as *void, pubkey.len(), hash48 as *void, signature as *void);
+    return ok(v);
+}

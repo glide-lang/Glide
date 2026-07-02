@@ -16,6 +16,7 @@
 
 import stdlib::crypto::asn1::*;
 import stdlib::crypto::p256::*;
+import stdlib::crypto::p384::*;
 import stdlib::crypto::*;              // sha256
 import stdlib::crypto::sha512::*;      // sha384, sha512
 import stdlib::crypto::rsa::*;         // rsa_pkcs1_verify + DigestInfo prefixes
@@ -300,22 +301,22 @@ pub fn cert_parse(der: string) -> !*Cert {
 
 // ---- signature verification -------------------------------------------
 
-// Left-pad (or trim a sign byte from) a big-endian magnitude to exactly 32
-// bytes for the raw r||s form ecdsa_verify expects.
-fn _pad32(mag: string) -> string {
-    let n: i32 = mag.len();
-    if n == 32 { return mag; }
-    if n > 32 { return mag.substring(n - 32, n); }
+// Left-pad (or trim a sign byte from) a big-endian magnitude to exactly
+// `n` bytes for the raw r||s / hash forms the verifiers expect.
+fn _padn(mag: string, n: i32) -> string {
+    let m: i32 = mag.len();
+    if m == n { return mag; }
+    if m > n { return mag.substring(m - n, m); }
     let bb: *ByteBuffer = ByteBuffer::new();
-    for let i: i32 = 0; i < 32 - n; i++ { bb.push(0 as u8); }
+    for let i: i32 = 0; i < n - m; i++ { bb.push(0 as u8); }
     bb.push_str(mag);
     let s: string = bb.to_string();
     bb.free();
     return s;
 }
 
-// DER ECDSA-Sig-Value SEQUENCE { r INTEGER, s INTEGER } -> raw r||s (64B).
-fn _ecdsa_der_to_raw(sig_der: string) -> !string {
+// DER ECDSA-Sig-Value SEQUENCE { r, s } -> raw r||s, each field `size` bytes.
+fn _ecdsa_der_to_raw(sig_der: string, size: i32) -> !string {
     let d: *Der = der_new(sig_der);
     let seq: !*Tlv = der_expect(d, ASN1_SEQUENCE);
     if !seq.ok { return err(seq.err); }
@@ -324,7 +325,7 @@ fn _ecdsa_der_to_raw(sig_der: string) -> !string {
     if !r.ok { return err(r.err); }
     let s: !*Tlv = der_expect(sd, ASN1_INTEGER);
     if !s.ok { return err(s.err); }
-    return ok(_pad32(der_int_bytes(r.val)).concat(_pad32(der_int_bytes(s.val))));
+    return ok(_padn(der_int_bytes(r.val), size).concat(_padn(der_int_bytes(s.val), size)));
 }
 
 /// Verify `cert`'s signature using the issuer's public key: an EC point
@@ -341,19 +342,30 @@ pub fn cert_verify_signature(cert: *Cert, issuer_pubkey: string) -> !bool {
     } else if cert.sig_alg.eq(OID_RSA_SHA1) {
         return rsa_pkcs1_verify(issuer_pubkey, RSA_SHA1_PREFIX, sha1(cert.tbs_der), cert.signature);
     }
-    // ECDSA.
+    // ECDSA. The curve is determined by the issuer's key: 65-byte point =>
+    // P-256, 97-byte => P-384.
     let mut digest: string = "";
     if cert.sig_alg.eq(OID_ECDSA_SHA256) {
         digest = sha256(cert.tbs_der);
     } else if cert.sig_alg.eq(OID_ECDSA_SHA384) {
-        // ECDSA over P-256 takes the leftmost 256 bits of the hash.
-        digest = sha384(cert.tbs_der).substring(0, 32);
+        digest = sha384(cert.tbs_der);
     } else {
         return err("x509: unsupported signature algorithm ".concat(cert.sig_alg));
     }
-    let raw: !string = _ecdsa_der_to_raw(cert.signature);
+    if issuer_pubkey.len() == 97 {
+        // P-384: e is the leftmost 384 bits, i.e. the digest left-padded to 48.
+        let z: string = if digest.len() >= 48 { digest.substring(0, 48) } else { _padn(digest, 48) };
+        let raw: !string = _ecdsa_der_to_raw(cert.signature, 48);
+        if !raw.ok { return err(raw.err); }
+        let v: !i32 = ecdsa_p384_verify(issuer_pubkey, z, raw.val);
+        if !v.ok { return err(v.err); }
+        return ok(v.val == 1);
+    }
+    // P-256: e is the leftmost 256 bits of the digest.
+    let z: string = digest.substring(0, 32);
+    let raw: !string = _ecdsa_der_to_raw(cert.signature, 32);
     if !raw.ok { return err(raw.err); }
-    let v: !i32 = ecdsa_verify(issuer_pubkey, digest, raw.val);
+    let v: !i32 = ecdsa_verify(issuer_pubkey, z, raw.val);
     if !v.ok { return err(v.err); }
     return ok(v.val == 1);
 }

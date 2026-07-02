@@ -1,0 +1,43 @@
+// P-384 ECDSA verification: a known-answer vector, plus certificate-chain
+// verification of a real OpenSSL P-384-rooted chain (P-256 leaf signed
+// with ecdsa-with-SHA384 by a P-384 CA).
+import stdlib::testing::*;
+import stdlib::crypto::p384::*;
+import stdlib::crypto::x509::*;
+import stdlib::hex::*;
+
+fn _h(s: string) -> string { return hex_decode(s).unwrap(); }
+
+// KAT generated with an independent implementation (Python cryptography).
+fn test_p384_verify_vector() -> i32 {
+    let pub: string = _h("040400193b21f07cd059826e9453d3e96dd145041c97d49ff6b7047f86bb0b0439e909274cb9c282bfab88674c0765bc75f70d89c52acbc70468d2c5ae75c76d7f69b76af62dcf95e99eba5dd11adf8f42ec9a425b0c5ec98e2f234a926b82a147");
+    let z: string   = _h("7182eed5a8760fde41a4a6167f5f2cc1a4eff61a6470b3955e2c3b0dec014283384592fc3dea55febd4a687632f5519c");
+    let sig: string = _h("c110f2ceba6af5ee0fce9d231e0a8f0377daf7bcf807be12d0a23605edd97625c9845da96621619f0cb86aace72c0b2bbb00df539241832fa2e6807fba03f737520d89f1ec258426899331e9ab6b224e873748dd99da95a95e4bc5dbd468a74f");
+    assert_eq!(ecdsa_p384_verify(pub, z, sig).unwrap(), 1);
+    // wrong hash rejects
+    let bad: string = _h("00").concat(z.substring(1, z.len()));
+    assert_eq!(ecdsa_p384_verify(pub, bad, sig).unwrap(), 0);
+    return 0;
+}
+
+fn _ca() -> *Cert { return cert_parse(_h("308201c53082014ca0030201020214407a9bbf1272dfdfe97b2031af1308ed0c5d375c300a06082a8648ce3d040303301a3118301606035504030c0f476c696465205033383420526f6f74301e170d3236303730323130333430365a170d3336303632393130333430365a301a3118301606035504030c0f476c696465205033383420526f6f743076301006072a8648ce3d020106052b81040022036200046546ea64939d9aa0f1732ef78b459754d0a4d49303e41cf89a62f089f5cd34000ddc505e6173e7b9654ff0000c6c90d06737d5b9fa4d2a8731c4aad94da8a740ea7191bf9508a500c34964354fa553e180416d3b5274fcfad7c355a26a083006a3533051301d0603551d0e04160414b0908ec816c16a9e89e7f04bb04d4f23ef375c36301f0603551d23041830168014b0908ec816c16a9e89e7f04bb04d4f23ef375c36300f0603551d130101ff040530030101ff300a06082a8648ce3d040303036700306402300aa13cf2d4dfa3267fcc60dd4c8e7998507e52f8ac1f35a5f77cbe8f7aa0f7bf2a7b937b27a96e7ac4c929825335a10d0230440660a5eb68dcd540f12815940771d07c24e934f46a24f2f971ee643e3b95273fcc654bb620e033ca3ebf030d85d51e")).unwrap(); }
+fn _leaf() -> *Cert { return cert_parse(_h("308201bd30820143a0030201020214346181ed1e9dcd5adc16c33dd0671cae4bc80eb4300a06082a8648ce3d040303301a3118301606035504030c0f476c696465205033383420526f6f74301e170d3236303730323130333430365a170d3237303730323130333430365a30193117301506035504030c0e703338342e676c6964652e6465763059301306072a8648ce3d020106082a8648ce3d03010703420004c3f9d92a2a8f0cefe50144ac898a403728df7e0f995fb7c37995a6f80f6c9a0e9dd2c8d160d84f25fd9be23391ee9f06214ab48155d44c7e30198ef982f17ed0a368306630190603551d1104123010820e703338342e676c6964652e64657630090603551d1304023000301d0603551d0e0416041443fb6e95ffd281532f901e3125cc3198c63c796e301f0603551d23041830168014b0908ec816c16a9e89e7f04bb04d4f23ef375c36300a06082a8648ce3d040303036800306502304db26227812d86d6e142995006ce26141fba497f88ba282a58da9908d467a123c83951d91f30738537e6cc09a80efde20231009720455ccf8c22ea758025c8c2807f61d6e7e6927aa5abafc0bd6e646efa8ee7df041fce60464006084c74b13364b8c8")).unwrap(); }
+
+fn test_p384_rooted_chain() -> i32 {
+    let ca: *Cert = _ca();
+    let leaf: *Cert = _leaf();
+    assert_eq!(ca.pubkey.len(), 97);                  // P-384 CA key
+    assert_str_eq!(leaf.sig_alg, "1.2.840.10045.4.3.3");   // ecdsa-with-SHA384
+    let roots: *Vector<*Cert> = Vector::new(); roots.push(ca);
+    let v: !bool = verify_chain(leaf, Vector::new(), roots, "p384.glide.dev", leaf.not_before + 1000);
+    assert!(v.is_ok());
+    assert!(v.unwrap());
+    return 0;
+}
+
+fn test_p384_chain_rejects_wrong_host() -> i32 {
+    let roots: *Vector<*Cert> = Vector::new(); roots.push(_ca());
+    let leaf: *Cert = _leaf();
+    assert!(verify_chain(leaf, Vector::new(), roots, "evil.com", leaf.not_before + 1000).is_err());
+    return 0;
+}
