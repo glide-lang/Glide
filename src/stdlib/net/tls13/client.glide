@@ -452,3 +452,30 @@ pub fn tls_close(conn: *TlsConn) {
     }
     conn.stream.close();
 }
+
+// ---- adapter helpers for the net::tls dispatch layer ------------------
+
+c_raw! {
+    #ifndef GLIDE_TLS13_ADAPTER
+    #define GLIDE_TLS13_ADAPTER
+    #include <string.h>
+    static void __glide_tls13_memcpy(void* dst, void* src, int n) {
+        if (n > 0) memcpy(dst, src, (size_t)n);
+    }
+    #endif
+}
+extern fn __glide_tls13_memcpy(dst: *void, src: *void, n: i32);
+
+/// Read up to `max` bytes into a caller-provided buffer (the binary-safe
+/// Stream path used by HTTP/2). Returns the number of bytes read, 0 at EOF.
+pub fn tls_read_into(conn: *TlsConn, buf: *void, max: i32) -> !i32 {
+    let r: !string = tls_read(conn, max);
+    if !r.ok {
+        if r.err.contains("closed") { return ok(0); }   // peer close = EOF
+        return err(r.err);
+    }
+    let s: string = r.val;
+    let n: i32 = if s.len() < max { s.len() } else { max };
+    __glide_tls13_memcpy(buf, s as *void, n);
+    return ok(n);
+}
