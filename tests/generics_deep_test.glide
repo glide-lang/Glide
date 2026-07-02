@@ -1,0 +1,214 @@
+// Generics: multiple type parameters, trait-bounded params (`Ord`/`Eq`/
+// `Display`), generic structs with generic methods, and nested generic
+// instantiations (`Vector<Vector<i32>>`, `Vector<*Foo>`).
+import stdlib::testing::*;
+
+// ---- multiple type parameters --------------------------------------
+
+struct Pair<A, B> { first: A, second: B }
+impl<A, B> Pair<A, B> {
+    fn left(self: *Pair<A, B>) -> A { return self.first; }
+    fn right(self: *Pair<A, B>) -> B { return self.second; }
+}
+
+fn make_pair<A, B>(a: A, b: B) -> Pair<A, B> {
+    return Pair { first: a, second: b };
+}
+
+fn test_pair_mixed_types() -> i32 {
+    let p: Pair<i32, string> = make_pair(3, "three");
+    assert_eq!(p.left(), 3);
+    assert_str_eq!(p.right(), "three");
+    return 0;
+}
+
+fn test_pair_same_type() -> i32 {
+    let p: Pair<i32, i32> = Pair { first: 10, second: 20 };
+    assert_eq!(p.first + p.second, 30);
+    return 0;
+}
+
+// ---- generic identity / passthrough functions ----------------------
+
+fn identity<T>(x: T) -> T { return x; }
+
+fn test_identity_scalar() -> i32 {
+    assert_eq!(identity(42), 42);
+    return 0;
+}
+
+fn test_identity_string() -> i32 {
+    assert_str_eq!(identity("hi"), "hi");
+    return 0;
+}
+
+// ---- generic struct with generic methods ---------------------------
+
+struct Wrap<T> { v: T }
+impl<T> Wrap<T> {
+    fn make(v: T) -> Self { return Self { v: v }; }
+    fn get(self: *Wrap<T>) -> T { return self.v; }
+    fn set(self: *Wrap<T>, v: T) { self.v = v; }
+}
+
+fn test_wrap_get() -> i32 {
+    let w: Wrap<i32> = Wrap::make(7);
+    assert_eq!(w.get(), 7);
+    return 0;
+}
+
+fn test_wrap_set() -> i32 {
+    let mut w: Wrap<i32> = Wrap { v: 1 };
+    w.set(55);
+    assert_eq!(w.get(), 55);
+    return 0;
+}
+
+fn test_wrap_string() -> i32 {
+    let w: Wrap<string> = Wrap::make("payload");
+    assert_str_eq!(w.get(), "payload");
+    return 0;
+}
+
+// ---- trait bounds: Ord / Eq / Display ------------------------------
+
+struct Score { v: i32 }
+impl Ord for Score { fn cmp(self: *Score, o: *Score) -> i32 { return self.v - o.v; } }
+
+fn biggest<T: Ord>(a: *T, b: *T) -> *T {
+    if a > b { return a; }
+    return b;
+}
+
+fn test_ord_bound() -> i32 {
+    let a: *Score = Score { v: 4 };
+    let b: *Score = Score { v: 9 };
+    assert_eq!(biggest(a, b).v, 9);
+    // fresh values: passing an owned *T moves it into the call.
+    let c: *Score = Score { v: 3 };
+    let d: *Score = Score { v: 8 };
+    assert_eq!(biggest(d, c).v, 8);
+    return 0;
+}
+
+struct Key { k: i32, note: string }
+impl Eq for Key { fn eq(self: *Key, o: *Key) -> bool { return self.k == o.k; } }
+
+fn equal<T: Eq>(a: *T, b: *T) -> bool { return a == b; }
+
+fn test_eq_bound() -> i32 {
+    let a: *Key = Key { k: 1, note: "x" };
+    let b: *Key = Key { k: 1, note: "y" };   // custom eq ignores `note`
+    assert!(equal(a, b));                     // moves a and b
+    let c: *Key = Key { k: 1, note: "p" };
+    let d: *Key = Key { k: 2, note: "q" };
+    assert!(!equal(c, d));
+    return 0;
+}
+
+struct Tag { s: string }
+impl Display for Tag { fn to_string(self: *Tag) -> string { return "<".concat(self.s).concat(">"); } }
+
+fn render<T: Display>(v: *T) -> string { return v.to_string(); }
+
+fn test_display_bound() -> i32 {
+    let t: *Tag = Tag { s: "note" };
+    assert_str_eq!(render(t), "<note>");
+    return 0;
+}
+
+// ---- multiple bounds on one param ----------------------------------
+
+fn max_and_show<T: Ord + Display>(a: *T, b: *T) -> string {
+    if a > b { return a.to_string(); }
+    return b.to_string();
+}
+
+struct Ranked { n: i32 }
+impl Ord for Ranked { fn cmp(self: *Ranked, o: *Ranked) -> i32 { return self.n - o.n; } }
+impl Display for Ranked { fn to_string(self: *Ranked) -> string { return "r".concat(self.n.to_string()); } }
+
+fn test_multi_bound() -> i32 {
+    let a: *Ranked = Ranked { n: 2 };
+    let b: *Ranked = Ranked { n: 5 };
+    assert_str_eq!(max_and_show(a, b), "r5");
+    return 0;
+}
+
+// ---- nested generics: Vector<Vector<i32>> --------------------------
+
+fn test_nested_vector() -> i32 {
+    let outer: *Vector<*Vector<i32>> = Vector::new();
+    outer.push(vec_of!(1, 2, 3));
+    outer.push(vec_of!(4, 5));
+    assert_eq!(outer.len(), 2);
+    let row0 = outer.get(0);
+    let row1 = outer.get(1);
+    assert_eq!(row0.len(), 3);
+    assert_eq!(row0.get(2), 3);
+    assert_eq!(row1.get(0), 4);
+    return 0;
+}
+
+fn test_nested_vector_sum() -> i32 {
+    let grid: *Vector<*Vector<i32>> = vec_of!(vec_of!(1, 2), vec_of!(3, 4), vec_of!(5, 6));
+    let mut total: i32 = 0;
+    for let i: i32 = 0; i < grid.len(); i++ {
+        let row = grid.get(i);
+        for let j: i32 = 0; j < row.len(); j++ {
+            total = total + row.get(j);
+        }
+    }
+    assert_eq!(total, 21);
+    return 0;
+}
+
+// ---- Vector of struct pointers: Vector<*Foo> -----------------------
+
+struct Foo { id: i32, name: string }
+
+fn test_vector_of_pointers() -> i32 {
+    let v: *Vector<*Foo> = Vector::new();
+    let a: *Foo = Foo { id: 1, name: "a" };
+    let b: *Foo = Foo { id: 2, name: "b" };
+    v.push(a);
+    v.push(b);
+    assert_eq!(v.len(), 2);
+    assert_eq!(v.get(0).id, 1);
+    assert_str_eq!(v.get(1).name, "b");
+    return 0;
+}
+
+// ---- generic function over a Vector<T> -----------------------------
+
+fn first_of<T>(v: *Vector<T>) -> T { return v.get(0); }
+fn count_of<T>(v: *Vector<T>) -> i32 { return v.len(); }
+
+fn test_generic_over_vector() -> i32 {
+    let nums: *Vector<i32> = vec_of!(9, 8, 7);
+    assert_eq!(first_of(nums), 9);
+    assert_eq!(count_of(nums), 3);
+    let words: *Vector<string> = vec_of!("x", "y");
+    assert_str_eq!(first_of(words), "x");
+    assert_eq!(count_of(words), 2);
+    return 0;
+}
+
+// ---- generic struct holding a Vector -------------------------------
+
+struct Stack<T> { items: *Vector<T> }
+impl<T> Stack<T> {
+    fn empty() -> Self { return Self { items: Vector::new() }; }
+    fn push_val(self: *Stack<T>, x: T) { self.items.push(x); }
+    fn size(self: *Stack<T>) -> i32 { return self.items.len(); }
+    fn at(self: *Stack<T>, i: i32) -> T { return self.items.get(i); }
+}
+
+fn test_generic_struct_with_vector() -> i32 {
+    let s: Stack<i32> = Stack::empty();
+    s.push_val(100);
+    s.push_val(200);
+    assert_eq!(s.size(), 2);
+    assert_eq!(s.at(1), 200);
+    return 0;
+}

@@ -1,0 +1,172 @@
+// Traits: default methods, `impl Trait for Type`, `*dyn Trait` dynamic
+// dispatch, `Self` return/params, and supertraits (`trait B: A`).
+import stdlib::testing::*;
+
+// ---- default methods -----------------------------------------------
+
+trait Animal {
+    fn sound(self: *Self) -> string;
+    // Default method — uses another trait method; overridable per impl.
+    fn describe(self: *Self) -> string { return "says ".concat(self.sound()); }
+}
+
+struct Dog {}
+impl Animal for Dog {
+    fn sound(self: *Dog) -> string { return "woof"; }
+    // uses default `describe`
+}
+
+struct Cat {}
+impl Animal for Cat {
+    fn sound(self: *Cat) -> string { return "meow"; }
+    // overrides the default
+    fn describe(self: *Cat) -> string { return "a cat that says ".concat(self.sound()); }
+}
+
+fn test_default_method_used() -> i32 {
+    let d: *Dog = Dog {};
+    assert_str_eq!(d.sound(), "woof");
+    assert_str_eq!(d.describe(), "says woof");
+    return 0;
+}
+
+fn test_default_method_overridden() -> i32 {
+    let c: *Cat = Cat {};
+    assert_str_eq!(c.describe(), "a cat that says meow");
+    return 0;
+}
+
+// ---- dynamic dispatch via *dyn Trait -------------------------------
+
+fn announce(a: *dyn Animal) -> string { return a.describe(); }
+
+fn test_dyn_dispatch_default_and_override() -> i32 {
+    let d: *Dog = Dog {};
+    let c: *Cat = Cat {};
+    let ad: *dyn Animal = d as *dyn Animal;
+    let ac: *dyn Animal = c as *dyn Animal;
+    assert_str_eq!(announce(ad), "says woof");
+    assert_str_eq!(announce(ac), "a cat that says meow");
+    return 0;
+}
+
+fn test_dyn_in_vector() -> i32 {
+    let zoo: *Vector<*dyn Animal> = Vector::new();
+    let d: *Dog = Dog {};
+    let c: *Cat = Cat {};
+    zoo.push(d as *dyn Animal);
+    zoo.push(c as *dyn Animal);
+    assert_eq!(zoo.len(), 2);
+    assert_str_eq!(zoo.get(0).sound(), "woof");
+    assert_str_eq!(zoo.get(1).sound(), "meow");
+    return 0;
+}
+
+// ---- Self return type + Self struct literal ------------------------
+
+trait Builder {
+    fn tag(self: *Self) -> string;
+}
+
+struct Widget { name: string }
+impl Widget {
+    fn new(name: string) -> Self { return Self { name: name }; }
+    fn renamed(self: *Widget, name: string) -> Self { return Self { name: name }; }
+}
+impl Builder for Widget {
+    fn tag(self: *Widget) -> string { return "widget:".concat(self.name); }
+}
+
+fn test_self_new_and_tag() -> i32 {
+    let w: Widget = Widget::new("button");
+    assert_str_eq!(w.tag(), "widget:button");
+    return 0;
+}
+
+fn test_self_returning_method() -> i32 {
+    let w: Widget = Widget::new("a");
+    let w2: Widget = w.renamed("b");
+    assert_str_eq!(w2.tag(), "widget:b");
+    return 0;
+}
+
+// ---- supertrait: trait B: A ----------------------------------------
+
+trait Named {
+    fn name(self: *Self) -> string;
+}
+
+trait Greeter: Named {
+    // Default body calls a supertrait method.
+    fn greet(self: *Self) -> string { return "hello ".concat(self.name()); }
+}
+
+struct Person { who: string }
+impl Named for Person {
+    fn name(self: *Person) -> string { return self.who; }
+}
+impl Greeter for Person {}   // inherits default greet, requires Named
+
+fn test_supertrait_default_greet() -> i32 {
+    let p: *Person = Person { who: "sam" };
+    assert_str_eq!(p.name(), "sam");
+    assert_str_eq!(p.greet(), "hello sam");
+    return 0;
+}
+
+struct Robot { id: string }
+impl Named for Robot {
+    fn name(self: *Robot) -> string { return "unit-".concat(self.id); }
+}
+impl Greeter for Robot {
+    fn greet(self: *Robot) -> string { return "BEEP ".concat(self.name()); }
+}
+
+fn test_supertrait_overridden_greet() -> i32 {
+    let r: *Robot = Robot { id: "9" };
+    assert_str_eq!(r.greet(), "BEEP unit-9");
+    return 0;
+}
+
+fn test_supertrait_dyn_dispatch() -> i32 {
+    let p: *Person = Person { who: "kay" };
+    let r: *Robot = Robot { id: "7" };
+    let g1: *dyn Greeter = p as *dyn Greeter;
+    let g2: *dyn Greeter = r as *dyn Greeter;
+    assert_str_eq!(g1.greet(), "hello kay");
+    assert_str_eq!(g2.greet(), "BEEP unit-7");
+    return 0;
+}
+
+// ---- generic bound on a trait (static dispatch) --------------------
+
+fn shout<T: Animal>(a: *T) -> string { return a.describe().to_upper(); }
+
+fn test_static_trait_bound() -> i32 {
+    let d: *Dog = Dog {};
+    assert_str_eq!(shout(d), "SAYS WOOF");
+    return 0;
+}
+
+// ---- trait method returning a value + default using it -------------
+
+trait Measured {
+    fn size(self: *Self) -> i32;
+    fn double_size(self: *Self) -> i32 { return self.size() * 2; }
+}
+
+struct Bag { n: i32 }
+impl Measured for Bag {
+    fn size(self: *Bag) -> i32 { return self.n; }
+}
+
+// Direct dynamic dispatch returning an i32 used in arithmetic.
+fn twice(m: *dyn Measured) -> i32 { return m.size() + m.size(); }
+
+fn test_dyn_numeric_trait() -> i32 {
+    let a: *Bag = Bag { n: 3 };
+    assert_eq!(a.double_size(), 6);        // default method
+    let m: *dyn Measured = a as *dyn Measured;
+    assert_eq!(twice(m), 6);               // dyn dispatch into arithmetic
+    return 0;
+}
