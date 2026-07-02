@@ -1,0 +1,68 @@
+// HKDF-SHA256 conformance against the RFC 5869 test vectors (appendix A,
+// the SHA-256 cases). Inputs/outputs are hex-decoded/encoded so embedded
+// NULs round-trip through the binary-safe string layer.
+import stdlib::testing::*;
+import stdlib::crypto::hkdf::*;
+import stdlib::hex::*;
+
+fn _h(s: string) -> string {
+    let r: !string = hex_decode(s);
+    if !r.is_ok() { return ""; }
+    return r.unwrap();
+}
+
+// RFC 5869 A.1 — Basic test case with SHA-256.
+fn test_rfc5869_case1() -> i32 {
+    let ikm: string  = _h("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
+    let salt: string = _h("000102030405060708090a0b0c");
+    let info: string = _h("f0f1f2f3f4f5f6f7f8f9");
+
+    let prk: string = hkdf_extract(salt, ikm);
+    assert_str_eq!(hex_encode(prk),
+        "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5");
+
+    let okm: !string = hkdf_expand(prk, info, 42);
+    assert!(okm.is_ok());
+    assert_str_eq!(hex_encode(okm.unwrap()),
+        "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865");
+    return 0;
+}
+
+// RFC 5869 A.3 — Empty salt and info.
+fn test_rfc5869_case3() -> i32 {
+    let ikm: string = _h("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
+
+    let prk: string = hkdf_extract("", ikm);
+    assert_str_eq!(hex_encode(prk),
+        "19ef24a32c717b167f33a91d6f648bdf96596776afdb6377ac434c1c293ccb04");
+
+    let okm: !string = hkdf_expand(prk, "", 42);
+    assert!(okm.is_ok());
+    assert_str_eq!(hex_encode(okm.unwrap()),
+        "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8");
+    return 0;
+}
+
+// One-shot hkdf() must equal extract-then-expand.
+fn test_oneshot_matches() -> i32 {
+    let ikm: string  = _h("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
+    let salt: string = _h("000102030405060708090a0b0c");
+    let info: string = _h("f0f1f2f3f4f5f6f7f8f9");
+    let a: !string = hkdf(salt, ikm, info, 42);
+    let b: !string = hkdf_expand(hkdf_extract(salt, ikm), info, 42);
+    assert!(a.is_ok());
+    assert!(b.is_ok());
+    assert_str_eq!(hex_encode(a.unwrap()), hex_encode(b.unwrap()));
+    return 0;
+}
+
+// Length bounds: an over-long expand is rejected, a HashLen-multiple works.
+fn test_length_bounds() -> i32 {
+    let prk: string = hkdf_extract("salt", "ikm");
+    let ok32: !string = hkdf_expand(prk, "info", 32);
+    assert!(ok32.is_ok());
+    assert_eq!(ok32.unwrap().len(), 32);
+    let too_long: !string = hkdf_expand(prk, "info", 255 * 32 + 1);
+    assert!(too_long.is_err());
+    return 0;
+}

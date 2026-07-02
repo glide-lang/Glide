@@ -1,0 +1,62 @@
+// HKDF — HMAC-based Extract-and-Expand Key Derivation Function
+// (RFC 5869) over SHA-256. Pure Glide on top of the existing
+// HMAC-SHA-256 primitive; this is the key-schedule backbone TLS 1.3
+// (and its HKDF-Expand-Label) is built from.
+//
+// ```glide
+// import stdlib::crypto::hkdf::*;
+//
+// let prk: string  = hkdf_extract(salt, ikm);
+// let okm: !string = hkdf_expand(prk, info, 42);
+// // or one-shot:
+// let key: !string = hkdf(salt, ikm, info, 32);
+// ```
+
+import stdlib::crypto::*;   // hmac_sha256 (32-byte, binary-safe)
+import stdlib::bytes::*;    // ByteBuffer
+
+// HashLen for SHA-256.
+const HKDF_HASHLEN: i32 = 32;
+
+// HKDF-Extract (RFC 5869 §2.2): PRK = HMAC-SHA256(salt, IKM). An empty
+// salt is replaced with HashLen zero bytes, per the spec.
+pub fn hkdf_extract(salt: string, ikm: string) -> string {
+    let mut s: string = salt;
+    if s.len() == 0 {
+        let bb: *ByteBuffer = ByteBuffer::new();
+        for let i: i32 = 0; i < HKDF_HASHLEN; i++ { bb.push(0 as u8); }
+        s = bb.to_string();
+        bb.free();
+    }
+    return hmac_sha256(s, ikm);
+}
+
+// HKDF-Expand (RFC 5869 §2.3): OKM = first `length` bytes of
+// T(1) | T(2) | ..., where T(0) = "" and
+// T(i) = HMAC-SHA256(PRK, T(i-1) | info | byte(i)).
+pub fn hkdf_expand(prk: string, info: string, length: i32) -> !string {
+    if length < 0 { return err("hkdf: negative length"); }
+    if length > 255 * HKDF_HASHLEN { return err("hkdf: length exceeds 255*HashLen"); }
+    let out: *ByteBuffer = ByteBuffer::new();
+    let mut t: string = "";
+    let mut i: i32 = 1;
+    while out.len() < length {
+        // The counter is a single big-endian byte (i is always 1..255 here).
+        let ctr: *ByteBuffer = ByteBuffer::new();
+        ctr.push((i & 255) as u8);
+        let block_in: string = t.concat(info).concat(ctr.to_string());
+        ctr.free();
+        t = hmac_sha256(prk, block_in);
+        out.push_str(t);
+        i = i + 1;
+    }
+    let full: string = out.to_string();
+    out.free();
+    return ok(full.substring(0, length));
+}
+
+// One-shot HKDF: extract then expand.
+pub fn hkdf(salt: string, ikm: string, info: string, length: i32) -> !string {
+    let prk: string = hkdf_extract(salt, ikm);
+    return hkdf_expand(prk, info, length);
+}
