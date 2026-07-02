@@ -1,18 +1,28 @@
 #!/usr/bin/env bash
 # Build a cross-compile sysroot tarball for a given target.
 #
-# Sysroots package the headers + static libs the bundled Zig toolchain
-# doesn't ship (openssl, zlib). Users opt in via `glide target add`,
-# which downloads the matching tarball off the Glide release page and
-# stages it under ~/.glide/targets/<triple>/{include,lib}/.
+# Sysroot v2 layout:
+#   include/ lib/    third-party static libs + headers (openssl, zlib,
+#                    ngtcp2, nghttp3) — same role as v1, consumed by the
+#                    -I/-L link assembly in bootstrap/main.glide.
+#   libc/            the target's C library + startup files + libgcc, so
+#                    a host clang can cross-compile with
+#                    `--target=<triple> --sysroot=<sr>/libc -B<sr>/libc/gcc`.
+#                    linux: musl tree (libc/usr/{include,lib}) from Alpine
+#                    APKs; windows: mingw-w64 tree (libc/{include,lib})
+#                    from MSYS2 packages. macOS has no libc/ — that target
+#                    only builds natively on a Mac (Apple clang).
+#
+# Users opt in via `glide target add`, which downloads the tarball off
+# the Glide release page into ~/.glide/targets/<triple>/.
 #
 # Usage:
 #   tools/build_sysroot.sh                              # current host triple
 #   tools/build_sysroot.sh --target=x86_64-linux-musl   # explicit
 #
 # Supported targets:
-#   x86_64-linux-musl   — Alpine APKs (works on any Linux/Win/Mac host)
-#   aarch64-linux-musl  — Alpine APKs
+#   x86_64-linux-musl   — Docker (Alpine container builds the lib stack;
+#   aarch64-linux-musl    APKs supply the musl libc tree). Any host.
 #   x86_64-windows-gnu  — MSYS2 mingw packages (host must have MSYS2)
 #   aarch64-macos-none  — Homebrew (host must be macOS arm64)
 #
@@ -23,13 +33,19 @@ set -e
 VERSION="${VERSION:-0.3.1}"
 TARGET=""
 
-# HTTP/3 stack + openssl versions for the from-source linux-musl build.
-# ngtcp2's ossl crypto backend needs openssl >= 3.5 (QUIC TLS API), which
-# is newer than any distro static package — so those three are built from
-# source with the bundled zig as a musl cross compiler.
-OPENSSL_VER="${OPENSSL_VER:-3.5.7}"
-NGHTTP3_VER="${NGHTTP3_VER:-1.17.0}"
-NGTCP2_VER="${NGTCP2_VER:-1.24.0}"
+# Alpine release the linux libc/ tree comes from. Must match the digest
+# pinned in tools/bundle/linux-x86_64-musl/Dockerfile — libc.a and the
+# lib stack should be built by the same musl generation.
+ALPINE_VER="${ALPINE_VER:-v3.20}"
+MUSL_VER="1.2.5-r3"
+GCC_APK_VER="13.2.1_git20240309-r1"
+# sha256 per (package, arch) — APKs at a pinned version are immutable.
+sha_musl_x86_64="70705bdeb1a8d54ee1ec7ce3b06f176206f4f3b105d86cf5576d74b8277adfa0"
+sha_musl_dev_x86_64="36abcf8a199826080b9b2a45f86782afae4ae5c8b8331909e5113911e2bdcad1"
+sha_gcc_x86_64="f3c6095905cbe31d77ac7e3ba3397058b952751d0dd6b0511e8baa464ef0fa99"
+sha_musl_aarch64="e455c49c6c3de1dfcd4b9867c35097f588de2fb01a939c77ddb149f8e6086a24"
+sha_musl_dev_aarch64="89a641400ddd298cf2b40a3b6d7d0a20278d5a01cae79fc639ca8fd27b2fdf12"
+sha_gcc_aarch64="07ca04d225d3b8a36fb6f215650d2c2d4714d6b5e14bda568abd17176e6a3ad2"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -55,136 +71,95 @@ if [ -z "$TARGET" ]; then
     TARGET="${host_arch}-${host_os}-${host_abi}"
 fi
 
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="dist/glide-sysroot-${TARGET}-${VERSION}.tar.gz"
 STAGING="dist/staging/sysroot-${TARGET}"
 SYSROOT="dist/sysroot-${TARGET}"
 rm -rf "$STAGING" "$SYSROOT" "$OUT"
 mkdir -p "$STAGING" "$SYSROOT/include" "$SYSROOT/lib"
 
-# -------------------------------------------------------------------------
-# Linux (musl): zlib comes from Alpine APKs (plain tar.gz, works on any
-# host). openssl + the HTTP/3 stack (nghttp3, ngtcp2 with the ossl crypto
-# backend) are built from source with zig as a musl cross compiler —
-# distro packages ship neither openssl 3.5 static nor ngtcp2_crypto_ossl,
-# and stdlib::http::h3 links exactly those. Falls back to the Alpine
-# openssl (no h3 libs) when zig isn't available.
-# -------------------------------------------------------------------------
-
-_find_zig_for_sysroot() {
-    if [ -x "runtime/zig/zig" ]; then echo "$PWD/runtime/zig/zig"; return; fi
-    command -v zig 2>/dev/null || true
+_fetch_checked() {
+    # _fetch_checked <url> <dest> <sha256>
+    curl -fsSL "$1" -o "$2"
+    echo "$3  $2" | sha256sum -c - >/dev/null || {
+        echo "sha256 mismatch for $1" >&2
+        exit 1
+    }
 }
 
-# Build openssl + nghttp3 + ngtcp2 as static musl libs into ${SYSROOT}.
-# $1 = target arch (x86_64 | aarch64), $2 = zig binary.
-build_h3_stack_musl() {
-    local arch="$1" zig="$2"
-    local triple="${arch}-linux-musl"
-    local ossl_target="linux-${arch}"
-    [ "$arch" = "aarch64" ] && ossl_target="linux-aarch64"
-    # openssl's Configure requires an absolute --prefix, and the zig shims
-    # must stay reachable after cd'ing into each source tree.
-    local work="$(pwd)/${STAGING}/h3src"
-    local prefix="$(pwd)/${STAGING}/h3prefix"
-    local bindir="${work}/bin"
-    mkdir -p "$work" "$prefix" "$bindir"
+# -------------------------------------------------------------------------
+# Linux (musl): the lib stack (openssl 3.5 + zlib + ngtcp2/nghttp3, all
+# static) is built inside the pinned Alpine container — Alpine gcc IS a
+# native musl toolchain, no cross shims needed. The libc/ tree (musl
+# headers + crt + libc.a + libgcc) comes from pinned Alpine APKs, which
+# are plain tar.gz — no Alpine environment needed to extract them.
+# -------------------------------------------------------------------------
 
-    # zig-as-toolchain shims — configure scripts want single-word CC/AR.
-    printf '#!/bin/sh\nexec "%s" cc -target %s "$@"\n' "$zig" "$triple" > "$bindir/zcc"
-    printf '#!/bin/sh\nexec "%s" ar "$@"\n' "$zig" > "$bindir/zar"
-    printf '#!/bin/sh\nexec "%s" ranlib "$@"\n' "$zig" > "$bindir/zranlib"
-    chmod +x "$bindir"/z*
-    local jobs; jobs="$(nproc 2>/dev/null || echo 4)"
+_stage_linux_libc() {
+    local arch="$1"
+    local base="https://dl-cdn.alpinelinux.org/alpine/${ALPINE_VER}/main/${arch}"
+    local apkdir="${STAGING}/apk"
+    local extract="${STAGING}/apk-extract"
+    mkdir -p "$apkdir" "$extract"
 
-    echo ">> Building openssl ${OPENSSL_VER} (static, ${triple})"
-    curl -fsSL -o "$work/openssl.tar.gz" \
-        "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VER}/openssl-${OPENSSL_VER}.tar.gz"
-    tar -xzf "$work/openssl.tar.gz" -C "$work"
-    ( cd "$work/openssl-${OPENSSL_VER}" && \
-      PATH="$bindir:$PATH" ./Configure "$ossl_target" no-shared no-tests no-apps no-docs \
-          --prefix="$prefix" --libdir=lib CC=zcc AR=zar RANLIB=zranlib > build.log 2>&1 && \
-      PATH="$bindir:$PATH" make -j"$jobs" >> build.log 2>&1 && \
-      PATH="$bindir:$PATH" make install_sw >> build.log 2>&1 ) \
-      || { echo "openssl build failed — see $work/openssl-${OPENSSL_VER}/build.log" >&2; exit 1; }
+    local sha_musl sha_musl_dev sha_gcc
+    eval "sha_musl=\$sha_musl_${arch}"
+    eval "sha_musl_dev=\$sha_musl_dev_${arch}"
+    eval "sha_gcc=\$sha_gcc_${arch}"
 
-    echo ">> Building nghttp3 ${NGHTTP3_VER} (static, ${triple})"
-    curl -fsSL -o "$work/nghttp3.tar.gz" \
-        "https://github.com/ngtcp2/nghttp3/releases/download/v${NGHTTP3_VER}/nghttp3-${NGHTTP3_VER}.tar.gz"
-    tar -xzf "$work/nghttp3.tar.gz" -C "$work"
-    ( cd "$work/nghttp3-${NGHTTP3_VER}" && \
-      PATH="$bindir:$PATH" CC=zcc ./configure --enable-lib-only --enable-static \
-          --disable-shared --prefix="$prefix" --host="$triple" > build.log 2>&1 && \
-      PATH="$bindir:$PATH" make -j"$jobs" >> build.log 2>&1 && \
-      PATH="$bindir:$PATH" make install >> build.log 2>&1 ) \
-      || { echo "nghttp3 build failed — see $work/nghttp3-${NGHTTP3_VER}/build.log" >&2; exit 1; }
+    echo ">> Fetching Alpine ${ALPINE_VER}/${arch} libc packages"
+    _fetch_checked "${base}/musl-${MUSL_VER}.apk"     "${apkdir}/musl.apk"     "$sha_musl"
+    _fetch_checked "${base}/musl-dev-${MUSL_VER}.apk" "${apkdir}/musl-dev.apk" "$sha_musl_dev"
+    _fetch_checked "${base}/gcc-${GCC_APK_VER}.apk"   "${apkdir}/gcc.apk"      "$sha_gcc"
 
-    echo ">> Building ngtcp2 ${NGTCP2_VER} (static, ${triple}, crypto_ossl)"
-    curl -fsSL -o "$work/ngtcp2.tar.gz" \
-        "https://github.com/ngtcp2/ngtcp2/releases/download/v${NGTCP2_VER}/ngtcp2-${NGTCP2_VER}.tar.gz"
-    tar -xzf "$work/ngtcp2.tar.gz" -C "$work"
-    ( cd "$work/ngtcp2-${NGTCP2_VER}" && \
-      PATH="$bindir:$PATH" CC=zcc PKG_CONFIG_PATH="$prefix/lib/pkgconfig" \
-          ./configure --enable-lib-only --enable-static --disable-shared \
-          --with-openssl --prefix="$prefix" --host="$triple" > build.log 2>&1 && \
-      PATH="$bindir:$PATH" make -j"$jobs" >> build.log 2>&1 && \
-      PATH="$bindir:$PATH" make install >> build.log 2>&1 ) \
-      || { echo "ngtcp2 build failed — see $work/ngtcp2-${NGTCP2_VER}/build.log" >&2; exit 1; }
-    [ -f "$prefix/lib/libngtcp2_crypto_ossl.a" ] \
-      || { echo "ngtcp2 built without crypto_ossl (openssl >= 3.5 not detected?)" >&2; exit 1; }
+    for a in "$apkdir"/*.apk; do
+        # APK = tar.gz with sometimes-malformed metadata stream; ignore exit.
+        tar -xzf "$a" -C "$extract" 2>/dev/null || true
+    done
 
-    cp -r "$prefix/include/openssl" "$prefix/include/ngtcp2" "$prefix/include/nghttp3" "${SYSROOT}/include/"
-    cp "$prefix/lib/libssl.a" "$prefix/lib/libcrypto.a" \
-       "$prefix/lib/libngtcp2.a" "$prefix/lib/libngtcp2_crypto_ossl.a" \
-       "$prefix/lib/libnghttp3.a" "${SYSROOT}/lib/"
+    echo ">> Staging libc/ tree (musl + crt + libgcc)"
+    local lc="${SYSROOT}/libc"
+    mkdir -p "$lc/usr/lib" "$lc/gcc"
+    cp -r "$extract/usr/include" "$lc/usr/"
+    # crt startfiles + libc + the empty ABI stubs (libm, libpthread, …).
+    cp "$extract"/usr/lib/*.o "$extract"/usr/lib/lib*.a "$lc/usr/lib/"
+    # libgcc + crtbegin/crtend into a fixed, version-free path so the
+    # compiler flags stay deterministic: -B<sr>/libc/gcc -L<sr>/libc/gcc.
+    local gd
+    gd="$(ls -d "$extract"/usr/lib/gcc/*-alpine-linux-musl/*/ | head -1)"
+    [ -n "$gd" ] || { echo "gcc APK layout unexpected — no gcc dir" >&2; exit 1; }
+    cp "$gd"/crtbegin*.o "$gd"/crtend*.o "$gd"/libgcc.a "$gd"/libgcc_eh.a "$lc/gcc/"
 }
 
 build_linux_musl() {
     local arch="$1"
-    local alpine_ver="${ALPINE_VER:-v3.20}"
-    local openssl_pkg="openssl-3.3.7-r0"
-    local zlib_pkg="zlib-1.3.2-r0"
-    local base="https://dl-cdn.alpinelinux.org/alpine/${alpine_ver}/main/${arch}"
+    command -v docker >/dev/null 2>&1 || {
+        echo "linux-musl sysroots are built in a pinned Alpine container — docker is required." >&2
+        exit 1
+    }
 
-    local zig; zig="$(_find_zig_for_sysroot)"
-    local pkgs="${zlib_pkg//zlib-/zlib-dev-} ${zlib_pkg//zlib-/zlib-static-}"
-    if [ -z "$zig" ]; then
-        echo ">> WARNING: zig not found (runtime/zig/ or PATH) — shipping Alpine" >&2
-        echo ">>          openssl and NO HTTP/3 libs. stdlib::http::h3 programs" >&2
-        echo ">>          will not link against this sysroot. Install zig with" >&2
-        echo ">>          tools/install_toolchain.sh and rebuild to include them." >&2
-        pkgs="$pkgs ${openssl_pkg//openssl-/openssl-dev-} ${openssl_pkg//openssl-/openssl-libs-static-}"
+    local img="glide-bundle-linux-musl-${arch}"
+    local bundle_out="${STAGING}/bundle"
+    mkdir -p "$bundle_out"
+    echo ">> Building the static lib stack in Docker (${arch})"
+    if [ "$arch" = "$(uname -m)" ] || { [ "$arch" = "x86_64" ] && [ "$(uname -m)" = "amd64" ]; }; then
+        docker build -t "$img" "$REPO_ROOT/tools/bundle/linux-x86_64-musl"
+        docker run --rm -v "$(pwd)/$bundle_out:/out" "$img"
+    else
+        # Cross-arch via buildx + qemu emulation. Slow but works on any
+        # x86_64 host with Docker.
+        local platform="linux/arm64"
+        [ "$arch" = "x86_64" ] && platform="linux/amd64"
+        docker buildx build --platform "$platform" -t "$img" --load \
+            "$REPO_ROOT/tools/bundle/linux-x86_64-musl"
+        docker run --rm --platform "$platform" -v "$(pwd)/$bundle_out:/out" "$img"
     fi
-
-    echo ">> Fetching Alpine packages from $base"
-    for pkg in $pkgs; do
-        local file="${pkg}.apk"
-        echo "   $file"
-        if ! curl -fsSL "${base}/${file}" -o "${STAGING}/${file}"; then
-            echo "failed to fetch ${base}/${file}" >&2
-            exit 1
-        fi
-        # APK = tar.gz with sometimes-malformed metadata stream; ignore exit.
-        tar -xzf "${STAGING}/${file}" -C "${STAGING}" 2>/dev/null || true
-    done
 
     echo ">> Assembling sysroot"
-    [ -f "${STAGING}/usr/include/zlib.h" ]  || { echo "zlib.h missing" >&2; exit 1; }
-    cp "${STAGING}/usr/include/zlib.h" "${SYSROOT}/include/"
-    [ -f "${STAGING}/usr/include/zconf.h" ] || { echo "zconf.h missing" >&2; exit 1; }
-    cp "${STAGING}/usr/include/zconf.h" "${SYSROOT}/include/"
-    [ -f "${STAGING}/lib/libz.a" ]          || { echo "libz.a missing" >&2; exit 1; }
-    cp "${STAGING}/lib/libz.a" "${SYSROOT}/lib/"
+    cp -r "$bundle_out"/include/. "${SYSROOT}/include/"
+    cp "$bundle_out"/lib/*.a "${SYSROOT}/lib/"
 
-    if [ -n "$zig" ]; then
-        build_h3_stack_musl "$arch" "$zig"
-    else
-        [ -d "${STAGING}/usr/include/openssl" ] || { echo "openssl headers missing" >&2; exit 1; }
-        cp -r "${STAGING}/usr/include/openssl" "${SYSROOT}/include/"
-        [ -f "${STAGING}/usr/lib/libssl.a" ]    || { echo "libssl.a missing" >&2; exit 1; }
-        [ -f "${STAGING}/usr/lib/libcrypto.a" ] || { echo "libcrypto.a missing" >&2; exit 1; }
-        cp "${STAGING}/usr/lib/libssl.a" "${SYSROOT}/lib/"
-        cp "${STAGING}/usr/lib/libcrypto.a" "${SYSROOT}/lib/"
-    fi
+    _stage_linux_libc "$arch"
 }
 
 # -------------------------------------------------------------------------
@@ -235,11 +210,40 @@ build_windows_gnu() {
         cp -r "$prefix/include/nghttp3" "${SYSROOT}/include/"
         cp "$prefix/lib/libnghttp3.a" "${SYSROOT}/lib/"
     fi
+
+    # libc/ tree: mingw-w64 headers + crt + winpthreads + libgcc so a
+    # host clang on Linux/mac can cross-compile to windows-gnu
+    # (`--sysroot=<sr>/libc -B<sr>/libc/gcc`). mingw layout keeps
+    # include/ and lib/ at the top level (no usr/).
+    echo ">> Staging libc/ tree (mingw-w64 headers + crt + libgcc)"
+    local lc="${SYSROOT}/libc"
+    mkdir -p "$lc/lib" "$lc/gcc"
+    cp -r "$prefix/include" "$lc/"
+    cp "$prefix"/lib/*.o "$lc/lib/" 2>/dev/null || true
+    cp "$prefix"/lib/libmingw32.a "$prefix"/lib/libmingwex.a \
+       "$prefix"/lib/libmsvcrt.a "$prefix"/lib/libucrt*.a \
+       "$prefix"/lib/libkernel32.a "$prefix"/lib/libuser32.a \
+       "$prefix"/lib/libadvapi32.a "$prefix"/lib/libshell32.a \
+       "$prefix"/lib/libws2_32.a "$prefix"/lib/libmswsock.a \
+       "$prefix"/lib/libdbghelp.a "$prefix"/lib/libpsapi.a \
+       "$prefix"/lib/libcrypt32.a "$prefix"/lib/libbcrypt.a \
+       "$prefix"/lib/libntdll.a "$prefix"/lib/libwinpthread.a \
+       "$prefix"/lib/libssp*.a \
+       "$lc/lib/" 2>/dev/null || true
+    # Everything else the mingw crt references at link time.
+    cp "$prefix"/lib/lib*.a "$lc/lib/" 2>/dev/null || true
+    local gd
+    gd="$(ls -d "$prefix"/lib/gcc/x86_64-w64-mingw32/*/ 2>/dev/null | head -1)"
+    if [ -n "$gd" ]; then
+        cp "$gd"/crtbegin*.o "$gd"/crtend*.o "$gd"/libgcc.a "$gd"/libgcc_eh.a "$lc/gcc/" 2>/dev/null || true
+    fi
 }
 
 # -------------------------------------------------------------------------
 # macOS: take static libs from Homebrew's openssl@3 + zlib. Must run on
 # a Mac of the matching arch (no cross-bottle for openssl static libs).
+# No libc/ tree — the macOS target only builds natively (Apple clang);
+# cross-compiling TO macOS is not supported.
 # -------------------------------------------------------------------------
 build_macos() {
     local arch="$1"
@@ -299,7 +303,9 @@ case "$TARGET" in
 esac
 
 echo ">> Archiving"
-( cd "$SYSROOT" && tar -czf "../glide-sysroot-${TARGET}-${VERSION}.tar.gz" include lib )
+parts="include lib"
+[ -d "$SYSROOT/libc" ] && parts="$parts libc"
+( cd "$SYSROOT" && tar -czf "../glide-sysroot-${TARGET}-${VERSION}.tar.gz" $parts )
 
 SIZE=$(du -sh "$OUT" | cut -f1)
 echo ">> Done: $OUT ($SIZE)"

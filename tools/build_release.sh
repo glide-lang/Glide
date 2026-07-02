@@ -175,9 +175,13 @@ cp LICENSE "$STAGE/" 2>/dev/null || true
 if [ -n "$BUNDLE_LIBS" ] && [ -d "$BUNDLE_LIBS" ]; then
     echo ">> Bundling static libs from $BUNDLE_LIBS"
     mkdir -p "$STAGE/lib"
+    # The bundle builder stages libs under lib/ (with headers as a
+    # sibling include/); older flat layouts are still accepted.
+    src="$BUNDLE_LIBS"
+    [ -d "$BUNDLE_LIBS/lib" ] && src="$BUNDLE_LIBS/lib"
     for lib in libssl.a libcrypto.a libz.a libngtcp2.a libngtcp2_crypto_ossl.a libnghttp3.a; do
-        if [ -f "$BUNDLE_LIBS/$lib" ]; then
-            cp "$BUNDLE_LIBS/$lib" "$STAGE/lib/"
+        if [ -f "$src/$lib" ]; then
+            cp "$src/$lib" "$STAGE/lib/"
             echo "   + $lib"
         else
             echo "   - $lib (skipped — not found)"
