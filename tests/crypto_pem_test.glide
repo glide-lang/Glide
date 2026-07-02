@@ -1,0 +1,36 @@
+// PEM decoding + system trust-store loading.
+import stdlib::testing::*;
+import stdlib::crypto::pem::*;
+import stdlib::crypto::x509::*;
+
+const LEAF_PEM: string = "-----BEGIN CERTIFICATE-----\nMIIBmjCCAT+gAwIBAgIUJwhn89cAw1AoovJHz+GQ8uzBq9YwCgYIKoZIzj0EAwIw\nGDEWMBQGA1UEAwwNR2xpZGUgUm9vdCBDQTAeFw0yNjA3MDIwOTQyMjlaFw0yNzA3\nMDIwOTQyMjlaMBgxFjAUBgNVBAMMDWFwaS5nbGlkZS5kZXYwWTATBgcqhkjOPQIB\nBggqhkjOPQMBBwNCAARMj7xEKrtWeqbiJg+DIzRWfzfyx0xsF4hNngnsETdzU7YC\ncg6H5JOrtyxdxoiaN+yofFuQBULFq1mKhH8iyXcvo2cwZTAYBgNVHREEETAPgg1h\ncGkuZ2xpZGUuZGV2MAkGA1UdEwQCMAAwHQYDVR0OBBYEFKPmQRM8DWJU0x67I4iv\nuP/hgxeiMB8GA1UdIwQYMBaAFFgiDH0VvUmcXrIfug8ywy58cEDyMAoGCCqGSM49\nBAMCA0kAMEYCIQC7JfxUs45byrl7h1O81fcQVAuz46LFtWJW/5Dgy2+znQIhAPUE\nHkDIQCR26mkhLAfrcHqz+cMZX7aN/v4o7uvBzaJ/\n-----END CERTIFICATE-----\n";
+
+fn test_pem_decode_certificate() -> i32 {
+    let ders: *Vector<string> = pem_certificates(LEAF_PEM);
+    assert_eq!(ders.len(), 1);
+    // the decoded DER parses as an X.509 cert with the expected CN
+    let c: !*Cert = cert_parse(ders.get(0));
+    assert!(c.is_ok());
+    assert_str_eq!(c.unwrap().subject_cn, "api.glide.dev");
+    return 0;
+}
+
+fn test_pem_blocks_labelled() -> i32 {
+    let blocks: *Vector<*PemBlock> = pem_decode(LEAF_PEM);
+    assert_eq!(blocks.len(), 1);
+    assert_str_eq!(blocks.get(0).label, "CERTIFICATE");
+    return 0;
+}
+
+fn test_system_roots_load() -> i32 {
+    // The CI/host has a system CA bundle; loading must yield many CA certs.
+    let r: !*Vector<*Cert> = load_system_roots();
+    assert!(r.is_ok());
+    let roots: *Vector<*Cert> = r.unwrap();
+    assert!(roots.len() > 20);
+    // every trust anchor is a CA
+    for let i: i32 = 0; i < roots.len(); i++ {
+        assert!(roots.get(i).is_ca);
+    }
+    return 0;
+}

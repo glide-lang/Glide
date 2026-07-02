@@ -1,0 +1,87 @@
+// PEM decoding — pure Glide. Splits a PEM document into its
+// "-----BEGIN <label>-----" / "-----END <label>-----" blocks and
+// base64-decodes each body to DER. Used to load certificate bundles
+// (the OS trust store) and to read keys/certs from files.
+//
+// ```glide
+// import stdlib::crypto::pem::*;
+//
+// let ders: *Vector<string> = pem_certificates(pem_text);   // each is DER
+// ```
+
+import stdlib::base64::*;
+import stdlib::bytes::*;
+
+pub struct PemBlock {
+    pub label: string,   // e.g. "CERTIFICATE", "EC PRIVATE KEY"
+    pub der: string,     // decoded DER bytes
+}
+
+const BEGIN: string = "-----BEGIN ";
+const END: string = "-----END ";
+
+/// All PEM blocks in `text`, in order. Malformed or non-base64 blocks are
+/// skipped rather than aborting the whole parse (bundles occasionally
+/// carry comments or stray lines between certs).
+pub fn pem_decode(text: string) -> *Vector<*PemBlock> {
+    let out: *Vector<*PemBlock> = Vector::new();
+    let mut pos: i32 = 0;
+    let n: i32 = text.len();
+    while pos < n {
+        let bs: i32 = _find_from(text, BEGIN, pos);
+        if bs < 0 { break; }
+        let label_start: i32 = bs + BEGIN.len();
+        let label_end: i32 = _find_from(text, "-----", label_start);
+        if label_end < 0 { break; }
+        let label: string = text.substring(label_start, label_end);
+        // body starts after the BEGIN line, ends at the END marker.
+        let body_start: i32 = label_end + 5;
+        let end_marker: string = END.concat(label);
+        let end_pos: i32 = _find_from(text, end_marker, body_start);
+        if end_pos < 0 { break; }
+        let body: string = text.substring(body_start, end_pos);
+        let b64: string = _strip_ws(body);
+        let der: !string = b64_decode(b64);
+        if der.ok {
+            let blk: *PemBlock = malloc(sizeof(PemBlock)) as *PemBlock;
+            blk.label = label;
+            blk.der = der.val;
+            out.push(blk);
+        }
+        pos = end_pos + end_marker.len();
+    }
+    return out;
+}
+
+/// Just the DER bodies of the "CERTIFICATE" blocks.
+pub fn pem_certificates(text: string) -> *Vector<string> {
+    let out: *Vector<string> = Vector::new();
+    let blocks: *Vector<*PemBlock> = pem_decode(text);
+    for let i: i32 = 0; i < blocks.len(); i++ {
+        let b: *PemBlock = blocks.get(i);
+        if b.label.eq("CERTIFICATE") { out.push(b.der); }
+    }
+    return out;
+}
+
+// index_of starting at `start` (index_of itself has no offset form).
+fn _find_from(hay: string, needle: string, start: i32) -> i32 {
+    if start < 0 { return -1; }
+    if start >= hay.len() { return -1; }
+    let sub: string = hay.substring(start, hay.len());
+    let idx: i32 = sub.index_of(needle);
+    if idx < 0 { return -1; }
+    return start + idx;
+}
+
+// Remove all ASCII whitespace (base64 bodies are line-wrapped).
+fn _strip_ws(s: string) -> string {
+    let bb: *ByteBuffer = ByteBuffer::new();
+    for let i: i32 = 0; i < s.len(); i++ {
+        let c: i32 = s.at(i).to_int() & 255;
+        if c != 32 && c != 9 && c != 10 && c != 13 { bb.push(c as u8); }
+    }
+    let r: string = bb.to_string();
+    bb.free();
+    return r;
+}

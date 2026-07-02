@@ -18,6 +18,9 @@ import stdlib::crypto::asn1::*;
 import stdlib::crypto::p256::*;
 import stdlib::crypto::*;              // sha256
 import stdlib::crypto::sha512::*;      // sha384
+import stdlib::crypto::pem::*;
+import stdlib::fs::*;
+import stdlib::env::*;
 import stdlib::bytes::*;
 
 // OIDs we recognise (dotted-decimal).
@@ -429,4 +432,43 @@ pub fn verify_chain(leaf: *Cert, intermediates: *Vector<*Cert>,
         current = issuer;
     }
     return err("x509: certificate chain too long");
+}
+
+// ---- trust store loading ----------------------------------------------
+
+// Common system CA bundle locations, most-specific first.
+fn _ca_bundle_paths() -> *Vector<string> {
+    let v: *Vector<string> = Vector::new();
+    v.push("/etc/ssl/certs/ca-certificates.crt");   // Debian/Ubuntu/Alpine
+    v.push("/etc/pki/tls/certs/ca-bundle.crt");      // Fedora/RHEL
+    v.push("/etc/ssl/cert.pem");                      // macOS (LibreSSL), BSD
+    v.push("/usr/local/etc/openssl/cert.pem");        // Homebrew
+    return v;
+}
+
+/// Load the operating system's trusted root certificates. Reads the first
+/// system CA bundle (PEM) found and parses each certificate. Certificates
+/// that fail to parse are skipped so one bad entry never poisons the store.
+/// `GLIDE_CA_BUNDLE`, if set, overrides the search.
+pub fn load_system_roots() -> !*Vector<*Cert> {
+    let paths: *Vector<string> = Vector::new();
+    let override_path: string = env_get("GLIDE_CA_BUNDLE");
+    if override_path.len() > 0 { paths.push(override_path); }
+    let defaults: *Vector<string> = _ca_bundle_paths();
+    for let i: i32 = 0; i < defaults.len(); i++ { paths.push(defaults.get(i)); }
+
+    for let i: i32 = 0; i < paths.len(); i++ {
+        let p: string = paths.get(i);
+        if !fs_exists(p) { continue; }
+        let text: string = fs_read(p);
+        if text.len() == 0 { continue; }
+        let ders: *Vector<string> = pem_certificates(text);
+        let roots: *Vector<*Cert> = Vector::new();
+        for let j: i32 = 0; j < ders.len(); j++ {
+            let c: !*Cert = cert_parse(ders.get(j));
+            if c.ok { roots.push(c.val); }
+        }
+        if roots.len() > 0 { return ok(roots); }
+    }
+    return err("x509: no system CA bundle found (set GLIDE_CA_BUNDLE)");
 }
