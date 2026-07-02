@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Language
+
+- **Operator overloading.** `==` / `!=` now compare *values*: strings by bytes
+  (`"ale".concat("lo") == "alelo"`), structs and tuples field by field
+  (recursively, with a cycle guard), overridable with a custom `eq`. Ordering
+  (`< <= > >=`) dispatches to a `cmp(self, other) -> i32` method and arithmetic
+  (`+ - * / %`) to `add`/`sub`/`mul`/`div`/`rem`; strings order via a built-in
+  `cmp` and `+` concatenates. `Eq`/`Ord`/`Add`/… marker traits enable generic
+  bounds. The old string pointer-equality footgun (and its `string-eq-op` lint)
+  is gone.
+
+  ```glide
+  if user1 == user2 { ... }          // struct value equality, no boilerplate
+  let c: *Vec2 = a + b;              // Vec2::add
+  if "abc" < "abd" { ... }           // string ordering
+  ```
+
 ### Tooling
 
 - **`glide upgrade`** self-updates the toolchain to the latest published

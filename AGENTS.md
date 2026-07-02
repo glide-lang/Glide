@@ -89,8 +89,6 @@ in a comment — the lint usually points at a real bug.
 - `bad-free` — never `free()` on a Glide `string`, `*Vector`,
   or `*HashMap`. Strings are arena-managed; collections have
   `.free()` destructors that release internal buffers first.
-- `string-eq-op` — `==` / `!=` on strings is pointer compare,
-  not byte compare. Always use `s.eq(other)`.
 - `unhandled-result` — calling a `!T`-returning fn and
   discarding the value silently swallows the error. Use
   `f(...)?`, `let _ = f(...)`, or `let bound = f(...)`.

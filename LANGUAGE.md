@@ -340,6 +340,42 @@ shapes.push(circle_p as *dyn Render);
 default-method walk substitutes `Self` for the concrete type when
 copying a default body into an impl that doesn't override it.
 
+## operator overloading
+
+Operators dispatch to methods by name (no trait required on a concrete
+type — the same convention `println!` uses to find `to_string`):
+
+| Operator            | Method                                | Result            |
+| ------------------- | ------------------------------------- | ----------------- |
+| `==` `!=`           | `eq(self, other) -> bool`             | `bool` (`!=` negates) |
+| `<` `<=` `>` `>=`   | `cmp(self, other) -> i32` (`-`/`0`/`+`) | `bool` (`cmp <op> 0`) |
+| `+` `-` `*` `/` `%` | `add`/`sub`/`mul`/`div`/`rem` `-> T`  | the method's `T`  |
+
+`==` and `!=` work out of the box:
+
+- **strings** compare bytes (`"ale".concat("lo") == "alelo"` is `true`);
+- **structs** and **tuples** compare field by field automatically, recursing
+  into nested structs and string fields. Define your own `eq` to override
+  this (e.g. to ignore a cache field). A self-referential field falls back to
+  pointer identity so comparison always terminates.
+
+Ordering and arithmetic need a method — a struct without one gets a clear
+error telling you which to implement. Strings order via a built-in `cmp`,
+and `+` on strings concatenates.
+
+```glide
+struct Vec2 { x: i32, y: i32 }
+impl Vec2 {
+    fn add(self: *Vec2, o: *Vec2) -> *Vec2 { let r: *Vec2 = Vec2 { x: self.x + o.x, y: self.y + o.y }; return r; }
+    fn cmp(self: *Vec2, o: *Vec2) -> i32 { return (self.x + self.y) - (o.x + o.y); }
+}
+let c: *Vec2 = a + b;   // Vec2::add
+if a < b { ... }        // a.cmp(b) < 0
+```
+
+The `Eq`, `Ord`, `Add`, `Sub`, `Mul`, `Div`, `Rem` marker traits (auto-injected,
+like `Display`) let generic code bound on the capability: `fn max<T: Ord>(...)`.
+
 ## macros
 
 User-defined `macro_rules!` for AST-level expansion.
