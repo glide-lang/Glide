@@ -91,3 +91,48 @@ fn test_coalesce_then_arithmetic() -> i32 {
     assert_eq!(total, 104);
     return 0;
 }
+
+// err-form: `?T ?? err(msg)` keeps Result shape (`!T`) instead of extracting,
+// so the none branch becomes an Err that `?` can propagate.
+fn test_option_coalesce_err_form() -> i32 {
+    let hit: !i32 = maybe(5) ?? err("was none");
+    assert!(hit.is_ok());
+    assert_eq!(hit.unwrap(), 5);
+    let miss: !i32 = maybe(-1) ?? err("was none");
+    assert!(miss.is_err());
+    assert_str_eq!(miss.unwrap_err(), "was none");
+    return 0;
+}
+
+// err-form on a Result LHS replaces the error, keeping an Ok untouched.
+fn test_result_coalesce_err_form() -> i32 {
+    let kept: !i32 = parse("ok") ?? err("replaced");
+    assert!(kept.is_ok());
+    assert_eq!(kept.unwrap(), 7);
+    let swapped: !i32 = parse("bad") ?? err("replaced");
+    assert!(swapped.is_err());
+    assert_str_eq!(swapped.unwrap_err(), "replaced");
+    return 0;
+}
+
+fn lookup_name(n: i32) -> ?string {
+    if n > 0 { return some("found"); }
+    return none();
+}
+
+// The err-form result chains with `?` (parenthesized: postfix `?` binds
+// tighter than `??`). Also covers a `!T` that only exists via the err-form.
+fn chain(n: i32) -> !string {
+    let s: string = (lookup_name(n) ?? err("nf"))?;
+    return ok(s.concat("!"));
+}
+
+fn test_coalesce_err_form_chains_with_try() -> i32 {
+    let a: !string = chain(1);
+    assert!(a.is_ok());
+    assert_str_eq!(a.unwrap(), "found!");
+    let b: !string = chain(-1);
+    assert!(b.is_err());
+    assert_str_eq!(b.unwrap_err(), "nf");
+    return 0;
+}

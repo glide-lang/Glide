@@ -3172,18 +3172,6 @@ pub fn emit_expr(g: *CG, e: *Expr) {
             }
             if lt != null && lt.kind == TY_OPTION {
                 let m_in: string = mangle_type(lt.inner);
-                if is_err_form {
-                    // Substitute the None branch with an Err of the same inner
-                    // type — caller will use `?` to propagate.
-                    let m_out: string = m_in;
-                    let arg: Expr = e.rhs.args.get(0);
-                    print!("({ __glide_option_".concat(m_in).concat("_t __o = ("));
-                    emit_expr(g, e.lhs);
-                    print!("); __r_lift_t_".concat(m_out).concat("("));
-                    // Fallback: emit ternary directly into __glide_err_<m>.
-                    // Simpler form below avoids needing a per-T helper:
-                    // (we re-emit the expression instead)
-                }
                 // Plain fallback: extract the inner.
                 if !is_err_form {
                     print!("({ __glide_option_".concat(m_in).concat("_t __o = ("));

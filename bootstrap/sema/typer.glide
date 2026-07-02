@@ -3878,8 +3878,12 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             if lt != null && (lt.kind == TY_OPTION || lt.kind == TY_RESULT) {
                 inner_lt = lt.inner;
             }
-            // RHS may either match the inner directly (fallback value) or
-            // be an `err(...)` call → wraps the result back into !T.
+            // An `err(...)` fallback keeps Result shape instead of
+            // extracting: `?T ?? err(m)` and `!T ?? err(m)` both yield `!T`
+            // (codegen substitutes the none/err branch), so `?` can chain.
+            if e.rhs != null && e.rhs.kind == EX_CALL && e.rhs.lhs != null && e.rhs.lhs.kind == EX_IDENT && e.rhs.lhs.str_val.eq("err") {
+                return ty_result(inner_lt);
+            }
             return inner_lt;
         }
         // Arithmetic on a struct dispatches to its operator method (`+`->add,

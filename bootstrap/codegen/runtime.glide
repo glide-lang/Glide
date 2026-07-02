@@ -2476,6 +2476,11 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
             // to the RHS type when the LHS can't be resolved.
             let lt: *Type = infer_for_codegen(g, e.lhs);
             if lt != null && (lt.kind == TY_OPTION || lt.kind == TY_RESULT || lt.kind == TY_OPT_RESULT) && lt.inner != null {
+                // An `err(...)` fallback keeps Result shape (`!T`), matching
+                // the typer and the emitted none/err-substitution form.
+                if e.rhs != null && e.rhs.kind == EX_CALL && e.rhs.lhs != null && e.rhs.lhs.kind == EX_IDENT && e.rhs.lhs.str_val.eq("err") {
+                    return ty_result(lt.inner);
+                }
                 return lt.inner;
             }
             if lt != null {
