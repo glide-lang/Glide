@@ -1,0 +1,55 @@
+// QUIC varint (RFC 9000 §16 / Appendix A) and frame/packet assembly.
+import stdlib::testing::*;
+import stdlib::net::quic::packet::*;
+import stdlib::hex::*;
+
+fn _h(s: string) -> string { return hex_decode(s).unwrap(); }
+
+// RFC 9000 Appendix A.1 sample varints.
+fn test_varint_vectors() -> i32 {
+    assert_str_eq!(hex_encode(varint_encode(37)), "25");
+    assert_str_eq!(hex_encode(varint_encode(15293)), "7b bd".replace(" ", ""));
+    assert_str_eq!(hex_encode(varint_encode(494878333)), "9d7f3e7d");
+    assert_str_eq!(hex_encode(varint_encode(151288809941952652)), "c2197c5eff14e88c");
+    // single-byte edge
+    assert_str_eq!(hex_encode(varint_encode(0)), "00");
+    assert_str_eq!(hex_encode(varint_encode(63)), "3f");
+    assert_str_eq!(hex_encode(varint_encode(64)), "4040");
+    return 0;
+}
+
+fn test_varint_roundtrip() -> i32 {
+    let vals: *Vector<i64> = Vector::new();
+    vals.push(0); vals.push(63); vals.push(64); vals.push(16383); vals.push(16384);
+    vals.push(1073741823); vals.push(1073741824); vals.push(151288809941952652);
+    for let i: i32 = 0; i < vals.len(); i++ {
+        let v: u64 = vals.get(i) as u64;
+        let enc: string = varint_encode(v);
+        let dec: *Varint = varint_decode(enc, 0).unwrap();
+        assert_eq!(dec.value as i64, v as i64);
+        assert_eq!(dec.len, enc.len());
+    }
+    return 0;
+}
+
+// RFC 9000 §19.6: a CRYPTO frame is type 0x06 || offset || length || data.
+fn test_crypto_frame() -> i32 {
+    let f: string = frame_crypto(0, _h("aabbcc"));
+    assert_str_eq!(hex_encode(f), "0600" + "03" + "aabbcc");   // type off=0 len=3 data
+    return 0;
+}
+
+// An Initial packet's first byte marks a long-header Initial (0xc0|0x00)
+// with the pn length in the low bits, and carries version + CIDs.
+fn test_initial_packet_shape() -> i32 {
+    let dcid: string = _h("8394c8f03e515708");
+    let pkt: string = build_initial(1, dcid, "", "", 2, 4, _h("06004041"));
+    // first byte: 1100 00 11 = 0xc3 (long, Initial, pn_len-1=3)
+    assert_eq!(pkt.at(0).to_int() & 255, 0xc3);
+    // version 0x00000001
+    assert_str_eq!(hex_encode(pkt.substring(1, 5)), "00000001");
+    // dcid len 8 then dcid
+    assert_eq!(pkt.at(5).to_int() & 255, 8);
+    assert_str_eq!(hex_encode(pkt.substring(6, 14)), "8394c8f03e515708");
+    return 0;
+}

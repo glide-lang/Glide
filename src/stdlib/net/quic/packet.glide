@@ -1,0 +1,133 @@
+// QUIC packet + frame encoding (RFC 9000), pure Glide. Variable-length
+// integers, the frame types the transport needs (PADDING, PING, ACK,
+// CRYPTO, STREAM, CONNECTION_CLOSE...), and long/short header packet
+// assembly. The crypto protection is applied separately (quic::crypto).
+
+import stdlib::bytes::*;
+
+fn _pb(s: string, i: i32) -> i32 { return s.at(i).to_int() & 255; }
+
+// ---- variable-length integers (RFC 9000 §16) --------------------------
+
+/// Encode a QUIC varint. The two most-significant bits of the first byte
+/// select the length (1/2/4/8 bytes); the value occupies the rest.
+pub fn varint_encode(v: u64) -> string {
+    let bb: *ByteBuffer = ByteBuffer::new();
+    if v < (64 as u64) {
+        bb.push((v as i32) as u8);
+    } else if v < (16384 as u64) {
+        bb.push((0x40 | ((v >> 8) & (0x3f as u64)) as i32) as u8);
+        bb.push((v & (255 as u64)) as u8);
+    } else if v < (1073741824 as u64) {
+        bb.push((0x80 | ((v >> 24) & (0x3f as u64)) as i32) as u8);
+        bb.push(((v >> 16) & (255 as u64)) as u8);
+        bb.push(((v >> 8) & (255 as u64)) as u8);
+        bb.push((v & (255 as u64)) as u8);
+    } else {
+        bb.push((0xc0 | ((v >> 56) & (0x3f as u64)) as i32) as u8);
+        for let i: i32 = 6; i >= 0; i-- { bb.push(((v >> (i * 8)) & (255 as u64)) as u8); }
+    }
+    let s: string = bb.to_string(); bb.free(); return s;
+}
+
+// A decoded varint: value + how many bytes it consumed.
+pub struct Varint { pub value: u64, pub len: i32 }
+
+/// Decode a QUIC varint at `off`. Returns the value and its byte length.
+pub fn varint_decode(buf: string, off: i32) -> !*Varint {
+    if off >= buf.len() { return err("quic: varint out of bounds"); }
+    let first: i32 = _pb(buf, off);
+    let prefix: i32 = first >> 6;
+    let len: i32 = 1 << prefix;                    // 1, 2, 4, or 8
+    if off + len > buf.len() { return err("quic: truncated varint"); }
+    let mut v: u64 = (first & 0x3f) as u64;
+    for let i: i32 = 1; i < len; i++ { v = (v << 8) | (_pb(buf, off + i) as u64); }
+    let out: *Varint = malloc(sizeof(Varint)) as *Varint;
+    out.value = v; out.len = len;
+    return ok(out);
+}
+
+// ---- frames (RFC 9000 §19) --------------------------------------------
+
+pub const FRAME_PADDING: i32 = 0x00;
+pub const FRAME_PING: i32 = 0x01;
+pub const FRAME_ACK: i32 = 0x02;
+pub const FRAME_CRYPTO: i32 = 0x06;
+pub const FRAME_STREAM: i32 = 0x08;             // 0x08..0x0f (flags in low bits)
+pub const FRAME_CONNECTION_CLOSE: i32 = 0x1c;
+
+/// A CRYPTO frame (RFC 9000 §19.6): type || offset(varint) || length(varint)
+/// || data. Carries the TLS handshake inside QUIC.
+pub fn frame_crypto(offset: u64, data: string) -> string {
+    return ((FRAME_CRYPTO & 255) as char).to_string()
+        .concat(varint_encode(offset))
+        .concat(varint_encode(data.len() as u64))
+        .concat(data);
+}
+
+/// `n` PADDING bytes (0x00). Used to inflate an Initial packet to the
+/// 1200-byte minimum.
+pub fn frame_padding(n: i32) -> string {
+    let bb: *ByteBuffer = ByteBuffer::new();
+    for let i: i32 = 0; i < n; i++ { bb.push(0 as u8); }
+    let s: string = bb.to_string(); bb.free(); return s;
+}
+
+/// A minimal ACK frame (RFC 9000 §19.3) acknowledging packets 0..=largest
+/// with no gaps: type || largest || ack_delay || range_count=0 || first_range.
+pub fn frame_ack(largest: u64, ack_delay: u64, first_range: u64) -> string {
+    return ((FRAME_ACK & 255) as char).to_string()
+        .concat(varint_encode(largest))
+        .concat(varint_encode(ack_delay))
+        .concat(varint_encode(0))
+        .concat(varint_encode(first_range));
+}
+
+// ---- long-header packets (RFC 9000 §17.2) -----------------------------
+
+pub const PKT_INITIAL: i32 = 0;
+pub const PKT_HANDSHAKE: i32 = 2;
+
+/// Build the UNPROTECTED bytes of a long-header Initial packet:
+///   first_byte || version(4) || DCID len+bytes || SCID len+bytes ||
+///   token len+token || length(varint) || packet_number || payload
+/// The `first_byte` encodes the packet-number length in its low 2 bits.
+/// `pn_len` is 1..4. Returns (header_without_length_and_pn is complex, so
+/// the caller protects the whole thing) — here we emit header + payload
+/// with the Length field covering pn + payload + the 16-byte AEAD tag.
+pub fn build_initial(version: u32, dcid: string, scid: string, token: string,
+                     packet_number: u64, pn_len: i32, payload: string) -> string {
+    let first: i32 = 0xc0 | ((PKT_INITIAL & 3) << 4) | ((pn_len - 1) & 3);
+    let pn_bytes: string = _pn_bytes(packet_number, pn_len);
+    let length_field: u64 = (pn_len + payload.len() + 16) as u64;   // + AEAD tag
+    let bb: *ByteBuffer = ByteBuffer::new();
+    bb.push((first & 255) as u8);
+    bb.push(((version >> 24) & 255) as u8); bb.push(((version >> 16) & 255) as u8);
+    bb.push(((version >> 8) & 255) as u8); bb.push((version & 255) as u8);
+    bb.push((dcid.len() & 255) as u8); bb.push_str(dcid);
+    bb.push((scid.len() & 255) as u8); bb.push_str(scid);
+    bb.push_str(varint_encode(token.len() as u64)); bb.push_str(token);
+    bb.push_str(varint_encode(length_field));
+    bb.push_str(pn_bytes);
+    bb.push_str(payload);
+    let s: string = bb.to_string(); bb.free(); return s;
+}
+
+/// Build the UNPROTECTED bytes of a short-header (1-RTT) packet:
+///   first_byte || DCID(bytes, length known out of band) || packet_number
+///   || payload. `first_byte` low 2 bits = pn length - 1.
+pub fn build_short(dcid: string, packet_number: u64, pn_len: i32, payload: string) -> string {
+    let first: i32 = 0x40 | ((pn_len - 1) & 3);
+    let bb: *ByteBuffer = ByteBuffer::new();
+    bb.push((first & 255) as u8);
+    bb.push_str(dcid);
+    bb.push_str(_pn_bytes(packet_number, pn_len));
+    bb.push_str(payload);
+    let s: string = bb.to_string(); bb.free(); return s;
+}
+
+fn _pn_bytes(pn: u64, pn_len: i32) -> string {
+    let bb: *ByteBuffer = ByteBuffer::new();
+    for let i: i32 = pn_len - 1; i >= 0; i-- { bb.push(((pn >> (i * 8)) & (255 as u64)) as u8); }
+    let s: string = bb.to_string(); bb.free(); return s;
+}
