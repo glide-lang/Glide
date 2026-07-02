@@ -337,7 +337,7 @@ fn list_import_path_children(state: *LspState, prefix: string, items: *JsonValue
         modp = prefix.substring(0, pl - 2);
     }
     if !modp.eq("") {
-        list_module_members(state, modp, items, seen);
+        list_module_members(state, modp, items, seen, null, -1);
     }
 }
 
@@ -709,16 +709,18 @@ fn _split_path(p: string) -> *Vector<string> {
 // `path`. Accepts both fully-qualified ("stdlib::math") and short
 // ("math") forms. The single-segment "stdlib" path is special-cased to
 // list the available submodules instead of symbols.
-fn list_module_members(state: *LspState, path: string, items: *JsonValue, seen: *HashMap<bool>) {
+// `imps`/`insert_line` drive the auto-import edit for `mod::member` items
+// (pass `null`/`-1` from an import-statement context, where no edit applies).
+fn list_module_members(state: *LspState, path: string, items: *JsonValue, seen: *HashMap<bool>, imps: *HashMap<ImportInfo>, insert_line: i32) {
     if state.stdlib_index != null {
-        _list_module_members_from(state.stdlib_index, path, items, seen);
+        _list_module_members_from(state.stdlib_index, path, items, seen, imps, insert_line);
     }
     if state.project_index != null {
-        _list_module_members_from(state.project_index, path, items, seen);
+        _list_module_members_from(state.project_index, path, items, seen, imps, insert_line);
     }
 }
 
-fn _list_module_members_from(idx: *Vector<ImportableSym>, path: string, items: *JsonValue, seen: *HashMap<bool>) {
+fn _list_module_members_from(idx: *Vector<ImportableSym>, path: string, items: *JsonValue, seen: *HashMap<bool>, imps: *HashMap<ImportInfo>, insert_line: i32) {
     let n: i32 = idx.len();
     // Pass 1: list immediate child modules. `path = "stdlib"` yields
     // every top-level stdlib module; `path = "stdlib::http"` yields
@@ -823,8 +825,22 @@ fn _list_module_members_from(idx: *Vector<ImportableSym>, path: string, items: *
             continue;
         }
         seen.insert(label, true);
-        let no_edit2: *JsonValue = null;
-        let item: *JsonValue = rich_completion_item(label, sym.label_extra, ci_kind_for_stmt_kind(sym.kind), sym.signature, sym.doc, sym.module, sym.snippet, sym.has_snippet, no_edit2);
+        // Qualified `mod::member` needs the MODULE in scope — attach an
+        // `import <module>;` edit so accepting the item doesn't leave code
+        // the typer rejects (`module fs not in scope`). build_import_edit
+        // returns null when the module is already bare/wildcard-imported, so
+        // a correctly-imported file gets no spurious edit.
+        let mut medit: *JsonValue = null;
+        if imps != null {
+            let mut existing: *ImportInfo = null;
+            if imps.contains(sym.module) {
+                let iv: ImportInfo = imps.get(sym.module);
+                existing = malloc(sizeof(ImportInfo)) as *ImportInfo;
+                *existing = iv;
+            }
+            medit = build_import_edit(label, sym.module, existing, insert_line, true);
+        }
+        let item: *JsonValue = rich_completion_item(label, sym.label_extra, ci_kind_for_stmt_kind(sym.kind), sym.signature, sym.doc, sym.module, sym.snippet, sym.has_snippet, medit);
         json_arr_push(items, item);
     }
 }
@@ -3721,7 +3737,7 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
     if imp_kind == IMPCTX_BRACE {
         let mod_in_brace: string = import_brace_module(doc.text, line0, col0);
         if !mod_in_brace.eq("") {
-            list_module_members(state, mod_in_brace, items, seen);
+            list_module_members(state, mod_in_brace, items, seen, null, -1);
             seen.free();
             lsp_send_response(id, items);
             return;
@@ -3732,7 +3748,9 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
     // Single-segment `stdlib::` lists the submodules instead.
     let mod_path: string = module_path_before(doc.text, line0, col0);
     if !mod_path.eq("") && state.stdlib_index != null {
-        list_module_members(state, mod_path, items, seen);
+        let mp_imps: *HashMap<ImportInfo> = current_imports(doc.text);
+        let mp_ins: i32 = find_import_insertion_pos(doc.text);
+        list_module_members(state, mod_path, items, seen, mp_imps, mp_ins);
         seen.free();
         lsp_send_response(id, items);
         return;

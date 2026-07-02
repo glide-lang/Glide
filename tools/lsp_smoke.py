@@ -584,6 +584,44 @@ case_feature("hover on a let bound to a module-qualified call is its return type
           and "*fs" not in r["result"]["contents"]["value"],
         f"got {r.get('result') if r else None}"))
 
+case_feature("mod:: completion attaches an import edit for an un-imported module",
+    'fn main() -> i32 {\n'
+    '    fs::\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/completion",
+     "params":{"position":{"line":1,"character":8}}},
+    lambda r: check("fs_read carries an `import stdlib::fs` edit",
+        r and any(it.get("label")=="fs_read" and it.get("additionalTextEdits")
+            and "import stdlib::fs" in it["additionalTextEdits"][0]["newText"]
+            for it in r.get("result",[])),
+        "no import edit on fs_read"))
+
+case_feature("mod:: completion adds no import edit when the module is already imported",
+    'import stdlib::fs;\n'
+    'fn main() -> i32 {\n'
+    '    fs::\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/completion",
+     "params":{"position":{"line":2,"character":8}}},
+    lambda r: check("fs_read has no spurious import edit",
+        r and any(it.get("label")=="fs_read" and not it.get("additionalTextEdits")
+            for it in r.get("result",[])),
+        "unexpected import edit on an already-imported module"))
+
+case_feature("hover on .unwrap() shows an intrinsic card, not null",
+    'fn getit() -> !string { return ok("hi"); }\n'
+    'fn main() -> i32 {\n'
+    '    let b = getit().unwrap();\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/hover",
+     "params":{"position":{"line":2,"character":22}}},
+    lambda r: check("hover documents unwrap()",
+        r and r.get("result") and "unwrap()" in r["result"]["contents"]["value"],
+        f"got {r.get('result') if r else None}"))
+
 case_feature("references finds 2 sites",
     'fn helper() -> i32 { return 1; }\n'
     'fn main() -> i32 { return helper(); }',

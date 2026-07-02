@@ -3177,6 +3177,25 @@ pub fn handle_hover(req: *JsonValue, state: *LspState) {
             }
         }
     }
+    // Intrinsic Result/Option methods (unwrap/expect/is_ok/...) have no
+    // backing impl, so the resolver above finds nothing and hover returned
+    // null. Card them by name — a user-defined method of the same name is
+    // matched above and takes precedence.
+    if content.eq("") {
+        if word.eq("unwrap") {
+            content = "```glide\nunwrap() -> T\n```\n\n---\n\nReturns the payload of a `!T` / `?T`, aborting the program on the error / `none` case. Propagate with `?` instead of aborting.";
+        } else if word.eq("expect") {
+            content = "```glide\nexpect(msg: string) -> T\n```\n\n---\n\nLike `unwrap`, but aborts with `msg` on the error / `none` case.";
+        } else if word.eq("unwrap_err") {
+            content = "```glide\nunwrap_err() -> string\n```\n\n---\n\nReturns the error message of a failed `!T`, aborting if it was `ok`.";
+        } else if word.eq("unwrap_or") {
+            content = "```glide\nunwrap_or(default: T) -> T\n```\n\n---\n\nReturns the payload, or `default` on the error / `none` case.";
+        } else if word.eq("is_ok") || word.eq("is_some") {
+            content = "```glide\nis_ok() -> bool\n```\n\n---\n\n`true` when a `!T` succeeded or a `?T` holds a value.";
+        } else if word.eq("is_err") || word.eq("is_none") {
+            content = "```glide\nis_err() -> bool\n```\n\n---\n\n`true` when a `!T` failed or a `?T` is empty.";
+        }
+    }
     // Struct field: hover on a field name (decl site or `obj.field` access).
     // Linear scan; first matching field wins. With named-collision across
     // structs the user may need to point at the receiver instead.
@@ -3632,11 +3651,15 @@ fn _module_file_in(idx: *Vector<ImportableSym>, name: string) -> string {
 }
 
 fn _module_file_for(state: *LspState, name: string) -> string {
-    let r1: string = _module_file_in(state.stdlib_index, name);
+    // Prefer the workspace copy: when the project shadows a stdlib module
+    // (e.g. editing Glide's own src/stdlib), go-to-def must land in the
+    // workspace file — the same place the module's members resolve — not the
+    // installed stdlib snapshot. Otherwise one expression jumps to two copies.
+    let r1: string = _module_file_in(state.project_index, name);
     if !r1.eq("") {
         return r1;
     }
-    return _module_file_in(state.project_index, name);
+    return _module_file_in(state.stdlib_index, name);
 }
 
 // Append a Location for `s` (its name range) to `out`, deduped by
