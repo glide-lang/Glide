@@ -1,0 +1,150 @@
+// X.509 self-signed certificate generation (P-256 / ECDSA-SHA256), pure
+// Glide over the DER encoder. Produces a v3 certificate with a SAN and
+// basicConstraints, signed with a freshly generated key — enough for a
+// TLS server identity or a local development CA, and the replacement for
+// the ad-hoc cert generation the HTTP/3 backend used to do in C.
+//
+// ```glide
+// import stdlib::crypto::x509_gen::*;
+//
+// let names: *Vector<string> = Vector::new();
+// names.push("localhost");
+// let ck: !*SelfSigned = generate_self_signed("localhost", names, 365, now_epoch);
+// // ck.cert_der  -> DER certificate
+// // ck.key       -> 32-byte P-256 private scalar
+// ```
+
+import stdlib::crypto::asn1::*;
+import stdlib::crypto::p256::*;
+import stdlib::crypto::csprng::*;
+import stdlib::crypto::*;          // sha256
+import stdlib::bytes::*;
+
+const G_OID_EC_PUBKEY: string = "1.2.840.10045.2.1";
+const G_OID_P256: string = "1.2.840.10045.3.1.7";
+const G_OID_ECDSA_SHA256: string = "1.2.840.10045.4.3.2";
+const G_OID_CN: string = "2.5.4.3";
+const G_OID_SAN: string = "2.5.29.17";
+const G_OID_BASIC_CONSTRAINTS: string = "2.5.29.19";
+
+pub struct SelfSigned {
+    pub cert_der: string,   // the DER-encoded certificate
+    pub key: string,        // 32-byte P-256 private scalar
+    pub pubkey: string,     // 65-byte uncompressed public key
+}
+
+// epoch seconds -> "YYMMDDHHMMSSZ" UTCTime element (valid 1950..2049).
+fn _der_utctime(epoch: i64) -> string {
+    let days: i64 = _fdiv(epoch, 86400);
+    let secs: i64 = epoch - days * 86400;
+    let ymd: *Vector<i32> = _civil_from_days(days);
+    let y: i32 = ymd.get(0);
+    let yy: i32 = ((y % 100) + 100) % 100;
+    let s: string = _2d(yy).concat(_2d(ymd.get(1))).concat(_2d(ymd.get(2)))
+        .concat(_2d((secs / 3600) as i32)).concat(_2d(((secs / 60) % 60) as i32))
+        .concat(_2d((secs % 60) as i32)).concat("Z");
+    return der_tlv(ASN1_UTCTIME, s);
+}
+fn _fdiv(a: i64, b: i64) -> i64 {
+    let q: i64 = a / b;
+    if (a % b != 0) && ((a < 0) != (b < 0)) { return q - 1; }
+    return q;
+}
+fn _2d(n: i32) -> string {
+    return ((48 + (n / 10) % 10) as char).to_string().concat(((48 + n % 10) as char).to_string());
+}
+// Inverse of the civil-days algorithm: days-since-epoch -> [year, month, day].
+fn _civil_from_days(z0: i64) -> *Vector<i32> {
+    let z: i64 = z0 + 719468;
+    let era: i64 = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe: i64 = z - era * 146097;
+    let yoe: i64 = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y: i64 = yoe + era * 400;
+    let doy: i64 = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp: i64 = (5 * doy + 2) / 153;
+    let d: i64 = doy - (153 * mp + 2) / 5 + 1;
+    let m: i64 = mp + (if mp < 10 { 3 } else { -9 });
+    let out: *Vector<i32> = Vector::new();
+    out.push((y + (if m <= 2 { 1 } else { 0 })) as i32);
+    out.push(m as i32);
+    out.push(d as i32);
+    return out;
+}
+
+// A Name with a single CN attribute.
+fn _cn_name(cn: string) -> string {
+    let oid: string = der_oid_encode(G_OID_CN).unwrap();
+    let atv: string = der_seq(oid.concat(der_tlv(ASN1_UTF8STRING, cn)));
+    return der_seq(der_set(atv));
+}
+
+// GeneralNames SEQUENCE of dNSName ([2] IA5String) entries, as the SAN
+// extension value (an OCTET STRING wrapping the SEQUENCE).
+fn _san_extension(dns_names: *Vector<string>) -> string {
+    let inner: *ByteBuffer = ByteBuffer::new();
+    for let i: i32 = 0; i < dns_names.len(); i++ {
+        inner.push_str(der_tlv(0x82, dns_names.get(i)));   // [2] dNSName
+    }
+    let names: string = inner.to_string();
+    inner.free();
+    let value: string = der_seq(names);
+    let oid: string = der_oid_encode(G_OID_SAN).unwrap();
+    return der_seq(oid.concat(der_tlv(ASN1_OCTETSTRING, value)));
+}
+
+// basicConstraints extension, cA = FALSE (a leaf server cert).
+fn _basic_constraints_leaf() -> string {
+    let value: string = der_seq("");   // empty SEQUENCE -> cA defaults FALSE
+    let oid: string = der_oid_encode(G_OID_BASIC_CONSTRAINTS).unwrap();
+    return der_seq(oid.concat(der_tlv(ASN1_OCTETSTRING, value)));
+}
+
+/// Generate a self-signed P-256 certificate for `cn` covering `dns_names`,
+/// valid for `days` starting at `now_epoch` (seconds). Returns the DER
+/// certificate together with the private key.
+pub fn generate_self_signed(cn: string, dns_names: *Vector<string>,
+                            days: i32, now_epoch: i64) -> !*SelfSigned {
+    let skr: !string = p256_generate();
+    if !skr.ok { return err(skr.err); }
+    let sk: string = skr.val;
+    let pkr: !string = p256_pubkey(sk);
+    if !pkr.ok { return err(pkr.err); }
+    let pk: string = pkr.val;
+
+    // version [0] EXPLICIT v3 (INTEGER 2)
+    let version: string = der_tlv(0xa0, der_integer((2 as char).to_string()));
+    // serialNumber: 8 random bytes, forced positive
+    let snr: !string = random_bytes(8);
+    if !snr.ok { return err(snr.err); }
+    let serial: string = der_integer(snr.val);
+    // AlgorithmIdentifier for ecdsa-with-SHA256 (no parameters)
+    let sig_alg: string = der_seq(der_oid_encode(G_OID_ECDSA_SHA256).unwrap());
+    // subject == issuer (self-signed)
+    let name: string = _cn_name(cn);
+    // validity
+    let validity: string = der_seq(_der_utctime(now_epoch).concat(_der_utctime(now_epoch + (days as i64) * 86400)));
+    // subjectPublicKeyInfo: { { ecPublicKey, prime256v1 }, BIT STRING pubkey }
+    let alg: string = der_seq(der_oid_encode(G_OID_EC_PUBKEY).unwrap().concat(der_oid_encode(G_OID_P256).unwrap()));
+    let spki: string = der_seq(alg.concat(der_bitstring(pk)));
+    // extensions [3] EXPLICIT SEQUENCE OF Extension
+    let exts_inner: string = _san_extension(dns_names).concat(_basic_constraints_leaf());
+    let extensions: string = der_tlv(0xa3, der_seq(exts_inner));
+
+    let tbs_body: string = version.concat(serial).concat(sig_alg).concat(name)
+        .concat(validity).concat(name).concat(spki).concat(extensions);
+    let tbs: string = der_seq(tbs_body);
+
+    // sign the TBS
+    let digest: string = sha256(tbs);
+    let sigr: !string = ecdsa_sign(sk, digest);
+    if !sigr.ok { return err(sigr.err); }
+    let raw: string = sigr.val;                 // 64 bytes r||s
+    let sig_der: string = der_seq(der_integer(raw.substring(0, 32)).concat(der_integer(raw.substring(32, 64))));
+    let cert: string = der_seq(tbs.concat(sig_alg).concat(der_bitstring(sig_der)));
+
+    let out: *SelfSigned = malloc(sizeof(SelfSigned)) as *SelfSigned;
+    out.cert_der = cert;
+    out.key = sk;
+    out.pubkey = pk;
+    return ok(out);
+}

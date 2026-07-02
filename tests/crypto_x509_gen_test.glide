@@ -1,0 +1,57 @@
+// Self-signed P-256 certificate generation: generate, parse back through
+// the X.509 parser, and verify the certificate's own signature — a full
+// round-trip that exercises the DER encoder, the signer, and the parser.
+// (The generated DER is also accepted and verified by OpenSSL out of band.)
+import stdlib::testing::*;
+import stdlib::crypto::x509_gen::*;
+import stdlib::crypto::x509::*;
+
+fn _gen() -> *SelfSigned {
+    let names: *Vector<string> = Vector::new();
+    names.push("localhost");
+    names.push("*.local.test");
+    return generate_self_signed("localhost", names, 365, 1782984955).unwrap();
+}
+
+fn test_roundtrip_parses() -> i32 {
+    let ss: *SelfSigned = _gen();
+    let c: !*Cert = cert_parse(ss.cert_der);
+    assert!(c.is_ok());
+    let cert: *Cert = c.unwrap();
+    assert_str_eq!(cert.subject_cn, "localhost");
+    assert_str_eq!(cert.pubkey_curve, "1.2.840.10045.3.1.7");   // P-256
+    assert_str_eq!(cert.sig_alg, "1.2.840.10045.4.3.2");        // ecdsa-with-SHA256
+    assert_eq!(cert.pubkey.len(), 65);
+    return 0;
+}
+
+fn test_generated_signature_verifies() -> i32 {
+    let ss: *SelfSigned = _gen();
+    let cert: *Cert = cert_parse(ss.cert_der).unwrap();
+    let v: !bool = cert_verify_signature(cert, cert.pubkey);
+    assert!(v.is_ok());
+    assert!(v.unwrap());
+    return 0;
+}
+
+fn test_generated_san_and_validity() -> i32 {
+    let ss: *SelfSigned = _gen();
+    let cert: *Cert = cert_parse(ss.cert_der).unwrap();
+    assert_eq!(cert.san_dns.len(), 2);
+    assert_str_eq!(cert.san_dns.get(0), "localhost");
+    assert_str_eq!(cert.san_dns.get(1), "*.local.test");
+    assert_eq!(cert.not_after - cert.not_before, 31536000);
+    assert!(cert_matches_hostname(cert, "localhost"));
+    assert!(cert_matches_hostname(cert, "anything.local.test"));
+    return 0;
+}
+
+fn test_key_matches_cert() -> i32 {
+    // The returned private key derives the same public key embedded in the cert.
+    let ss: *SelfSigned = _gen();
+    assert_eq!(ss.pubkey.len(), 65);
+    assert_eq!(ss.key.len(), 32);
+    let cert: *Cert = cert_parse(ss.cert_der).unwrap();
+    assert!(cert.pubkey.eq(ss.pubkey));
+    return 0;
+}

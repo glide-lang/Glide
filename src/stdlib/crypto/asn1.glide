@@ -183,3 +183,99 @@ fn _i64toa(n: i64) -> string {
     while x > 0 { s = ((48 + (x % 10) as i32) as char).to_string().concat(s); x = x / 10; }
     return s;
 }
+
+// ---- DER encoding (the inverse of the reader) -------------------------
+
+// Encode a definite length in DER form (short form < 128, else long form).
+fn _der_len(n: i32) -> string {
+    if n < 0x80 { return (n as char).to_string(); }
+    let tmp: *ByteBuffer = ByteBuffer::new();
+    let mut x: i32 = n;
+    while x > 0 { tmp.push((x & 255) as u8); x = x >> 8; }   // little-endian
+    let le: string = tmp.to_string();
+    tmp.free();
+    let nb: i32 = le.len();
+    let out: *ByteBuffer = ByteBuffer::new();
+    out.push((0x80 | nb) as u8);
+    for let i: i32 = nb - 1; i >= 0; i-- { out.push(_byte(le, i) as u8); }   // big-endian
+    let r: string = out.to_string();
+    out.free();
+    return r;
+}
+
+/// Encode a TLV: tag byte, DER length, then content.
+pub fn der_tlv(tag: i32, content: string) -> string {
+    return ((tag & 255) as char).to_string().concat(_der_len(content.len())).concat(content);
+}
+
+/// SEQUENCE / SET wrappers.
+pub fn der_seq(content: string) -> string { return der_tlv(ASN1_SEQUENCE, content); }
+pub fn der_set(content: string) -> string { return der_tlv(ASN1_SET, content); }
+
+/// INTEGER from a big-endian magnitude, adding a 0x00 sign pad when the
+/// high bit is set (so the value stays non-negative). An empty magnitude
+/// encodes as 0.
+pub fn der_integer(mag: string) -> string {
+    if mag.len() == 0 { return der_tlv(ASN1_INTEGER, (0 as char).to_string()); }
+    // strip superfluous leading zeros, but keep one if the next byte is high.
+    let mut start: i32 = 0;
+    while start < mag.len() - 1 && _byte(mag, start) == 0 && _byte(mag, start + 1) < 0x80 {
+        start = start + 1;
+    }
+    let m: string = mag.substring(start, mag.len());
+    if _byte(m, 0) >= 0x80 {
+        return der_tlv(ASN1_INTEGER, (0 as char).to_string().concat(m));
+    }
+    return der_tlv(ASN1_INTEGER, m);
+}
+
+/// BIT STRING with zero unused bits.
+pub fn der_bitstring(content: string) -> string {
+    return der_tlv(ASN1_BITSTRING, (0 as char).to_string().concat(content));
+}
+
+/// OID from dotted-decimal ("1.2.840.10045.2.1").
+pub fn der_oid_encode(dotted: string) -> !string {
+    let parts: *Vector<string> = _split_dots(dotted);
+    if parts.len() < 2 { return err("asn1: OID needs at least two arcs"); }
+    let out: *ByteBuffer = ByteBuffer::new();
+    let a0: i64 = _atoi64(parts.get(0));
+    let a1: i64 = _atoi64(parts.get(1));
+    _emit_base128(out, a0 * 40 + a1);
+    for let i: i32 = 2; i < parts.len(); i++ {
+        _emit_base128(out, _atoi64(parts.get(i)));
+    }
+    let body: string = out.to_string();
+    out.free();
+    return ok(der_tlv(ASN1_OID, body));
+}
+
+fn _emit_base128(out: *ByteBuffer, v: i64) {
+    if v == 0 { out.push(0 as u8); return; }
+    let tmp: *ByteBuffer = ByteBuffer::new();
+    let mut x: i64 = v;
+    while x > 0 { tmp.push((x & 0x7f) as u8); x = x >> 7; }
+    let le: string = tmp.to_string();
+    tmp.free();
+    let nb: i32 = le.len();
+    for let i: i32 = nb - 1; i >= 0; i-- {
+        let b: i32 = _byte(le, i);
+        if i > 0 { out.push((b | 0x80) as u8); } else { out.push(b as u8); }
+    }
+}
+
+fn _split_dots(s: string) -> *Vector<string> {
+    let out: *Vector<string> = Vector::new();
+    let mut cur: string = "";
+    for let i: i32 = 0; i < s.len(); i++ {
+        let c: string = s.substring(i, i + 1);
+        if c.eq(".") { out.push(cur); cur = ""; } else { cur = cur.concat(c); }
+    }
+    out.push(cur);
+    return out;
+}
+fn _atoi64(s: string) -> i64 {
+    let mut v: i64 = 0;
+    for let i: i32 = 0; i < s.len(); i++ { v = v * 10 + ((_byte(s, i) - 48) as i64); }
+    return v;
+}
