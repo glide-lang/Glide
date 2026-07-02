@@ -2679,9 +2679,9 @@ fn _manifest_line_field(text: string, line0: i32, col0: i32) -> string {
     return "";
 }
 
-// Cross-compile triples offered as `target:` values. The musl pair has
-// auto-fetched sysroots (`glide target list`); the rest cross-compile via the
-// bundled zig backend (a program touching openssl/etc. needs a manual sysroot).
+// Cross-compile triples offered as `target:` values. The four known
+// triples (`glide target list`) have auto-fetched sysroots that carry the
+// target libc for the clang cross backend; the rest need a manual sysroot.
 fn _push_target_triples(items: *JsonValue) {
     json_arr_push(items, completion_item("x86_64-linux-musl", 12, "Linux x86_64 (sysroot auto-fetched)"));
     json_arr_push(items, completion_item("aarch64-linux-musl", 12, "Linux ARM64 (sysroot auto-fetched)"));

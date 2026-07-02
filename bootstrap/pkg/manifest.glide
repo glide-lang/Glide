@@ -59,7 +59,7 @@ pub struct Manifest {
     // becomes the project-wide silencing list. Empty when absent.
     pub lint_deny: *Vector<string>,
     pub lint_allow: *Vector<string>,
-    // Default cross-compile target as a Zig triple (e.g.
+    // Default cross-compile target as a target triple (e.g.
     // "x86_64-linux-musl"). `glide build` with no `--target=` flag uses
     // this, so a project can be cross-compiled with a bare `glide build`.
     // Empty = build for the host. Ignored by `glide run` (you can't run a

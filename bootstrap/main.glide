@@ -2463,7 +2463,7 @@ fn _has_target_sysroot(triple: string) -> bool {
     return __glide_file_exists(probe);
 }
 
-// Parse the OS field out of a Zig triple. Accepts e.g.:
+// Parse the OS field out of a target triple. Accepts e.g.:
 //   x86_64-linux-gnu       -> "linux"
 //   aarch64-macos-none     -> "macos"
 //   x86_64-windows-gnu     -> "windows"
