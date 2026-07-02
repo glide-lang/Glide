@@ -1162,7 +1162,12 @@ fn _uniq_stmt(s: *Stmt, ren: *HashMap<string>, seen: *HashMap<bool>, undo: *Vect
             // would desync that type lookup (e.g. a var named `short`).
             let orig: string = s.name;
             let mut cname: string = orig;
-            if seen.contains(orig) {
+            // Shadow if the name is already visible in ANY enclosing scope
+            // (or earlier in this one). Keying off `ren` — not the per-scope
+            // `seen` — catches shadows across nested blocks / loops / params,
+            // whose C `int n = n + …` would otherwise read the inner, still-
+            // uninitialized declaration.
+            if ren.contains(orig) {
                 cname = orig.concat("__sh").concat(_uniq_next(ctr).to_string());
             }
             seen.insert(orig, true);
@@ -1263,7 +1268,19 @@ fn _uniq_scope(body: *Vector<Stmt>, ren: *HashMap<string>, ctr: *Vector<i32>, se
     let undo: *Vector<string> = Vector::new();
     if seed != null {
         for let i: i32 = 0; i < seed.len(); i++ {
-            seen.insert(seed.get(i), true);
+            let nm: string = seed.get(i);
+            seen.insert(nm, true);
+            // Also record params / match-bindings in `ren` (mapping to
+            // themselves) so a local that SHADOWS one is detected at any nesting
+            // depth — shadow detection keys off `ren`, the set of every visible
+            // name, not the per-scope `seen`.
+            undo.push(nm);
+            if ren.contains(nm) {
+                undo.push(ren.get(nm));
+            } else {
+                undo.push(nm);
+            }
+            ren.insert(nm, nm);
         }
     }
     for let i: i32 = 0; i < body.len(); i++ {
