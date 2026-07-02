@@ -14,19 +14,19 @@
 //       }
 //   }
 //
-// API tipada via `Signal` enum: 8 variantes nominadas + `Other(int)` para
-// signums fora do conjunto comum. `signal_chan` devolve `chan<Signal>` e o
-// handler thread converte signum→Signal via `Signal::from_int`.
+// Typed API via the `Signal` enum: 8 named variants + `Other(int)` for
+// signums outside the common set. `signal_chan` returns a `chan<Signal>` and
+// the handler thread converts signum→Signal via `Signal::from_int`.
 //
-// `signal_raise` empurra DIRETAMENTE pra chan quando há subscriber. Isso
-// (a) dispensa GenerateConsoleCtrlEvent (flaky em MSYS bash), (b) funciona
-// pra QUALQUER signum em Windows (inclusive Usr1/Usr2 sem analog OS).
-// Quando não há subscriber, cai no `raise(sig)` POSIX / console-event Win.
+// `signal_raise` pushes DIRECTLY onto the chan when there is a subscriber.
+// That (a) avoids GenerateConsoleCtrlEvent (flaky under MSYS bash), (b) works
+// for ANY signum on Windows (including Usr1/Usr2 with no OS analog). When
+// there is no subscriber, it falls back to POSIX `raise(sig)` / a Win console event.
 //
-// **Não use `signal_chan` para SIGSEGV / SIGFPE / SIGBUS / SIGILL.** Esses
-// sinais são entregues no thread em estado indefinido (faulting context);
-// o handler async-safe pipe deste módulo não cobre essa semântica. Estão
-// fora do enum de propósito.
+// **Do not use `signal_chan` for SIGSEGV / SIGFPE / SIGBUS / SIGILL.** Those
+// signals are delivered on a thread in an undefined state (faulting context);
+// this module's async-safe pipe handler does not cover that semantics. They
+// are left out of the enum on purpose.
 
 pub enum Signal {
     Hup,        // SIGHUP  = 1
@@ -37,11 +37,11 @@ pub enum Signal {
     Usr2,       // SIGUSR2 = 12
     Pipe,       // SIGPIPE = 13
     Term,       // SIGTERM = 15
-    Other(i32), // qualquer signum não listado acima
+    Other(i32), // any signum not listed above
 }
 
 impl Signal {
-    /// Numérico POSIX correspondente. `Other(n)` retorna `n` literal.
+    /// The corresponding POSIX number. `Other(n)` returns `n` literally.
     ///
     /// ```glide
     /// Signal::Int.to_int();          // 2
@@ -63,8 +63,8 @@ impl Signal {
         return 0;
     }
 
-    /// Construir `Signal` a partir de signum bruto. Sempre retorna um valor —
-    /// signums fora do conjunto comum viram `Other(n)`.
+    /// Builds a `Signal` from a raw signum. Always returns a value —
+    /// signums outside the common set become `Other(n)`.
     ///
     /// ```glide
     /// Signal::from_int(2);    // Signal::Int
@@ -82,8 +82,8 @@ impl Signal {
         return Signal::Other(n);
     }
 
-    /// Nome do sinal estilo POSIX (`"SIGINT"`, etc.). `Other` retorna
-    /// `"SIG#<n>"` com o signum embutido.
+    /// POSIX-style signal name (`"SIGINT"`, etc.). `Other` returns
+    /// `"SIG#<n>"` with the signum embedded.
     ///
     /// ```glide
     /// Signal::Int.name();         // "SIGINT"
