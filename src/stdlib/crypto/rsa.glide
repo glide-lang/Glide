@@ -387,3 +387,31 @@ pub fn rsa_pss_sign(privkey_der: string, sel: i32, message: string) -> !string {
     free(out);
     return ok(sig);
 }
+
+/// Sign `hash` with an RSA private key using RSASSA-PKCS1-v1_5. `prefix` is
+/// the DigestInfo header for the hash (e.g. RSA_SHA256_PREFIX). Used for
+/// the TLS 1.2 ServerKeyExchange signature, which most clients expect in
+/// PKCS#1 form. Not constant-time (see rsa_pss_sign).
+pub fn rsa_pkcs1_sign(privkey_der: string, prefix: string, hash: string) -> !string {
+    let key: *RsaPrivKey = _rsa_priv_parse(privkey_der)?;
+    let n: string = key.n;
+    let k: i32 = n.len();
+    let tlen: i32 = prefix.len() + hash.len();
+    if k < tlen + 11 { return err("rsa-pkcs1: key too small for this hash"); }
+    let ps: i32 = k - tlen - 3;
+    let em: *ByteBuffer = ByteBuffer::new();
+    em.push(0 as u8);
+    em.push(1 as u8);
+    for let i: i32 = 0; i < ps; i++ { em.push(255 as u8); }
+    em.push(0 as u8);
+    em.push_str(prefix);
+    em.push_str(hash);
+    let em_str: string = em.to_string();
+    em.free();
+    let out: *void = malloc(k) as *void;
+    let rc: i32 = __glide_rsa_modexp(out, em_str as *void, em_str.len(), n as *void, k, key.d as *void, key.d.len());
+    if rc != 0 { free(out); return err("rsa-pkcs1: signing failed"); }
+    let sig: string = __glide_string_from_buf(out, k);
+    free(out);
+    return ok(sig);
+}

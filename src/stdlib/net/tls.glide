@@ -836,6 +836,58 @@ fn _tls_wrap_glide12(g: *Tls12Conn) -> *TlsStream {
     s.gconn12 = g;
     return s;
 }
+fn _tlsb(s: string, i: i32) -> i32 { return s.at(i).to_int() & 255; }
+
+// Read one full TLS record (5-byte header + payload) from `stream`. May
+// return trailing bytes of a following record; the handshake seeds its
+// buffer with all of them and consumes records in order.
+fn _tls_read_record(stream: *TcpStream) -> !string {
+    let mut buf: string = "";
+    while buf.len() < 5 {
+        let chunk: string = stream.read(16384)?.to_string();
+        if chunk.len() == 0 { return err("tls: connection closed before ClientHello"); }
+        buf = buf.concat(chunk);
+    }
+    let len: i32 = (_tlsb(buf, 3) << 8) | _tlsb(buf, 4);
+    while buf.len() < 5 + len {
+        let chunk: string = stream.read(16384)?.to_string();
+        if chunk.len() == 0 { return err("tls: truncated ClientHello"); }
+        buf = buf.concat(chunk);
+    }
+    return ok(buf);
+}
+
+// True when a ClientHello record advertises TLS 1.3 via supported_versions.
+fn _tls_ch_offers_13(rec: string) -> bool {
+    if rec.len() < 9 { return false; }
+    if _tlsb(rec, 5) != 1 { return false; }        // handshake type must be client_hello
+    let mut p: i32 = 9 + 2 + 32;                    // CH body: skip version + random
+    if p >= rec.len() { return false; }
+    let sid: i32 = _tlsb(rec, p); p = p + 1 + sid;  // legacy_session_id
+    if p + 2 > rec.len() { return false; }
+    let cslen: i32 = (_tlsb(rec, p) << 8) | _tlsb(rec, p + 1); p = p + 2 + cslen;
+    if p >= rec.len() { return false; }
+    let complen: i32 = _tlsb(rec, p); p = p + 1 + complen;
+    if p + 2 > rec.len() { return false; }
+    let extlen: i32 = (_tlsb(rec, p) << 8) | _tlsb(rec, p + 1); p = p + 2;
+    let ext_end: i32 = p + extlen;
+    while p + 4 <= ext_end && p + 4 <= rec.len() {
+        let et: i32 = (_tlsb(rec, p) << 8) | _tlsb(rec, p + 1);
+        let el: i32 = (_tlsb(rec, p + 2) << 8) | _tlsb(rec, p + 3);
+        p = p + 4;
+        if et == 43 {                              // supported_versions
+            let n: i32 = _tlsb(rec, p);
+            let mut q: i32 = p + 1;
+            while q + 1 < p + 1 + n {
+                if ((_tlsb(rec, q) << 8) | _tlsb(rec, q + 1)) == 0x0304 { return true; }
+                q = q + 2;
+            }
+        }
+        p = p + el;
+    }
+    return false;
+}
+
 // Split a comma-separated ALPN string into a protocol list.
 fn _tls_alpn_vec(alpn: string) -> *Vector<string> {
     let out: *Vector<string> = Vector::new();
@@ -1238,12 +1290,18 @@ impl TlsListener {
     /// ```
     pub fn accept(self: *TlsListener) -> !*TlsStream {
         if self.backend == 1 {
-            let tr: !*TcpStream = self.glisten.accept();
-            if !tr.is_ok() { return err(tr.unwrap_err()); }
-            let g: !*TlsConn = tls13_server_handshake(tr.unwrap(), self.identity.cert_chain,
-                                                      self.identity.key, self.identity.is_rsa, self.salpn);
-            if !g.is_ok() { return err(g.unwrap_err()); }
-            return ok(_tls_wrap_glide(g.unwrap()));
+            let stream: *TcpStream = self.glisten.accept()?;
+            // Peek the ClientHello to pick the protocol version, then hand
+            // the already-read bytes to the matching server handshake.
+            let ch: string = _tls_read_record(stream)?;
+            if _tls_ch_offers_13(ch) {
+                let g: *TlsConn = tls13_server_handshake_buffered(stream, self.identity.cert_chain,
+                    self.identity.key, self.identity.is_rsa, self.salpn, ch)?;
+                return ok(_tls_wrap_glide(g));
+            }
+            let g12: *Tls12Conn = tls12_server_handshake(stream, self.identity.cert_chain,
+                self.identity.key, self.identity.is_rsa, ch)?;
+            return ok(_tls_wrap_glide12(g12));
         }
         let h: *void = __glide_tls_accept(self.handle);
         if h == null { return err("tls_listener: accept/handshake failure"); }

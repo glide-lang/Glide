@@ -37,6 +37,7 @@ pub struct Tls12Conn {
     pub inbuf: string,
     pub rbuf: string,
     pub closed: bool,
+    pub is_server: bool,   // server writes with s_*, reads with c_*
 }
 
 fn _t12cb(s: string, i: i32) -> i32 { return s.at(i).to_int() & 255; }
@@ -160,6 +161,7 @@ pub fn tls12_attach(stream: *TcpStream, host: string, verify: bool) -> !*Tls12Co
     conn.rbuf = "";
     conn.inbuf = "";
     conn.closed = false;
+    conn.is_server = false;
 
     // 1. ClientHello.
     let crandr: !string = random_bytes(32);
@@ -358,11 +360,12 @@ fn _t12parsecerts(body: string) -> !*Vector<string> {
 
 pub fn tls12_write(conn: *Tls12Conn, data: string) -> !i32 {
     if conn.closed { return err("tls12: connection closed"); }
-    let rec: !string = tls12_seal(conn.c_key, conn.c_iv, conn.c_seq, 23, data);
-    if !rec.is_ok() { return err(rec.unwrap_err()); }
-    conn.c_seq = conn.c_seq + 1;
-    let w: !i32 = conn.stream.write(rec.unwrap());
-    if !w.is_ok() { return err(w.unwrap_err()); }
+    // The endpoint writes with its own keys: server -> s_*, client -> c_*.
+    let mut wk: string = conn.c_key; let mut wiv: string = conn.c_iv; let mut wseq: u64 = conn.c_seq;
+    if conn.is_server { wk = conn.s_key; wiv = conn.s_iv; wseq = conn.s_seq; }
+    let rec: string = tls12_seal(wk, wiv, wseq, 23, data)?;
+    if conn.is_server { conn.s_seq = conn.s_seq + 1; } else { conn.c_seq = conn.c_seq + 1; }
+    conn.stream.write(rec)?;
     return ok(data.len());
 }
 
@@ -381,9 +384,12 @@ pub fn tls12_read(conn: *Tls12Conn, max: i32) -> !string {
             return err(rec.unwrap_err());
         }
         if rec.unwrap().rtype == 20 { continue; }
-        let dec: !*Tls12Plain = tls12_open(conn.s_key, conn.s_iv, conn.s_seq, rec.unwrap().raw);
+        // The endpoint reads with the peer's keys: server reads c_*, client reads s_*.
+        let mut rk: string = conn.s_key; let mut riv: string = conn.s_iv; let mut rseq: u64 = conn.s_seq;
+        if conn.is_server { rk = conn.c_key; riv = conn.c_iv; rseq = conn.c_seq; }
+        let dec: !*Tls12Plain = tls12_open(rk, riv, rseq, rec.unwrap().raw);
         if !dec.is_ok() { return err(dec.unwrap_err()); }
-        conn.s_seq = conn.s_seq + 1;
+        if conn.is_server { conn.c_seq = conn.c_seq + 1; } else { conn.s_seq = conn.s_seq + 1; }
         if dec.unwrap().content_type == 23 {
             let data: string = dec.unwrap().content;
             let take: i32 = if data.len() < max { data.len() } else { max };
@@ -400,7 +406,9 @@ pub fn tls12_read(conn: *Tls12Conn, max: i32) -> !string {
 pub fn tls12_close(conn: *Tls12Conn) {
     if !conn.closed {
         let alert: string = (1 as char).to_string().concat((0 as char).to_string());
-        let rec: !string = tls12_seal(conn.c_key, conn.c_iv, conn.c_seq, 21, alert);
+        let mut wk: string = conn.c_key; let mut wiv: string = conn.c_iv; let mut wseq: u64 = conn.c_seq;
+        if conn.is_server { wk = conn.s_key; wiv = conn.s_iv; wseq = conn.s_seq; }
+        let rec: !string = tls12_seal(wk, wiv, wseq, 21, alert);
         if rec.is_ok() { let _w: !i32 = conn.stream.write(rec.unwrap()); }
         conn.closed = true;
     }
@@ -424,4 +432,154 @@ pub fn tls12_read_into(conn: *Tls12Conn, buf: *void, max: i32) -> !i32 {
     let n: i32 = if s.len() < max { s.len() } else { max };
     __glide_tls12_memcpy(buf, s as *void, n);
     return ok(n);
+}
+
+// ---- server-side handshake --------------------------------------------
+
+
+// Sign the ServerKeyExchange params with the certificate's key.
+fn _t12sign_ske(is_rsa: bool, key: string, signed: string) -> !*Pair<i32, string> {
+    if is_rsa {
+        let sig: string = rsa_pkcs1_sign(key, RSA_SHA256_PREFIX, sha256(signed))?;
+        return ok(Pair::new(0x0401, sig));                 // rsa_pkcs1_sha256
+    }
+    let raw: string = ecdsa_sign(key, sha256(signed))?;
+    let der: string = der_seq(der_integer(raw.substring(0, 32)).concat(der_integer(raw.substring(32, 64))));
+    return ok(Pair::new(0x0403, der));                     // ecdsa_secp256r1_sha256
+}
+
+/// Run the TLS 1.2 SERVER handshake over `stream`, presenting `cert_chain`
+/// (DER, leaf first) authenticated with `key` (P-256 scalar or RSA DER;
+/// `is_rsa` selects). `pre_rbuf` holds any bytes already read from the
+/// socket (the ClientHello record, when a version dispatcher peeked it).
+pub fn tls12_server_handshake(stream: *TcpStream, cert_chain: *Vector<string>,
+                              key: string, is_rsa: bool, pre_rbuf: string) -> !*Tls12Conn {
+    let conn: *Tls12Conn = malloc(sizeof(Tls12Conn)) as *Tls12Conn;
+    conn.stream = stream;
+    conn.rbuf = pre_rbuf;
+    conn.inbuf = "";
+    conn.closed = false;
+    conn.is_server = true;
+
+    // 1. ClientHello.
+    let chrec: *T12Record = _t12next(conn)?;
+    if chrec.rtype != 22 { return err("tls12: expected ClientHello record"); }
+    let chm: *HsMessage = read_handshake(chrec.payload, 0)?;
+    if chm.msg_type != HS_CLIENT_HELLO { return err("tls12: expected ClientHello"); }
+    let transcript: *ByteBuffer = ByteBuffer::new();
+    transcript.push_str(chrec.payload.substring(0, chm.next));
+    let chb: string = chm.body;
+    let client_random: string = chb.substring(2, 34);
+    // Choose the curve: X25519 if the client offered supported_groups with
+    // it, else secp256r1 (parsed leniently; default secp256r1).
+    let mut curve: i32 = GRP_SECP256R1;
+    let cur_ch: *ClientHello = parse_client_hello(chb)?;   // reuse the 1.3 parser for groups/suites
+
+    // 2. Pick the cipher matching the cert type (must be client-offered).
+    let want: i32 = if is_rsa { T12_ECDHE_RSA_AES128_GCM } else { T12_ECDHE_ECDSA_AES128_GCM };
+    let mut cipher: i32 = 0;
+    for let i: i32 = 0; i < cur_ch.cipher_suites.len(); i++ {
+        if cur_ch.cipher_suites.get(i) == want { cipher = want; }
+    }
+    if cipher == 0 { return err("tls12: no mutually-supported cipher suite"); }
+    if cur_ch.key_share_group == GRP_X25519 { curve = GRP_X25519; }   // client hinted x25519
+
+    // 3. ServerHello.
+    let server_random: string = random_bytes(32)?;
+    let sh_body: *ByteBuffer = ByteBuffer::new();
+    sh_body.push_str(_t12u16(0x0303));
+    sh_body.push_str(server_random);
+    sh_body.push(0 as u8);                        // empty session_id
+    sh_body.push_str(_t12u16(cipher));
+    sh_body.push(0 as u8);                        // compression null
+    // renegotiation_info (RFC 5746), empty for an initial handshake —
+    // modern clients abort ("unsafe legacy renegotiation") without it.
+    let sh_ext: string = _t12u16(0xff01).concat(_t12u16(1)).concat((0 as char).to_string());
+    sh_body.push_str(_t12u16(sh_ext.len()));
+    sh_body.push_str(sh_ext);
+    let shb: string = sh_body.to_string(); sh_body.free();
+    let sh: string = ((2 & 255) as char).to_string().concat(_t12u24(shb.len())).concat(shb);
+    transcript.push_str(sh);
+    _t12send(conn, 22, sh)?;
+
+    // 4. Certificate.
+    let cert_list: *ByteBuffer = ByteBuffer::new();
+    for let i: i32 = 0; i < cert_chain.len(); i++ {
+        cert_list.push_str(_t12u24(cert_chain.get(i).len()));
+        cert_list.push_str(cert_chain.get(i));
+    }
+    let cl: string = cert_list.to_string(); cert_list.free();
+    let cert_body: string = _t12u24(cl.len()).concat(cl);
+    let cert_msg: string = ((11 & 255) as char).to_string().concat(_t12u24(cert_body.len())).concat(cert_body);
+    transcript.push_str(cert_msg);
+    _t12send(conn, 22, cert_msg)?;
+
+    // 5. ServerKeyExchange: ephemeral ECDHE public key + signature.
+    let mut server_priv: string = "";
+    let mut server_pub: string = "";
+    if curve == GRP_X25519 {
+        server_priv = x25519_generate()?;
+        server_pub = x25519_base(server_priv);
+    } else {
+        server_priv = p256_generate()?;
+        server_pub = p256_pubkey(server_priv)?;
+    }
+    let ecparams: string = ((3 & 255) as char).to_string().concat(_t12u16(curve))
+        .concat(((server_pub.len() & 255) as char).to_string()).concat(server_pub);
+    let signed: string = client_random.concat(server_random).concat(ecparams);
+    let sk: *Pair<i32, string> = _t12sign_ske(is_rsa, key, signed)?;
+    let ske_body: string = ecparams.concat(_t12u16(sk.first)).concat(_t12u16(sk.second.len())).concat(sk.second);
+    let ske_msg: string = ((12 & 255) as char).to_string().concat(_t12u24(ske_body.len())).concat(ske_body);
+    transcript.push_str(ske_msg);
+    _t12send(conn, 22, ske_msg)?;
+
+    // 6. ServerHelloDone.
+    let shd: string = ((14 & 255) as char).to_string().concat(_t12u24(0));
+    transcript.push_str(shd);
+    _t12send(conn, 22, shd)?;
+
+    // 7. ClientKeyExchange -> pre-master secret.
+    let ckerec: *T12Record = _t12next(conn)?;
+    if ckerec.rtype != 22 { return err("tls12: expected ClientKeyExchange"); }
+    let ckem: *HsMessage = read_handshake(ckerec.payload, 0)?;
+    if ckem.msg_type != 16 { return err("tls12: expected ClientKeyExchange"); }
+    transcript.push_str(ckerec.payload.substring(0, ckem.next));
+    let cpublen: i32 = _t12cb(ckem.body, 0);
+    let client_pub: string = ckem.body.substring(1, 1 + cpublen);
+    let pms: string = if curve == GRP_X25519 { x25519(server_priv, client_pub)? } else { p256_ecdh(server_priv, client_pub)? };
+
+    // 8. Key derivation.
+    let master: string = tls12_prf(pms, "master secret", client_random.concat(server_random), 48);
+    let kb: string = tls12_prf(master, "key expansion", server_random.concat(client_random), 40);
+    conn.c_key = kb.substring(0, 16);
+    conn.s_key = kb.substring(16, 32);
+    conn.c_iv = kb.substring(32, 36);
+    conn.s_iv = kb.substring(36, 40);
+    conn.c_seq = 0; conn.s_seq = 0;
+
+    // 9. Client ChangeCipherSpec + Finished (encrypted with client keys).
+    let mut got: bool = false;
+    while !got {
+        let rec: *T12Record = _t12next(conn)?;
+        if rec.rtype == 20 { continue; }
+        let dec: *Tls12Plain = tls12_open(conn.c_key, conn.c_iv, conn.c_seq, rec.raw)?;
+        conn.c_seq = conn.c_seq + 1;
+        let fm: *HsMessage = read_handshake(dec.content, 0)?;
+        if fm.msg_type != 20 { return err("tls12: expected client Finished"); }
+        let expect: string = tls12_prf(master, "client finished", sha256(transcript.to_string()), 12);
+        if !expect.eq(fm.body) { return err("tls12: client Finished mismatch"); }
+        transcript.push_str(dec.content);
+        got = true;
+    }
+
+    // 10. Server ChangeCipherSpec + Finished (encrypted with server keys).
+    _t12send(conn, 20, (1 as char).to_string())?;
+    let sfin_data: string = tls12_prf(master, "server finished", sha256(transcript.to_string()), 12);
+    let sfin: string = ((20 & 255) as char).to_string().concat(_t12u24(12)).concat(sfin_data);
+    let sfin_rec: string = tls12_seal(conn.s_key, conn.s_iv, conn.s_seq, 22, sfin)?;
+    conn.s_seq = conn.s_seq + 1;
+    conn.stream.write(sfin_rec)?;
+
+    transcript.free();
+    return ok(conn);
 }

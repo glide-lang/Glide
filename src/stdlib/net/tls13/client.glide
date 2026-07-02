@@ -535,9 +535,17 @@ fn _parse_ec_key(der: string) -> !string {
 /// (32 bytes). Offers ALPN protocols from `alpn_offer` if the client asks.
 pub fn tls13_server_handshake(stream: *TcpStream, cert_chain: *Vector<string>,
                               key: string, is_rsa: bool, alpn_offer: *Vector<string>) -> !*TlsConn {
+    return tls13_server_handshake_buffered(stream, cert_chain, key, is_rsa, alpn_offer, "");
+}
+
+/// As tls13_server_handshake, but with `pre_rbuf` holding any bytes already
+/// read from the socket (the ClientHello record, when a version dispatcher
+/// peeked it before choosing the 1.3 path).
+pub fn tls13_server_handshake_buffered(stream: *TcpStream, cert_chain: *Vector<string>,
+                              key: string, is_rsa: bool, alpn_offer: *Vector<string>, pre_rbuf: string) -> !*TlsConn {
     let conn: *TlsConn = malloc(sizeof(TlsConn)) as *TlsConn;
     conn.stream = stream;
-    conn.rbuf = "";
+    conn.rbuf = pre_rbuf;
     conn.inbuf = "";
     conn.alpn = "";
     conn.closed = false;
