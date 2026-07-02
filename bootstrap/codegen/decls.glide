@@ -694,6 +694,95 @@ fn _emit_main_wrapper(g: *CG, s: *Stmt) {
     println!("}");
 }
 
+// True when a fn body contains a `defer` / `defer_err` anywhere it will be
+// emitted (statement bodies, block-expressions, match arms) — but NOT inside a
+// nested `fn(...)` expression, which owns its own defer scope. Drives whether
+// the `char __gdefer[]` runtime-flag array is emitted for the fn.
+fn _body_has_defer(body: *Vector<Stmt>) -> bool {
+    if body == null {
+        return false;
+    }
+    for let i: i32 = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if _stmt_has_defer(&s) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn _stmt_has_defer(s: *Stmt) -> bool {
+    if s == null {
+        return false;
+    }
+    if s.kind == ST_DEFER {
+        return true;
+    }
+    if s.then_body != null && _body_has_defer(s.then_body) {
+        return true;
+    }
+    if s.else_body != null && _body_has_defer(s.else_body) {
+        return true;
+    }
+    if s.for_init != null && _stmt_has_defer(s.for_init) {
+        return true;
+    }
+    if _expr_has_defer(s.let_value) {
+        return true;
+    }
+    if _expr_has_defer(s.expr_value) {
+        return true;
+    }
+    if _expr_has_defer(s.cond) {
+        return true;
+    }
+    return false;
+}
+
+fn _expr_has_defer(e: *Expr) -> bool {
+    if e == null {
+        return false;
+    }
+    if e.kind == EX_FNEXPR {
+        return false;
+    }
+    if e.kind == EX_BLOCK {
+        if e.block_stmts != null && _body_has_defer(e.block_stmts) {
+            return true;
+        }
+        return _expr_has_defer(e.operand);
+    }
+    if e.kind == EX_MATCH {
+        if e.match_arms != null {
+            for let i: i32 = 0; i < e.match_arms.len(); i++ {
+                let arm: MatchArm = e.match_arms.get(i);
+                if arm.body != null && _body_has_defer(arm.body) {
+                    return true;
+                }
+            }
+        }
+        return _expr_has_defer(e.lhs);
+    }
+    if _expr_has_defer(e.lhs) {
+        return true;
+    }
+    if _expr_has_defer(e.rhs) {
+        return true;
+    }
+    if _expr_has_defer(e.operand) {
+        return true;
+    }
+    if e.args != null {
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            if _expr_has_defer(&a) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 fn emit_fn(g: *CG, s: *Stmt) {
     // In freestanding mode there is no hosted `main` wrapper (it calls
     // __glide_sched_init / fprintf). The entry is an ordinary fn (`kmain`)
@@ -736,6 +825,12 @@ fn emit_fn(g: *CG, s: *Stmt) {
     g.defer_stack = new_defer;
     g.err_defer_stack = new_err_defer;
     g.auto_drop_stack = new_drop;
+    let saved_dflags: *Vector<i32> = g.defer_flags;
+    let saved_edflags: *Vector<i32> = g.err_defer_flags;
+    let saved_dctr: i32 = g.defer_flag_ctr;
+    g.defer_flags = Vector::new();
+    g.err_defer_flags = Vector::new();
+    g.defer_flag_ctr = 0;
     let new_moved: *HashMap<bool> = HashMap::new();
     g.moved_locals = new_moved;
     if s.fn_params != null {
@@ -743,6 +838,12 @@ fn emit_fn(g: *CG, s: *Stmt) {
             let p: Param = s.fn_params.get(i);
             g.declare(p.name, p.ty);
         }
+    }
+    // Runtime-flag array for conditional defers (see emit_stmt ST_DEFER). Only
+    // emitted when the fn actually defers, so defer-free fns pay nothing.
+    if _body_has_defer(s.fn_body) {
+        ind(1);
+        println!("char __gdefer[256] = {0};");
     }
     if s.fn_body != null {
         for let i: i32 = 0; i < s.fn_body.len(); i++ {
@@ -762,6 +863,9 @@ fn emit_fn(g: *CG, s: *Stmt) {
     g.defer_stack = saved_defer;
     g.err_defer_stack = saved_err_defer;
     g.auto_drop_stack = saved_drop;
+    g.defer_flags = saved_dflags;
+    g.err_defer_flags = saved_edflags;
+    g.defer_flag_ctr = saved_dctr;
     g.current_ret_ty = saved_ret;
     g.current_origin = saved_origin;
     println!("}");
@@ -833,6 +937,10 @@ fn emit_impl(g: *CG, s: *Stmt) {
         g.defer_stack = nd;
         g.err_defer_stack = ned;
         g.auto_drop_stack = nadr;
+        let saved_df_m: *Vector<i32> = g.defer_flags;
+        let saved_dctr_m: i32 = g.defer_flag_ctr;
+        g.defer_flags = Vector::new();
+        g.defer_flag_ctr = 0;
         let nmoved: *HashMap<bool> = HashMap::new();
         g.moved_locals = nmoved;
         if m.fn_params != null {
@@ -840,6 +948,10 @@ fn emit_impl(g: *CG, s: *Stmt) {
                 let p: Param = m.fn_params.get(j);
                 g.declare(p.name, p.ty);
             }
+        }
+        if _body_has_defer(m.fn_body) {
+            ind(1);
+            println!("char __gdefer[256] = {0};");
         }
         if m.fn_body != null {
             for let j: i32 = 0; j < m.fn_body.len(); j++ {
@@ -851,6 +963,8 @@ fn emit_impl(g: *CG, s: *Stmt) {
         g.defer_stack = saved_defer;
         g.err_defer_stack = saved_err_defer;
         g.auto_drop_stack = saved_drop;
+        g.defer_flags = saved_df_m;
+        g.defer_flag_ctr = saved_dctr_m;
         g.current_ret_ty = saved_ret;
         println!("}");
         println!("");
@@ -2187,6 +2301,10 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         let nadr_q: *Vector<Expr> = Vector::new();
         g.defer_stack = nd_q;
         g.auto_drop_stack = nadr_q;
+        let saved_df_q: *Vector<i32> = g.defer_flags;
+        let saved_dctr_q: i32 = g.defer_flag_ctr;
+        g.defer_flags = Vector::new();
+        g.defer_flag_ctr = 0;
         let nmoved_q: *HashMap<bool> = HashMap::new();
         g.moved_locals = nmoved_q;
         for let j: i32 = 0; j < new_params_v.len(); j++ {
@@ -2195,6 +2313,10 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         }
         let saved_ret_mono: *Type = g.current_ret_ty;
         g.current_ret_ty = new_ret;
+        if _body_has_defer(new_body) {
+            ind(1);
+            println!("char __gdefer[256] = {0};");
+        }
         for let j: i32 = 0; j < new_body.len(); j++ {
             let b: Stmt = new_body.get(j);
             emit_stmt(g, &b, 1);
@@ -2203,6 +2325,8 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         g.current_ret_ty = saved_ret_mono;
         g.defer_stack = saved_d;
         g.auto_drop_stack = saved_dr;
+        g.defer_flags = saved_df_q;
+        g.defer_flag_ctr = saved_dctr_q;
         g.current_origin = saved_origin;
         println!("}");
         println!("");
@@ -2231,6 +2355,10 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         let nadr: *Vector<Expr> = Vector::new();
         g.defer_stack = nd;
         g.auto_drop_stack = nadr;
+        let saved_df_a: *Vector<i32> = g.defer_flags;
+        let saved_dctr_a: i32 = g.defer_flag_ctr;
+        g.defer_flags = Vector::new();
+        g.defer_flag_ctr = 0;
         let nmoved_a: *HashMap<bool> = HashMap::new();
         g.moved_locals = nmoved_a;
         if af.params != null {
@@ -2243,6 +2371,10 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         // closure body lower against the closure's declared return type.
         let saved_ret_anon: *Type = g.current_ret_ty;
         g.current_ret_ty = af.ret_ty;
+        if af.body != null && _body_has_defer(af.body) {
+            ind(1);
+            println!("char __gdefer[256] = {0};");
+        }
         if af.body != null {
             for let j: i32 = 0; j < af.body.len(); j++ {
                 let b: Stmt = af.body.get(j);
@@ -2253,6 +2385,8 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         g.emit_deferred_reverse(1, "");
         g.defer_stack = saved_d;
         g.auto_drop_stack = saved_dr;
+        g.defer_flags = saved_df_a;
+        g.defer_flag_ctr = saved_dctr_a;
         println!("}");
         println!("");
     }

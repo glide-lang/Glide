@@ -784,6 +784,13 @@ pub struct CG {
     pub defer_stack: *Vector<Expr>, // explicit `defer expr;` (fn-scoped)
     pub err_defer_stack: *Vector<Expr>, // `defer_err expr;` — fires only on err return / `?` (fn-scoped)
     pub auto_drop_stack: *Vector<Expr>, // `let v*` cleanups (block-scoped)
+    // Per-defer runtime flags (parallel to defer_stack / err_defer_stack). A
+    // defer inside a conditional block only runs if reached: `__gdefer_<k>` is
+    // set at the defer site and the fn-exit drain guards on it. `defer_flag_ctr`
+    // hands out the next `k` within the current fn.
+    pub defer_flags: *Vector<i32>,
+    pub err_defer_flags: *Vector<i32>,
+    pub defer_flag_ctr: i32,
     pub moved_locals: *HashMap<bool>, // owned locals whose ownership moved out (assign/store/pass); their auto-drop is skipped
     // Anonymous fn lifts (collected during codegen, emitted at end).
     pub anon_fns: *Vector<AnonFn>,
@@ -994,6 +1001,11 @@ impl CG {
         g.auto_drop_stack = ads;
         let ml: *HashMap<bool> = HashMap::new();
         g.moved_locals = ml;
+        let df: *Vector<i32> = Vector::new();
+        g.defer_flags = df;
+        let edf: *Vector<i32> = Vector::new();
+        g.err_defer_flags = edf;
+        g.defer_flag_ctr = 0;
         let ueq: *HashMap<bool> = HashMap::new();
         g.user_eq = ueq;
         let af: *Vector<AnonFn> = Vector::new();
@@ -1132,8 +1144,9 @@ impl CG {
         for let i: i32 = nd - 1; i >= 0; i = i - 1 {
             ind(depth);
             let ex: Expr = self.defer_stack.get(i);
+            print!("if (__gdefer[".concat(self.defer_flags.get(i).to_string()).concat("]) { "));
             emit_expr(self, &ex);
-            println!(";");
+            println!("; }");
         }
     }
 
@@ -4982,7 +4995,12 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
     }
     if s.kind == ST_DEFER {
         if s.expr_value != null {
+            let k: i32 = g.defer_flag_ctr;
+            g.defer_flag_ctr = k + 1;
+            ind(depth);
+            println!("__gdefer[".concat(k.to_string()).concat("] = 1;"));
             g.defer_stack.push(*s.expr_value);
+            g.defer_flags.push(k);
         }
         return;
     }

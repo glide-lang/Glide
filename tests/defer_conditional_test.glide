@@ -1,0 +1,55 @@
+import stdlib::testing::*;
+
+fn _note(v: *Vector<i32>, x: i32) { v.push(x); }
+
+// A defer in a taken branch fires; in a non-taken branch it must NOT.
+fn _run(log: *Vector<i32>, cond: bool) {
+    if cond { defer _note(log, 1); }
+    _note(log, 99);
+}
+
+fn test_conditional_defer_not_taken() -> i32 {
+    let a: *Vector<i32> = Vector::new();
+    _run(a, false);
+    assert_eq!(a.len(), 1);        // only 99; the defer did not fire
+    assert_eq!(a.get(0), 99);
+    return 0;
+}
+
+fn test_conditional_defer_taken() -> i32 {
+    let b: *Vector<i32> = Vector::new();
+    _run(b, true);
+    assert_eq!(b.len(), 2);        // 99, then the deferred 1 at fn exit
+    assert_eq!(b.get(1), 1);
+    return 0;
+}
+
+// Only reached defers fire, in LIFO order.
+fn _run2(log: *Vector<i32>, c1: bool, c2: bool) {
+    if c1 { defer _note(log, 1); }
+    if c2 { defer _note(log, 2); }
+    _note(log, 0);
+}
+
+fn test_multiple_conditional_defers() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    _run2(v, true, false);
+    assert_eq!(v.len(), 2);
+    assert_eq!(v.get(1), 1);
+    let w: *Vector<i32> = Vector::new();
+    _run2(w, true, true);
+    assert_eq!(w.len(), 3);
+    assert_eq!(w.get(1), 2);       // LIFO: 2 before 1
+    assert_eq!(w.get(2), 1);
+    return 0;
+}
+
+// A top-level (unconditional) defer still always fires.
+fn _run3(log: *Vector<i32>) { defer _note(log, 7); _note(log, 3); }
+fn test_unconditional_defer_still_runs() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    _run3(v);
+    assert_eq!(v.len(), 2);
+    assert_eq!(v.get(1), 7);
+    return 0;
+}
