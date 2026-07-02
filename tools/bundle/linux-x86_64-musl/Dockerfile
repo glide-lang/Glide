@@ -15,7 +15,11 @@
 # (alpine:3.20) — the sysroot's libc/ tree comes from the same Alpine
 # release, so the digest is part of the supply chain.
 
-FROM alpine@sha256:c64c687cbea9300178b30c95835354e34c4e4febc4badfe27102879de0483b5e
+# NB: this must be the multi-arch INDEX digest (docker pull reports it),
+# not a per-arch manifest digest — the aarch64 sysroot builds this same
+# Dockerfile on an ARM runner, and an amd64-only pin hands it x86 layers
+# (apk then dies with an exec-format 255).
+FROM alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
 
 RUN apk add --no-cache \
         build-base \
