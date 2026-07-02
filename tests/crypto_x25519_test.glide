@@ -1,0 +1,71 @@
+// X25519 against RFC 7748 §5.2 (scalar mult KAT) and §6.1 (the Alice/Bob
+// DH exchange), plus the small-order rejection.
+import stdlib::testing::*;
+import stdlib::crypto::x25519::*;
+import stdlib::hex::*;
+
+fn _h(s: string) -> string {
+    let r: !string = hex_decode(s);
+    if !r.is_ok() { return ""; }
+    return r.unwrap();
+}
+
+// RFC 7748 §5.2 — first scalar-mult test vector.
+fn test_rfc7748_scalarmult() -> i32 {
+    let scalar: string = _h("a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4");
+    let u: string      = _h("e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c");
+    let r: !string = x25519(scalar, u);
+    assert!(r.is_ok());
+    assert_str_eq!(hex_encode(r.unwrap()),
+        "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552");
+    return 0;
+}
+
+// Public key derivation matches the reference.
+fn test_base_pubkey() -> i32 {
+    let sk: string = _h("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a");
+    assert_str_eq!(hex_encode(x25519_base(sk)),
+        "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a");
+    return 0;
+}
+
+// RFC 7748 §6.1 — the two-party DH agreement.
+fn test_rfc7748_dh_exchange() -> i32 {
+    let a: string = _h("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a");
+    let b: string = _h("5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb");
+    let apub: string = x25519_base(a);
+    let bpub: string = x25519_base(b);
+    assert_str_eq!(hex_encode(bpub),
+        "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f");
+    // both sides derive the same shared secret
+    let sa: !string = x25519(a, bpub);
+    let sb: !string = x25519(b, apub);
+    assert!(sa.is_ok());
+    assert!(sb.is_ok());
+    assert_str_eq!(hex_encode(sa.unwrap()),
+        "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742");
+    assert!(sa.unwrap().eq(sb.unwrap()));
+    return 0;
+}
+
+// A generated keypair round-trips through a DH with a second keypair.
+fn test_generated_keypair_agrees() -> i32 {
+    let sk1: string = x25519_generate().unwrap();
+    let sk2: string = x25519_generate().unwrap();
+    let pk1: string = x25519_base(sk1);
+    let pk2: string = x25519_base(sk2);
+    let s1: !string = x25519(sk1, pk2);
+    let s2: !string = x25519(sk2, pk1);
+    assert!(s1.is_ok());
+    assert!(s2.is_ok());
+    assert!(s1.unwrap().eq(s2.unwrap()));
+    return 0;
+}
+
+// All-zero (small-order) point must be rejected.
+fn test_small_order_rejected() -> i32 {
+    let sk: string = _h("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a");
+    let zero: string = _h("0000000000000000000000000000000000000000000000000000000000000000");
+    assert!(x25519(sk, zero).is_err());
+    return 0;
+}

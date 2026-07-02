@@ -1,0 +1,183 @@
+// X25519 (RFC 7748) — Curve25519 Diffie-Hellman. The C kernel is the
+// TweetNaCl `crypto_scalarmult` (16 x 16-bit limbs, Montgomery ladder),
+// which is constant-time by construction: the ladder runs a fixed number
+// of steps and its conditional swaps (`sel25519`) are branchless masks,
+// so nothing depends on the secret scalar's bits in time or memory access.
+//
+// ```glide
+// import stdlib::crypto::x25519::*;
+//
+// let sk: string = x25519_generate().unwrap();   // 32-byte secret
+// let pk: string = x25519_base(sk);              // 32-byte public
+// let shared: string = x25519(sk, peer_pk);      // 32-byte shared secret
+// ```
+
+import stdlib::crypto::csprng::*;
+import stdlib::bytes::*;
+
+c_raw! {
+    #ifndef GLIDE_X25519_DEFINED
+    #define GLIDE_X25519_DEFINED
+    #include <stdint.h>
+    #include <string.h>
+    #include <stdlib.h>
+
+    typedef int64_t gf[16];
+
+    static const gf __glide_x_121665 = {0xDB41, 1};
+
+    static void __glide_x_car(gf o) {
+        int i;
+        int64_t c;
+        for (i = 0; i < 16; i++) {
+            o[i] += (1LL << 16);
+            c = o[i] >> 16;
+            o[(i+1) * (i < 15)] += c - 1 + 37 * (c - 1) * (i == 15);
+            o[i] -= c << 16;
+        }
+    }
+    static void __glide_x_sel(gf p, gf q, int b) {
+        int64_t t, c = ~(b - 1);
+        int i;
+        for (i = 0; i < 16; i++) { t = c & (p[i] ^ q[i]); p[i] ^= t; q[i] ^= t; }
+    }
+    static void __glide_x_A(gf o, const gf a, const gf b) { int i; for (i=0;i<16;i++) o[i]=a[i]+b[i]; }
+    static void __glide_x_Z(gf o, const gf a, const gf b) { int i; for (i=0;i<16;i++) o[i]=a[i]-b[i]; }
+    static void __glide_x_M(gf o, const gf a, const gf b) {
+        int64_t t[31]; int i, j;
+        for (i = 0; i < 31; i++) t[i] = 0;
+        for (i = 0; i < 16; i++) for (j = 0; j < 16; j++) t[i+j] += a[i] * b[j];
+        for (i = 0; i < 15; i++) t[i] += 38 * t[i+16];
+        for (i = 0; i < 16; i++) o[i] = t[i];
+        __glide_x_car(o);
+        __glide_x_car(o);
+    }
+    static void __glide_x_S(gf o, const gf a) { __glide_x_M(o, a, a); }
+    static void __glide_x_inv(gf o, const gf i) {
+        gf c; int a;
+        for (a = 0; a < 16; a++) c[a] = i[a];
+        for (a = 253; a >= 0; a--) {
+            __glide_x_S(c, c);
+            if (a != 2 && a != 4) __glide_x_M(c, c, i);
+        }
+        for (a = 0; a < 16; a++) o[a] = c[a];
+    }
+    static void __glide_x_unpack(gf o, const uint8_t* n) {
+        int i;
+        for (i = 0; i < 16; i++) o[i] = n[2*i] + ((int64_t)n[2*i+1] << 8);
+        o[15] &= 0x7fff;
+    }
+    static void __glide_x_pack(uint8_t* o, const gf n) {
+        int i, j, b;
+        gf m, t;
+        for (i = 0; i < 16; i++) t[i] = n[i];
+        __glide_x_car(t); __glide_x_car(t); __glide_x_car(t);
+        for (j = 0; j < 2; j++) {
+            m[0] = t[0] - 0xffed;
+            for (i = 1; i < 15; i++) {
+                m[i] = t[i] - 0xffff - ((m[i-1] >> 16) & 1);
+                m[i-1] &= 0xffff;
+            }
+            m[15] = t[15] - 0x7fff - ((m[14] >> 16) & 1);
+            b = (m[15] >> 16) & 1;
+            m[14] &= 0xffff;
+            __glide_x_sel(t, m, 1 - b);
+        }
+        for (i = 0; i < 16; i++) {
+            o[2*i]   = t[i] & 0xff;
+            o[2*i+1] = t[i] >> 8;
+        }
+    }
+
+    // q = scalar(n) * point(p). All buffers 32 bytes.
+    static void __glide_x25519(uint8_t* q, const uint8_t* n, const uint8_t* p) {
+        uint8_t z[32];
+        int64_t x[80];
+        int r, i;
+        gf a, b, c, d, e, f;
+        for (i = 0; i < 31; i++) z[i] = n[i];
+        z[31] = (n[31] & 127) | 64;
+        z[0] &= 248;
+        __glide_x_unpack(x, p);
+        for (i = 0; i < 16; i++) { b[i] = x[i]; d[i] = a[i] = c[i] = 0; }
+        a[0] = d[0] = 1;
+        for (i = 254; i >= 0; i--) {
+            r = (z[i>>3] >> (i&7)) & 1;
+            __glide_x_sel(a, b, r); __glide_x_sel(c, d, r);
+            __glide_x_A(e, a, c); __glide_x_Z(a, a, c);
+            __glide_x_A(c, b, d); __glide_x_Z(b, b, d);
+            __glide_x_S(d, e); __glide_x_S(f, a);
+            __glide_x_M(a, c, a); __glide_x_M(c, b, e);
+            __glide_x_A(e, a, c); __glide_x_Z(a, a, c);
+            __glide_x_S(b, a); __glide_x_Z(c, d, f);
+            __glide_x_M(a, c, __glide_x_121665); __glide_x_A(a, a, d);
+            __glide_x_M(c, c, a); __glide_x_M(a, d, f);
+            __glide_x_M(d, b, x); __glide_x_S(b, e);
+            __glide_x_sel(a, b, r); __glide_x_sel(c, d, r);
+        }
+        __glide_x_inv(c, c);
+        __glide_x_M(a, a, c);
+        __glide_x_pack(q, a);
+    }
+
+    // out (32) = scalar(n) * point(p). Both inputs 32 bytes.
+    static void* __glide_x25519_raw(void* n, void* p) {
+        uint8_t* out = (uint8_t*)malloc(32);
+        __glide_x25519(out, (const uint8_t*)n, (const uint8_t*)p);
+        return out;
+    }
+    static int __glide_all_zero(const uint8_t* a, int n) {
+        uint8_t d = 0; for (int i = 0; i < n; i++) d |= a[i]; return d == 0;
+    }
+    static int __glide_x25519_checked(void* out, void* n, void* p) {
+        __glide_x25519((uint8_t*)out, (const uint8_t*)n, (const uint8_t*)p);
+        /* RFC 7748 §6.1: an all-zero shared secret means a small-order
+           point was supplied; callers MUST reject it. */
+        return __glide_all_zero((const uint8_t*)out, 32) ? -1 : 0;
+    }
+    #endif
+}
+
+extern fn __glide_x25519_raw(n: *void, p: *void) -> *void;
+extern fn __glide_x25519_checked(out: *void, n: *void, p: *void) -> i32;
+extern fn __glide_string_from_buf(p: *void, n: i32) -> string;
+
+// The Curve25519 base point u = 9 (little-endian, 32 bytes).
+fn _x25519_basepoint() -> string {
+    let bb: *ByteBuffer = ByteBuffer::new();
+    bb.push(9 as u8);
+    for let i: i32 = 1; i < 32; i++ { bb.push(0 as u8); }
+    let s: string = bb.to_string();
+    bb.free();
+    return s;
+}
+
+/// X25519(scalar, point). Both are 32-byte little-endian. Returns the
+/// 32-byte result. For a DH shared secret pass your secret + the peer's
+/// public key; an all-zero (small-order) result is rejected as an error.
+pub fn x25519(scalar: string, point: string) -> !string {
+    if scalar.len() != 32 { return err("x25519: scalar must be 32 bytes"); }
+    if point.len() != 32 { return err("x25519: point must be 32 bytes"); }
+    let out: *void = malloc(32) as *void;
+    let rc: i32 = __glide_x25519_checked(out, scalar as *void, point as *void);
+    if rc != 0 { free(out); return err("x25519: small-order point (all-zero output)"); }
+    let s: string = __glide_string_from_buf(out, 32);
+    free(out);
+    return ok(s);
+}
+
+/// Public key for `scalar`: X25519(scalar, basepoint). Never all-zero for
+/// a valid clamped scalar, so this returns a plain string.
+pub fn x25519_base(scalar: string) -> string {
+    let p: *void = __glide_x25519_raw(scalar as *void, _x25519_basepoint() as *void);
+    let s: string = __glide_string_from_buf(p, 32);
+    free(p);
+    return s;
+}
+
+/// Generate a fresh 32-byte X25519 secret from the CSPRNG. Clamping is
+/// applied inside the scalar multiply, so the raw random bytes are the
+/// secret key as-is.
+pub fn x25519_generate() -> !string {
+    return random_bytes(32);
+}
