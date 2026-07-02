@@ -121,10 +121,10 @@ pub fn form_decode(s: string) -> !*FormData {
             v = p.substring(eq + 1, p.len());
         }
         let kr: !string = url_decode(k);
-        if !kr.ok { return err(kr.err); }
+        if !kr.is_ok() { return err(kr.unwrap_err()); }
         let vr: !string = url_decode(v);
-        if !vr.ok { return err(vr.err); }
-        f.set(kr.val, vr.val);
+        if !vr.is_ok() { return err(vr.unwrap_err()); }
+        f.set(kr.unwrap(), vr.unwrap());
     }
     return ok(f);
 }

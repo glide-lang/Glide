@@ -196,8 +196,8 @@ pub fn resolve(host: string) -> !*Vector<*IpAddr> {
 /// ```
 pub fn resolve_v4(host: string) -> !*Vector<*IpAddr> {
     let all: !*Vector<*IpAddr> = resolve(host);
-    if !all.ok { return err(all.err); }
-    let v: *Vector<*IpAddr> = all.val;
+    if !all.is_ok() { return err(all.unwrap_err()); }
+    let v: *Vector<*IpAddr> = all.unwrap();
     let out: *Vector<*IpAddr> = Vector::new();
     for let i: i32 = 0; i < v.len(); i++ {
         let ip: *IpAddr = v.get(i);
@@ -216,8 +216,8 @@ pub fn resolve_v4(host: string) -> !*Vector<*IpAddr> {
 /// ```
 pub fn resolve_v6(host: string) -> !*Vector<*IpAddr> {
     let all: !*Vector<*IpAddr> = resolve(host);
-    if !all.ok { return err(all.err); }
-    let v: *Vector<*IpAddr> = all.val;
+    if !all.is_ok() { return err(all.unwrap_err()); }
+    let v: *Vector<*IpAddr> = all.unwrap();
     let out: *Vector<*IpAddr> = Vector::new();
     for let i: i32 = 0; i < v.len(); i++ {
         let ip: *IpAddr = v.get(i);

@@ -221,8 +221,8 @@ fn _parse_v4(s: string) -> !*IpAddr {
         let p: string = parts.get(i);
         if p.len() == 0 || p.len() > 3 { return err("ipv4: bad octet"); }
         let r: !i32 = p.try_parse_int();
-        if !r.ok { return err("ipv4: non-numeric octet"); }
-        let n: i32 = r.val;
+        if !r.is_ok() { return err("ipv4: non-numeric octet"); }
+        let n: i32 = r.unwrap();
         if n < 0 || n > 255 { return err("ipv4: octet out of range"); }
         packed = (packed << 8) | n;
     }
@@ -323,8 +323,8 @@ fn _parse_v6_group(s: string) -> !i32 {
 fn _parse_v6(s: string) -> !*IpAddr {
     // Locate "::" if present.
     let collapse_at: i32 = s.index_of("::");
-    let mut left: *Vector<i32> = Vector::new();
-    let mut right: *Vector<i32> = Vector::new();
+    let left: *Vector<i32> = Vector::new();
+    let right: *Vector<i32> = Vector::new();
     if collapse_at >= 0 {
         let lpart: string = s.substring(0, collapse_at);
         let rpart: string = s.substring(collapse_at + 2, s.len());
@@ -332,16 +332,16 @@ fn _parse_v6(s: string) -> !*IpAddr {
             let lv: *Vector<string> = lpart.split(":");
             for let i: i32 = 0; i < lv.len(); i++ {
                 let r: !i32 = _parse_v6_group(lv.get(i));
-                if !r.ok { return err(r.err); }
-                left.push(r.val);
+                if !r.is_ok() { return err(r.unwrap_err()); }
+                left.push(r.unwrap());
             }
         }
         if rpart.len() > 0 {
             let rv: *Vector<string> = rpart.split(":");
             for let i: i32 = 0; i < rv.len(); i++ {
                 let r: !i32 = _parse_v6_group(rv.get(i));
-                if !r.ok { return err(r.err); }
-                right.push(r.val);
+                if !r.is_ok() { return err(r.unwrap_err()); }
+                right.push(r.unwrap());
             }
         }
         if left.len() + right.len() > 8 { return err("ipv6: too many groups"); }
@@ -350,8 +350,8 @@ fn _parse_v6(s: string) -> !*IpAddr {
         if parts.len() != 8 { return err("ipv6: expected 8 groups or `::`"); }
         for let i: i32 = 0; i < 8; i++ {
             let r: !i32 = _parse_v6_group(parts.get(i));
-            if !r.ok { return err(r.err); }
-            left.push(r.val);
+            if !r.is_ok() { return err(r.unwrap_err()); }
+            left.push(r.unwrap());
         }
     }
 

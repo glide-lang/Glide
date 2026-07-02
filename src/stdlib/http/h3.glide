@@ -3013,8 +3013,8 @@ pub fn http3_get(url: string, tls_insecure: bool) -> !*HttpResponse {
 pub fn http3_request(method: string, url: string, extra_headers: string,
                       body: string, tls_insecure: bool) -> !*HttpResponse {
     let parsed: !*ParsedH3Url = _h3_parse_url(url);
-    if !parsed.ok { return err(parsed.err); }
-    let pu: *ParsedH3Url = parsed.val;
+    if !parsed.is_ok() { return err(parsed.unwrap_err()); }
+    let pu: *ParsedH3Url = parsed.unwrap();
 
     let mut verify: i32 = 1;
     if tls_insecure { verify = 0; }
@@ -3122,8 +3122,8 @@ pub fn http3_request_cached(method: string, url: string, extra_headers: string,
                               body: string, tls_insecure: bool,
                               cache: *H3SessionCache) -> !*HttpResponse {
     let parsed: !*ParsedH3Url = _h3_parse_url(url);
-    if !parsed.ok { return err(parsed.err); }
-    let pu: *ParsedH3Url = parsed.val;
+    if !parsed.is_ok() { return err(parsed.unwrap_err()); }
+    let pu: *ParsedH3Url = parsed.unwrap();
     let mut verify: i32 = 1;
     if tls_insecure { verify = 0; }
     let h: *void = __glide_h3_client_connect(pu.host, pu.port, 10000, verify,
@@ -3184,8 +3184,8 @@ fn _h3_parse_url(s: string) -> !*ParsedH3Url {
         host = authority.substring(0, colon);
         let p_s: string = authority.substring(colon + 1, authority.len());
         let pr: !i32 = p_s.try_parse_int();
-        if !pr.ok { return err("http3: bad port"); }
-        port = pr.val;
+        if !pr.is_ok() { return err("http3: bad port"); }
+        port = pr.unwrap();
     }
 
     let u: *ParsedH3Url = malloc(sizeof(ParsedH3Url)) as *ParsedH3Url;

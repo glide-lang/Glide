@@ -545,9 +545,9 @@ fn _decode_string(raw: string, pos: i32, len: i32) -> !*Pair<i32, string> {
     let first: i32 = raw.at(pos).to_int() & 255;
     let huffman: bool = (first & 128) != 0;
     let len_r: !*Pair<i32, i32> = _decode_integer(raw, pos, 7, len);
-    if !len_r.ok { return err(len_r.err); }
-    let mut p: i32 = len_r.val.first;
-    let n: i32 = len_r.val.second;
+    if !len_r.is_ok() { return err(len_r.unwrap_err()); }
+    let mut p: i32 = len_r.unwrap().first;
+    let n: i32 = len_r.unwrap().second;
     if p + n > len { return err("hpack: string truncated"); }
     // Build the chunk via byte-by-byte concat — substring() goes
     // through strlen and would miss bytes past an internal NUL.
@@ -558,8 +558,8 @@ fn _decode_string(raw: string, pos: i32, len: i32) -> !*Pair<i32, string> {
     p = p + n;
     if !huffman { return ok(Pair::new(p, chunk)); }
     let dr: !string = _huffman_decode(chunk);
-    if !dr.ok { return err(dr.err); }
-    return ok(Pair::new(p, dr.val));
+    if !dr.is_ok() { return err(dr.unwrap_err()); }
+    return ok(Pair::new(p, dr.unwrap()));
 }
 
 // ===========================================================================

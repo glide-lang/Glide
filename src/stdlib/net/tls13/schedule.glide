@@ -64,20 +64,20 @@ pub fn tls13_early_secret(psk: string) -> string {
 /// ECDHE). `early` is the Early Secret; `ecdhe` is the (EC)DHE output.
 pub fn tls13_handshake_secret(early: string, ecdhe: string) -> !string {
     let d: !string = derive_secret_r(early, "derived", sha256(""));
-    if !d.ok { return err(d.err); }
-    return ok(hkdf_extract(d.val, ecdhe));
+    if !d.is_ok() { return err(d.unwrap_err()); }
+    return ok(hkdf_extract(d.unwrap(), ecdhe));
 }
 
 /// The Master Secret: HKDF-Extract(Derive-Secret(handshake, "derived", ""),
 /// 0). IKM is HashLen zero bytes.
 pub fn tls13_master_secret(handshake: string) -> !string {
     let d: !string = derive_secret_r(handshake, "derived", sha256(""));
-    if !d.ok { return err(d.err); }
+    if !d.is_ok() { return err(d.unwrap_err()); }
     let bb: *ByteBuffer = ByteBuffer::new();
     for let i: i32 = 0; i < TLS13_HASH_LEN; i++ { bb.push(0 as u8); }
     let zeros: string = bb.to_string();
     bb.free();
-    return ok(hkdf_extract(d.val, zeros));
+    return ok(hkdf_extract(d.unwrap(), zeros));
 }
 
 // A derived AEAD traffic key + iv pair.
@@ -91,12 +91,12 @@ pub struct TrafficKeys {
 /// 32 for ChaCha20-Poly1305; the IV is always 12 bytes.
 pub fn tls13_traffic_keys(traffic_secret: string, key_len: i32) -> !*TrafficKeys {
     let k: !string = hkdf_expand_label(traffic_secret, "key", "", key_len);
-    if !k.ok { return err(k.err); }
+    if !k.is_ok() { return err(k.unwrap_err()); }
     let iv: !string = hkdf_expand_label(traffic_secret, "iv", "", 12);
-    if !iv.ok { return err(iv.err); }
+    if !iv.is_ok() { return err(iv.unwrap_err()); }
     let tk: *TrafficKeys = malloc(sizeof(TrafficKeys)) as *TrafficKeys;
-    tk.key = k.val;
-    tk.iv = iv.val;
+    tk.key = k.unwrap();
+    tk.iv = iv.unwrap();
     return ok(tk);
 }
 

@@ -655,7 +655,7 @@ fn _parse_group(p: *RxParser) -> *RxNode {
         }
     }
 
-    let group_num: i32 = 0;
+    let _group_num: i32 = 0;
     let mut g: i32 = 0;
     if capturing && !is_look {
         p.group_count = p.group_count + 1;
@@ -1218,7 +1218,7 @@ fn _vm_run(re: *Regex, input: string, start: i32, end_pc: i32) -> *Vector<i32> {
 
 // Pop one backtrack frame, undoing any saves logged after that frame
 // was pushed. Returns false if the stack was empty (overall failure).
-fn _vm_backtrack(stack_pc: *Vector<i32>, stack_sp: *Vector<i32>, stack_mark: *Vector<i32>,
+fn _vm_backtrack(stack_pc: *Vector<i32>, _stack_sp: *Vector<i32>, stack_mark: *Vector<i32>,
                   saves: *Vector<i32>, caps: *Vector<i32>) -> bool {
     if stack_pc.len() == 0 { return false; }
     let mark: i32 = stack_mark.get(stack_mark.len() - 1);
@@ -1632,20 +1632,20 @@ fn _expand_repl(repl: string, m: *Match) -> string {
 /// call — prefer keeping a `*Regex` around for hot loops.
 pub fn regex_matches(pat: string, s: string) -> bool {
     let r: !*Regex = Regex::compile(pat);
-    if !r.ok { return false; }
-    return r.val.matches(s);
+    if !r.is_ok() { return false; }
+    return r.unwrap().matches(s);
 }
 
 /// Shorthand for `Regex::compile(pat).val.find(s)`.
 pub fn regex_find(pat: string, s: string) -> ?*Match {
     let r: !*Regex = Regex::compile(pat);
-    if !r.ok { return none(); }
-    return r.val.find(s);
+    if !r.is_ok() { return none(); }
+    return r.unwrap().find(s);
 }
 
 /// Shorthand for `Regex::compile(pat).val.replace_all(s, repl)`.
 pub fn regex_replace_all(pat: string, s: string, repl: string) -> string {
     let r: !*Regex = Regex::compile(pat);
-    if !r.ok { return s; }
-    return r.val.replace_all(s, repl);
+    if !r.is_ok() { return s; }
+    return r.unwrap().replace_all(s, repl);
 }

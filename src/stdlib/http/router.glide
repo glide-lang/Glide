@@ -270,7 +270,7 @@ fn _has_dotdot(path: string) -> bool {
 
 // ---- default handlers -------------------------------------------------
 
-fn _default_not_found(req: *HttpRequest) -> HttpResponse {
+fn _default_not_found(_req: *HttpRequest) -> HttpResponse {
     return HttpResponse::with_status(404).text("not found");
 }
 
@@ -691,8 +691,8 @@ fn _router_handle_conn(c: *TcpStream, r: *Router) {
     let buf: *u8 = malloc(8192) as *u8;
     while true {
         let rr: !i32 = c.read_bytes(buf, 8192);
-        if !rr.ok { break; }
-        let n: i32 = rr.val;
+        if !rr.is_ok() { break; }
+        let n: i32 = rr.unwrap();
         if n <= 0 { break; }
 
         // Per-request arena — see http.glide::_handle_conn for the
@@ -735,16 +735,16 @@ fn _router_handle_conn(c: *TcpStream, r: *Router) {
 
 fn _router_accept_loop(port: i32, r: *Router) {
     let lr: !*TcpListener = TcpListener::bind_reuseport(port);
-    if !lr.ok { return; }
-    _router_accept_loop_shared(lr.val, r);
+    if !lr.is_ok() { return; }
+    _router_accept_loop_shared(lr.unwrap(), r);
 }
 
 fn _router_accept_loop_shared(l: *TcpListener, r: *Router) {
     let has_reactor: bool = os_has_async_io();
     while true {
         let cr: !*TcpStream = l.accept();
-        if !cr.ok { continue; }
-        let c: *TcpStream = cr.val;
+        if !cr.is_ok() { continue; }
+        let c: *TcpStream = cr.unwrap();
         if has_reactor {
             spawn _router_handle_conn(c, r);
         } else {

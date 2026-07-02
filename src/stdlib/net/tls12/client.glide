@@ -58,8 +58,8 @@ fn _t12ext(t: i32, b: string) -> string { return _t12u16(t).concat(_t12vec16(b))
 fn _t12fill(conn: *Tls12Conn, n: i32) -> !bool {
     while conn.rbuf.len() < n {
         let r: !*ByteBuffer = conn.stream.read(16384);
-        if !r.ok { return err(r.err); }
-        let chunk: string = r.val.to_string();
+        if !r.is_ok() { return err(r.unwrap_err()); }
+        let chunk: string = r.unwrap().to_string();
         if chunk.len() == 0 { return err("tls12: connection closed by peer"); }
         conn.rbuf = conn.rbuf.concat(chunk);
     }
@@ -68,11 +68,11 @@ fn _t12fill(conn: *Tls12Conn, n: i32) -> !bool {
 pub struct T12Record { pub rtype: i32, pub payload: string, pub raw: string }
 fn _t12next(conn: *Tls12Conn) -> !*T12Record {
     let e1: !bool = _t12fill(conn, 5);
-    if !e1.ok { return err(e1.err); }
+    if !e1.is_ok() { return err(e1.unwrap_err()); }
     let rtype: i32 = _t12cb(conn.rbuf, 0);
     let len: i32 = (_t12cb(conn.rbuf, 3) << 8) | _t12cb(conn.rbuf, 4);
     let e2: !bool = _t12fill(conn, 5 + len);
-    if !e2.ok { return err(e2.err); }
+    if !e2.is_ok() { return err(e2.unwrap_err()); }
     let rec: *T12Record = malloc(sizeof(T12Record)) as *T12Record;
     rec.rtype = rtype;
     rec.payload = conn.rbuf.substring(5, 5 + len);
@@ -83,7 +83,7 @@ fn _t12next(conn: *Tls12Conn) -> !*T12Record {
 fn _t12send(conn: *Tls12Conn, rtype: i32, payload: string) -> !bool {
     let hdr: string = ((rtype & 255) as char).to_string().concat(_t12u16(0x0303)).concat(_t12u16(payload.len()));
     let w: !i32 = conn.stream.write(hdr.concat(payload));
-    if !w.ok { return err(w.err); }
+    if !w.is_ok() { return err(w.unwrap_err()); }
     return ok(true);
 }
 
@@ -92,13 +92,13 @@ fn _t12send(conn: *Tls12Conn, rtype: i32, payload: string) -> !bool {
 fn _t12ecdsaraw(sig_der: string, size: i32) -> !string {
     let d: *Der = der_new(sig_der);
     let seq: !*Tlv = der_expect(d, ASN1_SEQUENCE);
-    if !seq.ok { return err(seq.err); }
-    let sd: *Der = der_into(seq.val);
+    if !seq.is_ok() { return err(seq.unwrap_err()); }
+    let sd: *Der = der_into(seq.unwrap());
     let r: !*Tlv = der_expect(sd, ASN1_INTEGER);
-    if !r.ok { return err(r.err); }
+    if !r.is_ok() { return err(r.unwrap_err()); }
     let s: !*Tlv = der_expect(sd, ASN1_INTEGER);
-    if !s.ok { return err(s.err); }
-    return ok(_t12pad(der_int_bytes(r.val), size).concat(_t12pad(der_int_bytes(s.val), size)));
+    if !s.is_ok() { return err(s.unwrap_err()); }
+    return ok(_t12pad(der_int_bytes(r.unwrap()), size).concat(_t12pad(der_int_bytes(s.unwrap()), size)));
 }
 fn _t12pad(mag: string, n: i32) -> string {
     let m: i32 = mag.len();
@@ -119,12 +119,12 @@ fn _t12ske(sig_alg: i32, leaf: *Cert, signed: string, sig: string) -> !bool {
         // ECDSA: pick digest + curve size from the issuer key length.
         if hash_id == 5 {
             let raw: !string = _t12ecdsaraw(sig, 48);
-            if !raw.ok { return err(raw.err); }
-            return ok(ecdsa_p384_verify(leaf.pubkey, sha384(signed), raw.val).val == 1);
+            if !raw.is_ok() { return err(raw.unwrap_err()); }
+            return ok(ecdsa_p384_verify(leaf.pubkey, sha384(signed), raw.unwrap()).unwrap() == 1);
         }
         let raw: !string = _t12ecdsaraw(sig, 32);
-        if !raw.ok { return err(raw.err); }
-        return ok(ecdsa_verify(leaf.pubkey, sha256(signed), raw.val).val == 1);
+        if !raw.is_ok() { return err(raw.unwrap_err()); }
+        return ok(ecdsa_verify(leaf.pubkey, sha256(signed), raw.unwrap()).unwrap() == 1);
     } else if sig_id == 1 {
         // RSA PKCS#1 v1.5.
         if hash_id == 5 { return rsa_pkcs1_verify(leaf.pubkey, RSA_SHA384_PREFIX, sha384(signed), sig); }
@@ -145,12 +145,12 @@ fn _t12ske(sig_alg: i32, leaf: *Cert, signed: string, sig: string) -> !bool {
 /// certificate-chain validation.
 pub fn tls12_connect(host: string, port: i32, verify: bool) -> !*Tls12Conn {
     let addrs: !*Vector<*IpAddr> = resolve(host);
-    if !addrs.ok { return err(addrs.err); }
-    if addrs.val.len() == 0 { return err("tls12: no addresses for ".concat(host)); }
-    let sa: *SocketAddr = SocketAddr::new(addrs.val.get(0), port);
+    if !addrs.is_ok() { return err(addrs.unwrap_err()); }
+    if addrs.unwrap().len() == 0 { return err("tls12: no addresses for ".concat(host)); }
+    let sa: *SocketAddr = SocketAddr::new(addrs.unwrap().get(0), port);
     let st: !*TcpStream = TcpStream::connect(sa);
-    if !st.ok { return err(st.err); }
-    return tls12_attach(st.val, host, verify);
+    if !st.is_ok() { return err(st.unwrap_err()); }
+    return tls12_attach(st.unwrap(), host, verify);
 }
 
 /// Run the TLS 1.2 handshake over an already-connected `stream`.
@@ -163,8 +163,8 @@ pub fn tls12_attach(stream: *TcpStream, host: string, verify: bool) -> !*Tls12Co
 
     // 1. ClientHello.
     let crandr: !string = random_bytes(32);
-    if !crandr.ok { return err(crandr.err); }
-    let client_random: string = crandr.val;
+    if !crandr.is_ok() { return err(crandr.unwrap_err()); }
+    let client_random: string = crandr.unwrap();
     let body: *ByteBuffer = ByteBuffer::new();
     body.push_str(_t12u16(0x0303));                  // client_version TLS 1.2
     body.push_str(client_random);
@@ -189,7 +189,7 @@ pub fn tls12_attach(stream: *TcpStream, host: string, verify: bool) -> !*Tls12Co
     let transcript: *ByteBuffer = ByteBuffer::new();
     transcript.push_str(ch);
     let e1: !bool = _t12send(conn, 22, ch);
-    if !e1.ok { return err(e1.err); }
+    if !e1.is_ok() { return err(e1.unwrap_err()); }
 
     // 2. Read the server flight (ServerHello..ServerHelloDone) — plaintext
     //    handshake records, reassembled into messages.
@@ -202,10 +202,10 @@ pub fn tls12_attach(stream: *TcpStream, host: string, verify: bool) -> !*Tls12Co
     let hs_buf: *ByteBuffer = ByteBuffer::new();
     while !done {
         let rec: !*T12Record = _t12next(conn);
-        if !rec.ok { return err(rec.err); }
-        if rec.val.rtype == 21 { return err("tls12: server alert during handshake"); }
-        if rec.val.rtype != 22 { return err("tls12: unexpected record in flight"); }
-        hs_buf.push_str(rec.val.payload);
+        if !rec.is_ok() { return err(rec.unwrap_err()); }
+        if rec.unwrap().rtype == 21 { return err("tls12: server alert during handshake"); }
+        if rec.unwrap().rtype != 22 { return err("tls12: unexpected record in flight"); }
+        hs_buf.push_str(rec.unwrap().payload);
         let avail: string = hs_buf.to_string();
         let mut off: i32 = 0;
         while off + 4 <= avail.len() {
@@ -222,8 +222,8 @@ pub fn tls12_attach(stream: *TcpStream, host: string, verify: bool) -> !*Tls12Co
                 cipher = (_t12cb(mbody, cp) << 8) | _t12cb(mbody, cp + 1);
             } else if mtype == HS_CERTIFICATE {
                 let cs: !*Vector<string> = _t12parsecerts(mbody);
-                if !cs.ok { return err(cs.err); }
-                certs = cs.val;
+                if !cs.is_ok() { return err(cs.unwrap_err()); }
+                certs = cs.unwrap();
             } else if mtype == 12 {                    // ServerKeyExchange
                 ske_curve = (_t12cb(mbody, 1) << 8) | _t12cb(mbody, 2);
                 let publen: i32 = _t12cb(mbody, 3);
@@ -237,10 +237,10 @@ pub fn tls12_attach(stream: *TcpStream, host: string, verify: bool) -> !*Tls12Co
                 let signed: string = client_random.concat(server_random).concat(ecparams);
                 if certs.len() == 0 { return err("tls12: ServerKeyExchange before Certificate"); }
                 let leaf0: !*Cert = cert_parse(certs.get(0));
-                if !leaf0.ok { return err(leaf0.err); }
-                let vok: !bool = _t12ske(sig_alg, leaf0.val, signed, sig);
-                if !vok.ok { return err(vok.err); }
-                if !vok.val { return err("tls12: ServerKeyExchange signature invalid"); }
+                if !leaf0.is_ok() { return err(leaf0.unwrap_err()); }
+                let vok: !bool = _t12ske(sig_alg, leaf0.unwrap(), signed, sig);
+                if !vok.is_ok() { return err(vok.unwrap_err()); }
+                if !vok.unwrap() { return err("tls12: ServerKeyExchange signature invalid"); }
             } else if mtype == 14 {                    // ServerHelloDone
                 done = true;
                 off = off + 4 + mlen;
@@ -255,18 +255,18 @@ pub fn tls12_attach(stream: *TcpStream, host: string, verify: bool) -> !*Tls12Co
     // 3. Verify the certificate chain.
     if certs.len() == 0 { return err("tls12: server sent no certificate"); }
     let leafr: !*Cert = cert_parse(certs.get(0));
-    if !leafr.ok { return err(leafr.err); }
+    if !leafr.is_ok() { return err(leafr.unwrap_err()); }
     if verify {
         let inters: *Vector<*Cert> = Vector::new();
         for let i: i32 = 1; i < certs.len(); i++ {
             let ic: !*Cert = cert_parse(certs.get(i));
-            if ic.ok { inters.push(ic.val); }
+            if ic.is_ok() { inters.push(ic.unwrap()); }
         }
         let roots: !*Vector<*Cert> = load_system_roots();
-        if !roots.ok { return err(roots.err); }
-        let chain: !bool = verify_chain(leafr.val, inters, roots.val, host, Time::now().unix());
-        if !chain.ok { return err(chain.err); }
-        if !chain.val { return err("tls12: certificate chain verification failed"); }
+        if !roots.is_ok() { return err(roots.unwrap_err()); }
+        let chain: !bool = verify_chain(leafr.unwrap(), inters, roots.unwrap(), host, Time::now().unix());
+        if !chain.is_ok() { return err(chain.unwrap_err()); }
+        if !chain.unwrap() { return err("tls12: certificate chain verification failed"); }
     }
 
     // 4. Client ephemeral key + pre-master secret on the negotiated curve.
@@ -274,18 +274,18 @@ pub fn tls12_attach(stream: *TcpStream, host: string, verify: bool) -> !*Tls12Co
     let mut pms: string = "";
     if ske_curve == GRP_X25519 {
         let skr: !string = x25519_generate();
-        if !skr.ok { return err(skr.err); }
-        client_pub = x25519_base(skr.val);
-        let sh: !string = x25519(skr.val, ske_pub);
-        if !sh.ok { return err(sh.err); }
-        pms = sh.val;
+        if !skr.is_ok() { return err(skr.unwrap_err()); }
+        client_pub = x25519_base(skr.unwrap());
+        let sh: !string = x25519(skr.unwrap(), ske_pub);
+        if !sh.is_ok() { return err(sh.unwrap_err()); }
+        pms = sh.unwrap();
     } else if ske_curve == GRP_SECP256R1 {
         let skr: !string = p256_generate();
-        if !skr.ok { return err(skr.err); }
-        client_pub = p256_pubkey(skr.val).val;
-        let sh: !string = p256_ecdh(skr.val, ske_pub);
-        if !sh.ok { return err(sh.err); }
-        pms = sh.val;
+        if !skr.is_ok() { return err(skr.unwrap_err()); }
+        client_pub = p256_pubkey(skr.unwrap()).unwrap();
+        let sh: !string = p256_ecdh(skr.unwrap(), ske_pub);
+        if !sh.is_ok() { return err(sh.unwrap_err()); }
+        pms = sh.unwrap();
     } else {
         return err("tls12: server chose an unsupported curve");
     }
@@ -304,35 +304,35 @@ pub fn tls12_attach(stream: *TcpStream, host: string, verify: bool) -> !*Tls12Co
     let cke: string = ((16 & 255) as char).to_string().concat(_t12u24(cke_body.len())).concat(cke_body);
     transcript.push_str(cke);
     let e2: !bool = _t12send(conn, 22, cke);
-    if !e2.ok { return err(e2.err); }
+    if !e2.is_ok() { return err(e2.unwrap_err()); }
 
     // 7. ChangeCipherSpec + (encrypted) Finished.
     let e3: !bool = _t12send(conn, 20, (1 as char).to_string());
-    if !e3.ok { return err(e3.err); }
+    if !e3.is_ok() { return err(e3.unwrap_err()); }
     let cfin_data: string = tls12_prf(master, "client finished", sha256(transcript.to_string()), 12);
     let cfin: string = ((20 & 255) as char).to_string().concat(_t12u24(12)).concat(cfin_data);
     transcript.push_str(cfin);
     let cfin_rec: !string = tls12_seal(conn.c_key, conn.c_iv, conn.c_seq, 22, cfin);
-    if !cfin_rec.ok { return err(cfin_rec.err); }
+    if !cfin_rec.is_ok() { return err(cfin_rec.unwrap_err()); }
     conn.c_seq = conn.c_seq + 1;
-    let w: !i32 = conn.stream.write(cfin_rec.val);
-    if !w.ok { return err(w.err); }
+    let w: !i32 = conn.stream.write(cfin_rec.unwrap());
+    if !w.is_ok() { return err(w.unwrap_err()); }
 
     // 8. Server ChangeCipherSpec + Finished (encrypted), verify.
     let mut got: bool = false;
     while !got {
         let rec: !*T12Record = _t12next(conn);
-        if !rec.ok { return err(rec.err); }
-        if rec.val.rtype == 20 { continue; }          // server ChangeCipherSpec
-        if rec.val.rtype == 21 { return err("tls12: server alert before Finished"); }
-        let dec: !*Tls12Plain = tls12_open(conn.s_key, conn.s_iv, conn.s_seq, rec.val.raw);
-        if !dec.ok { return err(dec.err); }
+        if !rec.is_ok() { return err(rec.unwrap_err()); }
+        if rec.unwrap().rtype == 20 { continue; }          // server ChangeCipherSpec
+        if rec.unwrap().rtype == 21 { return err("tls12: server alert before Finished"); }
+        let dec: !*Tls12Plain = tls12_open(conn.s_key, conn.s_iv, conn.s_seq, rec.unwrap().raw);
+        if !dec.is_ok() { return err(dec.unwrap_err()); }
         conn.s_seq = conn.s_seq + 1;
-        let sfm: !*HsMessage = read_handshake(dec.val.content, 0);
-        if !sfm.ok { return err(sfm.err); }
-        if sfm.val.msg_type != 20 { return err("tls12: expected server Finished"); }
+        let sfm: !*HsMessage = read_handshake(dec.unwrap().content, 0);
+        if !sfm.is_ok() { return err(sfm.unwrap_err()); }
+        if sfm.unwrap().msg_type != 20 { return err("tls12: expected server Finished"); }
         let expect: string = tls12_prf(master, "server finished", sha256(transcript.to_string()), 12);
-        if !expect.eq(sfm.val.body) { return err("tls12: server Finished mismatch"); }
+        if !expect.eq(sfm.unwrap().body) { return err("tls12: server Finished mismatch"); }
         got = true;
     }
 
@@ -359,10 +359,10 @@ fn _t12parsecerts(body: string) -> !*Vector<string> {
 pub fn tls12_write(conn: *Tls12Conn, data: string) -> !i32 {
     if conn.closed { return err("tls12: connection closed"); }
     let rec: !string = tls12_seal(conn.c_key, conn.c_iv, conn.c_seq, 23, data);
-    if !rec.ok { return err(rec.err); }
+    if !rec.is_ok() { return err(rec.unwrap_err()); }
     conn.c_seq = conn.c_seq + 1;
-    let w: !i32 = conn.stream.write(rec.val);
-    if !w.ok { return err(w.err); }
+    let w: !i32 = conn.stream.write(rec.unwrap());
+    if !w.is_ok() { return err(w.unwrap_err()); }
     return ok(data.len());
 }
 
@@ -376,20 +376,20 @@ pub fn tls12_read(conn: *Tls12Conn, max: i32) -> !string {
     if conn.closed { return ok(""); }
     while true {
         let rec: !*T12Record = _t12next(conn);
-        if !rec.ok {
-            if rec.err.contains("closed") { conn.closed = true; return ok(""); }
-            return err(rec.err);
+        if !rec.is_ok() {
+            if rec.unwrap_err().contains("closed") { conn.closed = true; return ok(""); }
+            return err(rec.unwrap_err());
         }
-        if rec.val.rtype == 20 { continue; }
-        let dec: !*Tls12Plain = tls12_open(conn.s_key, conn.s_iv, conn.s_seq, rec.val.raw);
-        if !dec.ok { return err(dec.err); }
+        if rec.unwrap().rtype == 20 { continue; }
+        let dec: !*Tls12Plain = tls12_open(conn.s_key, conn.s_iv, conn.s_seq, rec.unwrap().raw);
+        if !dec.is_ok() { return err(dec.unwrap_err()); }
         conn.s_seq = conn.s_seq + 1;
-        if dec.val.content_type == 23 {
-            let data: string = dec.val.content;
+        if dec.unwrap().content_type == 23 {
+            let data: string = dec.unwrap().content;
             let take: i32 = if data.len() < max { data.len() } else { max };
             if take < data.len() { conn.inbuf = data.substring(take, data.len()); }
             return ok(data.substring(0, take));
-        } else if dec.val.content_type == 21 {
+        } else if dec.unwrap().content_type == 21 {
             conn.closed = true;
             return ok("");
         }
@@ -401,7 +401,7 @@ pub fn tls12_close(conn: *Tls12Conn) {
     if !conn.closed {
         let alert: string = (1 as char).to_string().concat((0 as char).to_string());
         let rec: !string = tls12_seal(conn.c_key, conn.c_iv, conn.c_seq, 21, alert);
-        if rec.ok { let _w: !i32 = conn.stream.write(rec.val); }
+        if rec.is_ok() { let _w: !i32 = conn.stream.write(rec.unwrap()); }
         conn.closed = true;
     }
     conn.stream.close();
@@ -419,8 +419,8 @@ extern fn __glide_tls12_memcpy(dst: *void, src: *void, n: i32);
 /// Read up to `max` bytes into a caller buffer (binary Stream path). 0 = EOF.
 pub fn tls12_read_into(conn: *Tls12Conn, buf: *void, max: i32) -> !i32 {
     let r: !string = tls12_read(conn, max);
-    if !r.ok { if r.err.contains("closed") { return ok(0); } return err(r.err); }
-    let s: string = r.val;
+    if !r.is_ok() { if r.unwrap_err().contains("closed") { return ok(0); } return err(r.unwrap_err()); }
+    let s: string = r.unwrap();
     let n: i32 = if s.len() < max { s.len() } else { max };
     __glide_tls12_memcpy(buf, s as *void, n);
     return ok(n);

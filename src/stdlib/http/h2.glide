@@ -353,8 +353,8 @@ impl H2Conn {
 
     fn _read_response(self: *H2Conn, stream_id: i32) -> !*H2Response {
         let mut headers_done: bool = false;
-        let mut header_block: *ByteBuffer = ByteBuffer::new();
-        let mut body: *ByteBuffer = ByteBuffer::new();
+        let header_block: *ByteBuffer = ByteBuffer::new();
+        let body: *ByteBuffer = ByteBuffer::new();
         let mut stream_closed: bool = false;
         while !stream_closed {
             // Pull until we have at least one full frame header.
@@ -601,9 +601,9 @@ pub fn h2_serve(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse) {
     let mut have: i32 = 0;
     while have < plen {
         let rr: !i32 = s.read_bytes((pbuf as i64 + have as i64) as *u8, plen - have);
-        if !rr.ok { free(pbuf as *void); s.close(); return; }
-        if rr.val <= 0 { free(pbuf as *void); s.close(); return; }
-        have = have + rr.val;
+        if !rr.is_ok() { free(pbuf as *void); s.close(); return; }
+        if rr.unwrap() <= 0 { free(pbuf as *void); s.close(); return; }
+        have = have + rr.unwrap();
     }
     // Compare byte-by-byte (avoid strlen on a non-NUL-terminated buf).
     for let i: i32 = 0; i < plen; i++ {
@@ -630,7 +630,7 @@ pub fn h2_serve(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse) {
     write_frame_bytes(init_buf, FrameType::window_update(), 0, 0, wu);
 
     let w: !i32 = s.write_bytes(init_buf.data, init_buf.len);
-    if !w.ok { s.close(); return; }
+    if !w.is_ok() { s.close(); return; }
 
     // ---- 3. Per-conn state ----
     let dec: *HpackDecoder = HpackDecoder::new();
@@ -648,8 +648,8 @@ pub fn h2_serve(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse) {
         if !alive { break; }
 
         let hr: !*FrameHeader = read_frame_header(rx, rx_offset);
-        if !hr.ok { alive = false; break; }
-        let h: *FrameHeader = hr.val;
+        if !hr.is_ok() { alive = false; break; }
+        let h: *FrameHeader = hr.unwrap();
         let total: i32 = 9 + h.length;
         while rx.len - rx_offset < total {
             if !_h2srv_fill(s, rx) { alive = false; break; }
@@ -769,9 +769,9 @@ pub fn h2_serve(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse) {
 fn _h2srv_fill(s: *TlsStream, rx: *ByteBuffer) -> bool {
     let scratch: *u8 = malloc(16384) as *u8;
     let r: !i32 = s.read_bytes(scratch, 16384);
-    if !r.ok { free(scratch as *void); return false; }
-    if r.val <= 0 { free(scratch as *void); return false; }
-    for let i: i32 = 0; i < r.val; i++ { rx.push(scratch[i]); }
+    if !r.is_ok() { free(scratch as *void); return false; }
+    if r.unwrap() <= 0 { free(scratch as *void); return false; }
+    for let i: i32 = 0; i < r.unwrap(); i++ { rx.push(scratch[i]); }
     free(scratch as *void);
     return true;
 }
@@ -846,14 +846,14 @@ fn _h2srv_dispatch(s: *TlsStream, enc: *HpackEncoder, dec: *HpackDecoder,
     // ---- Decode the header block ----
     let hb_str: string = _bytes_to_string(st.header_block.data, st.header_block.len);
     let parsed: !*Vector<*HpackHeader> = dec.decode_block(hb_str, st.header_block.len);
-    if !parsed.ok { _h2srv_send_500(s, enc, st.id, parsed.err); return; }
+    if !parsed.is_ok() { _h2srv_send_500(s, enc, st.id, parsed.unwrap_err()); return; }
 
     let pseudo_method: string = "";
     let pseudo_path: string = "";
     let mut method: string = pseudo_method;
     let mut path: string = pseudo_path;
     let mut headers_block: string = "";
-    let lst: *Vector<*HpackHeader> = parsed.val;
+    let lst: *Vector<*HpackHeader> = parsed.unwrap();
     for let i: i32 = 0; i < lst.len(); i++ {
         let h: *HpackHeader = lst.get(i);
         if h.name.eq(":method") { method = h.value; continue; }

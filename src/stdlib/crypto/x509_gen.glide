@@ -105,18 +105,18 @@ fn _basic_constraints_leaf() -> string {
 pub fn generate_self_signed(cn: string, dns_names: *Vector<string>,
                             days: i32, now_epoch: i64) -> !*SelfSigned {
     let skr: !string = p256_generate();
-    if !skr.ok { return err(skr.err); }
-    let sk: string = skr.val;
+    if !skr.is_ok() { return err(skr.unwrap_err()); }
+    let sk: string = skr.unwrap();
     let pkr: !string = p256_pubkey(sk);
-    if !pkr.ok { return err(pkr.err); }
-    let pk: string = pkr.val;
+    if !pkr.is_ok() { return err(pkr.unwrap_err()); }
+    let pk: string = pkr.unwrap();
 
     // version [0] EXPLICIT v3 (INTEGER 2)
     let version: string = der_tlv(0xa0, der_integer((2 as char).to_string()));
     // serialNumber: 8 random bytes, forced positive
     let snr: !string = random_bytes(8);
-    if !snr.ok { return err(snr.err); }
-    let serial: string = der_integer(snr.val);
+    if !snr.is_ok() { return err(snr.unwrap_err()); }
+    let serial: string = der_integer(snr.unwrap());
     // AlgorithmIdentifier for ecdsa-with-SHA256 (no parameters)
     let sig_alg: string = der_seq(der_oid_encode(G_OID_ECDSA_SHA256).unwrap());
     // subject == issuer (self-signed)
@@ -137,8 +137,8 @@ pub fn generate_self_signed(cn: string, dns_names: *Vector<string>,
     // sign the TBS
     let digest: string = sha256(tbs);
     let sigr: !string = ecdsa_sign(sk, digest);
-    if !sigr.ok { return err(sigr.err); }
-    let raw: string = sigr.val;                 // 64 bytes r||s
+    if !sigr.is_ok() { return err(sigr.unwrap_err()); }
+    let raw: string = sigr.unwrap();                 // 64 bytes r||s
     let sig_der: string = der_seq(der_integer(raw.substring(0, 32)).concat(der_integer(raw.substring(32, 64))));
     let cert: string = der_seq(tbs.concat(sig_alg).concat(der_bitstring(sig_der)));
 

@@ -397,8 +397,8 @@ fn _ws_parse_url(s: string) -> !*WsParsedUrl {
         host = authority.substring(0, colon);
         let p_s: string = authority.substring(colon + 1, authority.len());
         let pr: !i32 = p_s.try_parse_int();
-        if !pr.ok { return err("ws: bad port"); }
-        port = pr.val;
+        if !pr.is_ok() { return err("ws: bad port"); }
+        port = pr.unwrap();
     }
     let u: *WsParsedUrl = malloc(sizeof(WsParsedUrl)) as *WsParsedUrl;
     u.is_wss = is_wss;

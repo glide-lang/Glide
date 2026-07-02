@@ -233,7 +233,7 @@ impl<T> State<T> {
     /// Read the state slot and cast to `*T`. Errors with status 500
     /// when no state was registered (likely a startup bug — `r.state(...)`
     /// must be called before `r.listen(...)`).
-    pub fn extract(req: *HttpRequest) -> !State<T> {
+    pub fn extract(_req: *HttpRequest) -> !State<T> {
         let p: *void = __glide_router_state_get();
         if p == null { return err("500:no application state set on router"); }
         return ok(State { val: p as *T });

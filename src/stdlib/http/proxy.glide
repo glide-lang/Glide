@@ -50,13 +50,13 @@ pub fn reverse_proxy(cfg: *ReverseProxyConfig, req: *HttpRequest) -> HttpRespons
     let rr: !*HttpResponse = c.do_once(out_req);
     free(out_req as *void);
     free(c as *void);
-    if !rr.ok {
+    if !rr.is_ok() {
         return HttpResponse::with_status(502)
             .set("Content-Type", "text/plain; charset=utf-8")
-            .body("bad gateway: ".concat(rr.err));
+            .body("bad gateway: ".concat(rr.unwrap_err()));
     }
 
-    let upstream_resp: *HttpResponse = rr.val;
+    let upstream_resp: *HttpResponse = rr.unwrap();
     // `with_status(...).body(...)` builds the response shell; the
     // header block is written wholesale because we're replacing
     // (filtered) the upstream's block, not appending individual entries

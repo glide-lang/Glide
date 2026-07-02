@@ -542,7 +542,7 @@ fn _hcli_hostport(auth: string, def_port: i32) -> *ParsedUrl {
         p.host = auth.substring(0, colon);
         let ps: string = auth.substring(colon + 1, auth.len());
         let pr: !i32 = ps.try_parse_int();
-        if pr.ok { p.port = pr.val; }
+        if pr.is_ok() { p.port = pr.unwrap(); }
     } else {
         p.host = auth;
     }
@@ -556,9 +556,9 @@ fn _hcli_read_headers(tcp: *TcpStream) -> !string {
     let bb: *ByteBuffer = ByteBuffer::new();
     while true {
         let r: !string = tcp.read_str(1024);
-        if !r.ok { bb.free(); return err(r.err); }
-        if r.val.len() == 0 { bb.free(); return err("http_client: proxy closed before CONNECT reply"); }
-        bb.push_str(r.val);
+        if !r.is_ok() { bb.free(); return err(r.unwrap_err()); }
+        if r.unwrap().len() == 0 { bb.free(); return err("http_client: proxy closed before CONNECT reply"); }
+        bb.push_str(r.unwrap());
         let acc: string = bb.to_string();
         if acc.index_of("\r\n\r\n") >= 0 { bb.free(); return ok(acc); }
         if acc.len() > 65536 { bb.free(); return err("http_client: proxy CONNECT header too large"); }
@@ -574,19 +574,19 @@ fn _hcli_tls_via_proxy(proxy: string, host: string, port: i32,
     let pa: *ParsedUrl = _hcli_hostport(proxy, 8080);
     let ts: !*TcpStream = TcpStream::connect_host(pa.host, pa.port);
     free(pa as *void);
-    if !ts.ok { cfg.free(); return err(ts.err); }
-    let tcp: *TcpStream = ts.val;
+    if !ts.is_ok() { cfg.free(); return err(ts.unwrap_err()); }
+    let tcp: *TcpStream = ts.unwrap();
     if timeout_ms > 0 { tcp.set_timeout_ms(timeout_ms); }
     let auth: string = host.concat(":").concat(_hcli_itos(port));
     let creq: string = "CONNECT ".concat(auth).concat(" HTTP/1.1\r\nHost: ").concat(auth).concat("\r\n\r\n");
     let w: !i32 = tcp.write_all(creq);
-    if !w.ok { tcp.close(); cfg.free(); return err(w.err); }
+    if !w.is_ok() { tcp.close(); cfg.free(); return err(w.unwrap_err()); }
     let hdr: !string = _hcli_read_headers(tcp);
-    if !hdr.ok { tcp.close(); cfg.free(); return err(hdr.err); }
+    if !hdr.is_ok() { tcp.close(); cfg.free(); return err(hdr.unwrap_err()); }
     // The CONNECT status line is "HTTP/1.1 200 ...". Accept any 2xx.
-    let line_end: i32 = hdr.val.index_of("\r\n");
-    let mut status_line: string = hdr.val;
-    if line_end >= 0 { status_line = hdr.val.substring(0, line_end); }
+    let line_end: i32 = hdr.unwrap().index_of("\r\n");
+    let mut status_line: string = hdr.unwrap();
+    if line_end >= 0 { status_line = hdr.unwrap().substring(0, line_end); }
     if status_line.index_of(" 2") < 0 {
         tcp.close(); cfg.free();
         return err("http_client: proxy CONNECT rejected: ".concat(status_line));
@@ -622,8 +622,8 @@ fn _hcli_parse_url(s: string) -> !*ParsedUrl {
         if close + 1 < authority.len() && authority.at(close + 1).to_int() == 58 {
             let p_s: string = authority.substring(close + 2, authority.len());
             let pr: !i32 = p_s.try_parse_int();
-            if !pr.ok { return err("url: bad port"); }
-            port = pr.val;
+            if !pr.is_ok() { return err("url: bad port"); }
+            port = pr.unwrap();
         }
     } else {
         let colon: i32 = _hcli_last_colon(authority);
@@ -631,8 +631,8 @@ fn _hcli_parse_url(s: string) -> !*ParsedUrl {
             host = authority.substring(0, colon);
             let p_s: string = authority.substring(colon + 1, authority.len());
             let pr: !i32 = p_s.try_parse_int();
-            if !pr.ok { return err("url: bad port"); }
-            port = pr.val;
+            if !pr.is_ok() { return err("url: bad port"); }
+            port = pr.unwrap();
         }
     }
 
@@ -671,7 +671,7 @@ fn _hcli_parse_response(raw: string) -> !*HttpResponse {
     let mut code_s: string = after;
     if p2 >= 0 { code_s = after.substring(0, p2); }
     let cr: !i32 = code_s.try_parse_int();
-    if !cr.ok { return err("http_client: bad status code"); }
+    if !cr.is_ok() { return err("http_client: bad status code"); }
 
     // Headers block: every line after the status line, joined with \r\n.
     let mut hdr: string = "";
@@ -688,20 +688,20 @@ fn _hcli_parse_response(raw: string) -> !*HttpResponse {
     let te: string = _hcli_find_header(hlow, "transfer-encoding");
     if te.index_of("chunked") >= 0 {
         let dec: !string = _hcli_dechunk(body);
-        if !dec.ok { return err(dec.err); }
-        body = dec.val;
+        if !dec.is_ok() { return err(dec.unwrap_err()); }
+        body = dec.unwrap();
     } else {
         let cls: string = _hcli_find_header(hlow, "content-length");
         if cls.len() > 0 {
             let clr: !i32 = cls.try_parse_int();
-            if clr.ok && clr.val >= 0 && clr.val < body.len() {
-                body = body.substring(0, clr.val);
+            if clr.is_ok() && clr.unwrap() >= 0 && clr.unwrap() < body.len() {
+                body = body.substring(0, clr.unwrap());
             }
         }
     }
 
     let r: *HttpResponse = malloc(sizeof(HttpResponse)) as *HttpResponse;
-    r.status = cr.val;
+    r.status = cr.unwrap();
     r.headers_block = hdr;
     r.body = body;
     return ok(r);
@@ -763,8 +763,8 @@ fn _hcli_dechunk(body: string) -> !string {
         let semi: i32 = size_line.index_of(";");
         if semi >= 0 { size_line = size_line.substring(0, semi); }
         let sz: !i32 = _hcli_parse_hex(size_line.trim());
-        if !sz.ok { bb.free(); return err(sz.err); }
-        let size: i32 = sz.val;
+        if !sz.is_ok() { bb.free(); return err(sz.unwrap_err()); }
+        let size: i32 = sz.unwrap();
         let data_start: i32 = le + 2;
         if size == 0 {
             let out: string = bb.to_string();
@@ -795,8 +795,8 @@ fn _hcli_resolve_url(base: string, loc: string) -> !string {
         return ok(loc);
     }
     let base_url: !*ParsedUrl = _hcli_parse_url(base);
-    if !base_url.ok { return err(base_url.err); }
-    let bu: *ParsedUrl = base_url.val;
+    if !base_url.is_ok() { return err(base_url.unwrap_err()); }
+    let bu: *ParsedUrl = base_url.unwrap();
     if loc.starts_with("//") {
         return ok(bu.scheme.concat(":").concat(loc));
     }

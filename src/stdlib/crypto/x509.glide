@@ -106,22 +106,22 @@ fn _bitstring_bytes(t: *Tlv) -> string {
 fn _name_cn(name_der: string) -> string {
     let outer: *Der = der_new(name_der);
     let seq: !*Tlv = der_read(outer);       // the Name SEQUENCE itself
-    if !seq.ok { return ""; }
-    let d: *Der = der_into(seq.val);
+    if !seq.is_ok() { return ""; }
+    let d: *Der = der_into(seq.unwrap());
     while der_more(d) {
         let rdn: !*Tlv = der_read(d);           // SET
-        if !rdn.ok { return ""; }
-        let sd: *Der = der_into(rdn.val);
+        if !rdn.is_ok() { return ""; }
+        let sd: *Der = der_into(rdn.unwrap());
         while der_more(sd) {
             let atv: !*Tlv = der_read(sd);       // SEQUENCE { OID, value }
-            if !atv.ok { return ""; }
-            let ad: *Der = der_into(atv.val);
+            if !atv.is_ok() { return ""; }
+            let ad: *Der = der_into(atv.unwrap());
             let oid: !*Tlv = der_read(ad);
-            if !oid.ok { return ""; }
-            let os: !string = der_oid_string(der_content(oid.val));
+            if !oid.is_ok() { return ""; }
+            let os: !string = der_oid_string(der_content(oid.unwrap()));
             let val: !*Tlv = der_read(ad);
-            if os.ok && os.val.eq(OID_CN) && val.ok {
-                return der_content(val.val);
+            if os.is_ok() && os.unwrap().eq(OID_CN) && val.is_ok() {
+                return der_content(val.unwrap());
             }
         }
     }
@@ -133,14 +133,14 @@ fn _name_cn(name_der: string) -> string {
 fn _parse_san(ext_value: string, out: *Vector<string>) {
     let d: *Der = der_new(ext_value);
     let seq: !*Tlv = der_read(d);
-    if !seq.ok { return; }
-    let gd: *Der = der_into(seq.val);
+    if !seq.is_ok() { return; }
+    let gd: *Der = der_into(seq.unwrap());
     while der_more(gd) {
         let gn: !*Tlv = der_read(gd);
-        if !gn.ok { return; }
+        if !gn.is_ok() { return; }
         // context tag [2] primitive = 0x82
-        if gn.val.tag == 0x82 {
-            out.push(der_content(gn.val));
+        if gn.unwrap().tag == 0x82 {
+            out.push(der_content(gn.unwrap()));
         }
     }
 }
@@ -148,12 +148,12 @@ fn _parse_san(ext_value: string, out: *Vector<string>) {
 fn _parse_basic_constraints(ext_value: string) -> bool {
     let d: *Der = der_new(ext_value);
     let seq: !*Tlv = der_read(d);
-    if !seq.ok { return false; }
-    let bd: *Der = der_into(seq.val);
+    if !seq.is_ok() { return false; }
+    let bd: *Der = der_into(seq.unwrap());
     if !der_more(bd) { return false; }
     let first: !*Tlv = der_read(bd);
-    if first.ok && first.val.tag == ASN1_BOOLEAN {
-        let c: string = der_content(first.val);
+    if first.is_ok() && first.unwrap().tag == ASN1_BOOLEAN {
+        let c: string = der_content(first.unwrap());
         return c.len() == 1 && _b(c, 0) != 0;
     }
     return false;
@@ -163,109 +163,109 @@ fn _parse_basic_constraints(ext_value: string) -> bool {
 pub fn cert_parse(der: string) -> !*Cert {
     let top: *Der = der_new(der);
     let certtlv: !*Tlv = der_expect(top, ASN1_SEQUENCE);
-    if !certtlv.ok { return err(certtlv.err); }
-    let cd: *Der = der_into(certtlv.val);
+    if !certtlv.is_ok() { return err(certtlv.unwrap_err()); }
+    let cd: *Der = der_into(certtlv.unwrap());
 
     // tbsCertificate — capture its full DER (header + content).
     let tbs_start: i32 = cd.pos;
     let tbs: !*Tlv = der_expect(cd, ASN1_SEQUENCE);
-    if !tbs.ok { return err(tbs.err); }
-    let tbs_der: string = der.substring(tbs_start, tbs.val.next);
-    let td: *Der = der_into(tbs.val);
+    if !tbs.is_ok() { return err(tbs.unwrap_err()); }
+    let tbs_der: string = der.substring(tbs_start, tbs.unwrap().next);
+    let td: *Der = der_into(tbs.unwrap());
 
     // [0] version (optional) then serialNumber.
     if der_more(td) {
         let peek_pos: i32 = td.pos;
         let e: !*Tlv = der_read(td);
-        if !e.ok { return err(e.err); }
-        if e.val.tag != 0xa0 {
+        if !e.is_ok() { return err(e.unwrap_err()); }
+        if e.unwrap().tag != 0xa0 {
             // was actually the serialNumber; rewind by re-seating the cursor.
             td.pos = peek_pos;
             let _sn: !*Tlv = der_read(td);        // serialNumber
-            if !_sn.ok { return err(_sn.err); }
+            if !_sn.is_ok() { return err(_sn.unwrap_err()); }
         } else {
             let _sn: !*Tlv = der_read(td);        // serialNumber after version
-            if !_sn.ok { return err(_sn.err); }
+            if !_sn.is_ok() { return err(_sn.unwrap_err()); }
         }
     }
 
     // signature AlgorithmIdentifier (inside tbs) — skip, we use the outer one.
     let _sigalg_tbs: !*Tlv = der_expect(td, ASN1_SEQUENCE);
-    if !_sigalg_tbs.ok { return err(_sigalg_tbs.err); }
+    if !_sigalg_tbs.is_ok() { return err(_sigalg_tbs.unwrap_err()); }
 
     // issuer Name.
     let issuer_start: i32 = td.pos;
     let issuer: !*Tlv = der_expect(td, ASN1_SEQUENCE);
-    if !issuer.ok { return err(issuer.err); }
-    let issuer_der: string = der.substring(issuer_start, issuer.val.next);
+    if !issuer.is_ok() { return err(issuer.unwrap_err()); }
+    let issuer_der: string = der.substring(issuer_start, issuer.unwrap().next);
 
     // validity SEQUENCE { notBefore, notAfter }.
     let validity: !*Tlv = der_expect(td, ASN1_SEQUENCE);
-    if !validity.ok { return err(validity.err); }
-    let vd: *Der = der_into(validity.val);
+    if !validity.is_ok() { return err(validity.unwrap_err()); }
+    let vd: *Der = der_into(validity.unwrap());
     let nb: !*Tlv = der_read(vd);
     let na: !*Tlv = der_read(vd);
-    if !nb.ok || !na.ok { return err("x509: bad validity"); }
-    let nbt: !i64 = _x509_parse_time(nb.val.tag, der_content(nb.val));
-    let nat: !i64 = _x509_parse_time(na.val.tag, der_content(na.val));
-    if !nbt.ok || !nat.ok { return err("x509: bad time"); }
+    if !nb.is_ok() || !na.is_ok() { return err("x509: bad validity"); }
+    let nbt: !i64 = _x509_parse_time(nb.unwrap().tag, der_content(nb.unwrap()));
+    let nat: !i64 = _x509_parse_time(na.unwrap().tag, der_content(na.unwrap()));
+    if !nbt.is_ok() || !nat.is_ok() { return err("x509: bad time"); }
 
     // subject Name.
     let subject_start: i32 = td.pos;
     let subject: !*Tlv = der_expect(td, ASN1_SEQUENCE);
-    if !subject.ok { return err(subject.err); }
-    let subject_der: string = der.substring(subject_start, subject.val.next);
+    if !subject.is_ok() { return err(subject.unwrap_err()); }
+    let subject_der: string = der.substring(subject_start, subject.unwrap().next);
 
     // subjectPublicKeyInfo SEQUENCE { AlgorithmIdentifier, BIT STRING }.
     let spki: !*Tlv = der_expect(td, ASN1_SEQUENCE);
-    if !spki.ok { return err(spki.err); }
-    let spd: *Der = der_into(spki.val);
+    if !spki.is_ok() { return err(spki.unwrap_err()); }
+    let spd: *Der = der_into(spki.unwrap());
     let alg: !*Tlv = der_expect(spd, ASN1_SEQUENCE);
-    if !alg.ok { return err(alg.err); }
-    let ad: *Der = der_into(alg.val);
+    if !alg.is_ok() { return err(alg.unwrap_err()); }
+    let ad: *Der = der_into(alg.unwrap());
     let algoid: !*Tlv = der_read(ad);
-    if !algoid.ok { return err(algoid.err); }
-    let pubalg: !string = der_oid_string(der_content(algoid.val));
-    if !pubalg.ok { return err(pubalg.err); }
+    if !algoid.is_ok() { return err(algoid.unwrap_err()); }
+    let pubalg: !string = der_oid_string(der_content(algoid.unwrap()));
+    if !pubalg.is_ok() { return err(pubalg.unwrap_err()); }
     let mut curve: string = "";
-    if pubalg.val.eq(OID_EC_PUBKEY) && der_more(ad) {
+    if pubalg.unwrap().eq(OID_EC_PUBKEY) && der_more(ad) {
         let c: !*Tlv = der_read(ad);
-        if c.ok && c.val.tag == ASN1_OID {
-            let co: !string = der_oid_string(der_content(c.val));
-            if co.ok { curve = co.val; }
+        if c.is_ok() && c.unwrap().tag == ASN1_OID {
+            let co: !string = der_oid_string(der_content(c.unwrap()));
+            if co.is_ok() { curve = co.unwrap(); }
         }
     }
     let keybits: !*Tlv = der_expect(spd, ASN1_BITSTRING);
-    if !keybits.ok { return err(keybits.err); }
-    let pubkey: string = _bitstring_bytes(keybits.val);
+    if !keybits.is_ok() { return err(keybits.unwrap_err()); }
+    let pubkey: string = _bitstring_bytes(keybits.unwrap());
 
     // extensions [3] EXPLICIT (optional).
     let sans: *Vector<string> = Vector::new();
     let mut is_ca: bool = false;
     while der_more(td) {
         let ext: !*Tlv = der_read(td);
-        if !ext.ok { break; }
-        if ext.val.tag == 0xa3 {
-            let ed: *Der = der_into(ext.val);
+        if !ext.is_ok() { break; }
+        if ext.unwrap().tag == 0xa3 {
+            let ed: *Der = der_into(ext.unwrap());
             let extseq: !*Tlv = der_expect(ed, ASN1_SEQUENCE);
-            if !extseq.ok { break; }
-            let esd: *Der = der_into(extseq.val);
+            if !extseq.is_ok() { break; }
+            let esd: *Der = der_into(extseq.unwrap());
             while der_more(esd) {
                 let one: !*Tlv = der_read(esd);      // Extension SEQUENCE
-                if !one.ok { break; }
-                let od: *Der = der_into(one.val);
+                if !one.is_ok() { break; }
+                let od: *Der = der_into(one.unwrap());
                 let eoid: !*Tlv = der_read(od);
-                if !eoid.ok { break; }
-                let eo: !string = der_oid_string(der_content(eoid.val));
+                if !eoid.is_ok() { break; }
+                let eo: !string = der_oid_string(der_content(eoid.unwrap()));
                 // optional critical BOOLEAN, then value OCTET STRING
                 let mut vtlv: !*Tlv = der_read(od);
-                if vtlv.ok && vtlv.val.tag == ASN1_BOOLEAN {
+                if vtlv.is_ok() && vtlv.unwrap().tag == ASN1_BOOLEAN {
                     vtlv = der_read(od);
                 }
-                if eo.ok && vtlv.ok && vtlv.val.tag == ASN1_OCTETSTRING {
-                    let inner: string = der_content(vtlv.val);
-                    if eo.val.eq(OID_SAN) { _parse_san(inner, sans); }
-                    if eo.val.eq(OID_BASIC_CONSTRAINTS) { is_ca = _parse_basic_constraints(inner); }
+                if eo.is_ok() && vtlv.is_ok() && vtlv.unwrap().tag == ASN1_OCTETSTRING {
+                    let inner: string = der_content(vtlv.unwrap());
+                    if eo.unwrap().eq(OID_SAN) { _parse_san(inner, sans); }
+                    if eo.unwrap().eq(OID_BASIC_CONSTRAINTS) { is_ca = _parse_basic_constraints(inner); }
                 }
             }
         }
@@ -273,24 +273,24 @@ pub fn cert_parse(der: string) -> !*Cert {
 
     // signatureAlgorithm (outer) + signatureValue.
     let sigalg: !*Tlv = der_expect(cd, ASN1_SEQUENCE);
-    if !sigalg.ok { return err(sigalg.err); }
-    let sad: *Der = der_into(sigalg.val);
+    if !sigalg.is_ok() { return err(sigalg.unwrap_err()); }
+    let sad: *Der = der_into(sigalg.unwrap());
     let saoid: !*Tlv = der_read(sad);
-    if !saoid.ok { return err(saoid.err); }
-    let sig_alg: !string = der_oid_string(der_content(saoid.val));
-    if !sig_alg.ok { return err(sig_alg.err); }
+    if !saoid.is_ok() { return err(saoid.unwrap_err()); }
+    let sig_alg: !string = der_oid_string(der_content(saoid.unwrap()));
+    if !sig_alg.is_ok() { return err(sig_alg.unwrap_err()); }
     let sigval: !*Tlv = der_expect(cd, ASN1_BITSTRING);
-    if !sigval.ok { return err(sigval.err); }
+    if !sigval.is_ok() { return err(sigval.unwrap_err()); }
 
     let c: *Cert = malloc(sizeof(Cert)) as *Cert;
     c.tbs_der = tbs_der;
-    c.sig_alg = sig_alg.val;
-    c.signature = _bitstring_bytes(sigval.val);
-    c.pubkey_alg = pubalg.val;
+    c.sig_alg = sig_alg.unwrap();
+    c.signature = _bitstring_bytes(sigval.unwrap());
+    c.pubkey_alg = pubalg.unwrap();
     c.pubkey_curve = curve;
     c.pubkey = pubkey;
-    c.not_before = nbt.val;
-    c.not_after = nat.val;
+    c.not_before = nbt.unwrap();
+    c.not_after = nat.unwrap();
     c.subject_der = subject_der;
     c.issuer_der = issuer_der;
     c.subject_cn = _name_cn(subject_der);
@@ -319,13 +319,13 @@ fn _padn(mag: string, n: i32) -> string {
 fn _ecdsa_der_to_raw(sig_der: string, size: i32) -> !string {
     let d: *Der = der_new(sig_der);
     let seq: !*Tlv = der_expect(d, ASN1_SEQUENCE);
-    if !seq.ok { return err(seq.err); }
-    let sd: *Der = der_into(seq.val);
+    if !seq.is_ok() { return err(seq.unwrap_err()); }
+    let sd: *Der = der_into(seq.unwrap());
     let r: !*Tlv = der_expect(sd, ASN1_INTEGER);
-    if !r.ok { return err(r.err); }
+    if !r.is_ok() { return err(r.unwrap_err()); }
     let s: !*Tlv = der_expect(sd, ASN1_INTEGER);
-    if !s.ok { return err(s.err); }
-    return ok(_padn(der_int_bytes(r.val), size).concat(_padn(der_int_bytes(s.val), size)));
+    if !s.is_ok() { return err(s.unwrap_err()); }
+    return ok(_padn(der_int_bytes(r.unwrap()), size).concat(_padn(der_int_bytes(s.unwrap()), size)));
 }
 
 /// Verify `cert`'s signature using the issuer's public key: an EC point
@@ -356,18 +356,18 @@ pub fn cert_verify_signature(cert: *Cert, issuer_pubkey: string) -> !bool {
         // P-384: e is the leftmost 384 bits, i.e. the digest left-padded to 48.
         let z: string = if digest.len() >= 48 { digest.substring(0, 48) } else { _padn(digest, 48) };
         let raw: !string = _ecdsa_der_to_raw(cert.signature, 48);
-        if !raw.ok { return err(raw.err); }
-        let v: !i32 = ecdsa_p384_verify(issuer_pubkey, z, raw.val);
-        if !v.ok { return err(v.err); }
-        return ok(v.val == 1);
+        if !raw.is_ok() { return err(raw.unwrap_err()); }
+        let v: !i32 = ecdsa_p384_verify(issuer_pubkey, z, raw.unwrap());
+        if !v.is_ok() { return err(v.unwrap_err()); }
+        return ok(v.unwrap() == 1);
     }
     // P-256: e is the leftmost 256 bits of the digest.
     let z: string = digest.substring(0, 32);
     let raw: !string = _ecdsa_der_to_raw(cert.signature, 32);
-    if !raw.ok { return err(raw.err); }
-    let v: !i32 = ecdsa_verify(issuer_pubkey, z, raw.val);
-    if !v.ok { return err(v.err); }
-    return ok(v.val == 1);
+    if !raw.is_ok() { return err(raw.unwrap_err()); }
+    let v: !i32 = ecdsa_verify(issuer_pubkey, z, raw.unwrap());
+    if !v.is_ok() { return err(v.unwrap_err()); }
+    return ok(v.unwrap() == 1);
 }
 
 // ---- hostname matching (RFC 6125) -------------------------------------
@@ -441,8 +441,8 @@ pub fn verify_chain(leaf: *Cert, intermediates: *Vector<*Cert>,
         if root != null {
             if !cert_is_time_valid(root, now) { return err("x509: trust anchor expired"); }
             let v: !bool = cert_verify_signature(current, root.pubkey);
-            if !v.ok { return err(v.err); }
-            if !v.val { return err("x509: signature does not verify against trust anchor"); }
+            if !v.is_ok() { return err(v.unwrap_err()); }
+            if !v.unwrap() { return err("x509: signature does not verify against trust anchor"); }
             return ok(true);
         }
         // Otherwise step up through the supplied intermediates.
@@ -452,8 +452,8 @@ pub fn verify_chain(leaf: *Cert, intermediates: *Vector<*Cert>,
         }
         if !issuer.is_ca { return err("x509: intermediate is not a CA"); }
         let v: !bool = cert_verify_signature(current, issuer.pubkey);
-        if !v.ok { return err(v.err); }
-        if !v.val { return err("x509: intermediate signature does not verify"); }
+        if !v.is_ok() { return err(v.unwrap_err()); }
+        if !v.unwrap() { return err("x509: intermediate signature does not verify"); }
         current = issuer;
     }
     return err("x509: certificate chain too long");
@@ -491,7 +491,7 @@ pub fn load_system_roots() -> !*Vector<*Cert> {
         let roots: *Vector<*Cert> = Vector::new();
         for let j: i32 = 0; j < ders.len(); j++ {
             let c: !*Cert = cert_parse(ders.get(j));
-            if c.ok { roots.push(c.val); }
+            if c.is_ok() { roots.push(c.unwrap()); }
         }
         if roots.len() > 0 { return ok(roots); }
     }

@@ -68,8 +68,8 @@ pub fn build_client_hello(hostname: string, x25519_pub: string,
     let mut rnd: string = random32;
     if rnd.len() != 32 {
         let r: !string = random_bytes(32);
-        if !r.ok { return err(r.err); }
-        rnd = r.val;
+        if !r.is_ok() { return err(r.unwrap_err()); }
+        rnd = r.unwrap();
     }
     let body: *ByteBuffer = ByteBuffer::new();
     body.push_str(_hsu16(0x0303));                 // legacy_version TLS 1.2
@@ -261,8 +261,8 @@ pub fn build_server_hello(cipher: i32, server_key_share: string,
     let mut rnd: string = random32;
     if rnd.len() != 32 {
         let r: !string = random_bytes(32);
-        if !r.ok { return err(r.err); }
-        rnd = r.val;
+        if !r.is_ok() { return err(r.unwrap_err()); }
+        rnd = r.unwrap();
     }
     let body: *ByteBuffer = ByteBuffer::new();
     body.push_str(_hsu16(0x0303));                 // legacy_version TLS 1.2

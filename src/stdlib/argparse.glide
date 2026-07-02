@@ -231,7 +231,7 @@ impl ArgParser {
     /// if !r.ok { eprintln(r.err); env_exit(2); }
     /// ```
     pub fn parse_argv(self: *ArgParser) -> !i32 {
-        let mut tokens: *Vector<string> = Vector::new();
+        let tokens: *Vector<string> = Vector::new();
         for let i: i32 = 1; i < args_count(); i++ {
             tokens.push(args_at(i));
         }

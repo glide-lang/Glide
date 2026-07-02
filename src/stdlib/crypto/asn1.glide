@@ -104,11 +104,11 @@ pub fn der_read(d: *Der) -> !*Tlv {
 /// Read the next element and require it to have `tag`.
 pub fn der_expect(d: *Der, tag: i32) -> !*Tlv {
     let r: !*Tlv = der_read(d);
-    if !r.ok { return err(r.err); }
-    if r.val.tag != tag {
-        return err("asn1: expected tag ".concat(_hex2(tag)).concat(", got ").concat(_hex2(r.val.tag)));
+    if !r.is_ok() { return err(r.unwrap_err()); }
+    if r.unwrap().tag != tag {
+        return err("asn1: expected tag ".concat(_hex2(tag)).concat(", got ").concat(_hex2(r.unwrap().tag)));
     }
-    return ok(r.val);
+    return ok(r.unwrap());
 }
 
 /// The raw content bytes of a TLV (binary-safe).
@@ -118,7 +118,7 @@ pub fn der_content(t: *Tlv) -> string {
 
 /// The full element including its header — needed when a signature is
 /// computed over an encoded structure (e.g. TBSCertificate).
-pub fn der_element(d: *Der, t: *Tlv) -> string {
+pub fn der_element(_d: *Der, t: *Tlv) -> string {
     // find header start: t.content_start minus the header we consumed.
     // Recompute by scanning back is fragile; instead the caller records
     // the element start. Here we expose content; element-with-header is

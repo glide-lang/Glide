@@ -890,7 +890,7 @@ impl TlsStream {
         let ips: *Vector<*IpAddr> = r.val;
         if ips.len() == 0 { return err("tls: no addresses for ".concat(host)); }
 
-        let mut last_err: string = "tls: connect failed";
+        let last_err: string = "tls: connect failed";
         let verify_int: i32 = 0;
         if cfg.verify { verify_int = 1; }
 

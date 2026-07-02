@@ -71,13 +71,13 @@ fn _be16(buf: *u8, off: i32) -> i32 {
 /// `timeout_ms` bounds the wait for a reply.
 pub fn ping(host: string, timeout_ms: i32) -> !i64 {
     let res: !*Vector<*IpAddr> = resolve(host);
-    if !res.ok { return err(res.err); }
-    if res.val.len() == 0 { return err("icmp: no address for ".concat(host)); }
-    let dst: *SocketAddr = SocketAddr::new(res.val.get(0), 0);
+    if !res.is_ok() { return err(res.unwrap_err()); }
+    if res.unwrap().len() == 0 { return err("icmp: no address for ".concat(host)); }
+    let dst: *SocketAddr = SocketAddr::new(res.unwrap().get(0), 0);
 
     let rs: !*RawSocket = RawSocket::open_icmp();
-    if !rs.ok { return err(rs.err); }
-    let sock: *RawSocket = rs.val;
+    if !rs.is_ok() { return err(rs.unwrap_err()); }
+    let sock: *RawSocket = rs.unwrap();
     let _to: !i32 = sock.set_timeout_ms(timeout_ms);
 
     let id: i32 = 4321;
@@ -88,15 +88,15 @@ pub fn ping(host: string, timeout_ms: i32) -> !i64 {
     let t0: i64 = Time::now().unix_millis();
     let sent: !i32 = sock.send_to(pkt as *void, plen, dst);
     free(pkt as *void);
-    if !sent.ok { sock.close(); return err(sent.err); }
+    if !sent.is_ok() { sock.close(); return err(sent.unwrap_err()); }
 
     let rbuf: *u8 = malloc(1500) as *u8;
     let mut tries: i32 = 0;
     while tries < 8 {
         tries = tries + 1;
         let rr: !*RawRecv = sock.recv_from(rbuf as *void, 1500);
-        if !rr.ok { free(rbuf as *void); sock.close(); return err("icmp: timeout"); }
-        let n: i32 = rr.val.n;
+        if !rr.is_ok() { free(rbuf as *void); sock.close(); return err("icmp: timeout"); }
+        let n: i32 = rr.unwrap().n;
         let ihl: i32 = ((rbuf[0] as i32) & 15) * 4;   // IP header length
         if n < ihl + 8 { continue; }
         let ty: i32 = rbuf[ihl] as i32;               // ICMP type (0 = echo reply)
@@ -126,13 +126,13 @@ pub fn ping(host: string, timeout_ms: i32) -> !i64 {
 /// option is a later addition. `ping` works on all three.
 pub fn traceroute(host: string, max_hops: i32, timeout_ms: i32) -> !*Vector<string> {
     let res: !*Vector<*IpAddr> = resolve(host);
-    if !res.ok { return err(res.err); }
-    if res.val.len() == 0 { return err("icmp: no address for ".concat(host)); }
-    let dst: *SocketAddr = SocketAddr::new(res.val.get(0), 0);
+    if !res.is_ok() { return err(res.unwrap_err()); }
+    if res.unwrap().len() == 0 { return err("icmp: no address for ".concat(host)); }
+    let dst: *SocketAddr = SocketAddr::new(res.unwrap().get(0), 0);
 
     let rs: !*RawSocket = RawSocket::open_icmp();
-    if !rs.ok { return err(rs.err); }
-    let sock: *RawSocket = rs.val;
+    if !rs.is_ok() { return err(rs.unwrap_err()); }
+    let sock: *RawSocket = rs.unwrap();
     let _to: !i32 = sock.set_timeout_ms(timeout_ms);
 
     let id: i32 = 4321;
@@ -144,17 +144,17 @@ pub fn traceroute(host: string, max_hops: i32, timeout_ms: i32) -> !*Vector<stri
         let _st: !i32 = sock.set_ttl(ttl);
         let plen: i32 = icmp_build_echo(pkt, id, ttl, 32);
         let sent: !i32 = sock.send_to(pkt as *void, plen, dst);
-        if !sent.ok { hops.push(ttl.to_string().concat(" !send")); continue; }
+        if !sent.is_ok() { hops.push(ttl.to_string().concat(" !send")); continue; }
 
         let rr: !*RawRecv = sock.recv_from(rbuf as *void, 1500);
-        if !rr.ok {
+        if !rr.is_ok() {
             hops.push(ttl.to_string().concat(" *"));
             continue;
         }
-        let from: string = rr.val.from.ip.to_string();
+        let from: string = rr.unwrap().from.ip.to_string();
         hops.push(ttl.to_string().concat(" ").concat(from));
         let ihl: i32 = ((rbuf[0] as i32) & 15) * 4;
-        if rr.val.n >= ihl + 1 {
+        if rr.unwrap().n >= ihl + 1 {
             let ty: i32 = rbuf[ihl] as i32;
             if ty == 0 { ttl = max_hops + 1; }   // echo reply: reached dest, stop
         }

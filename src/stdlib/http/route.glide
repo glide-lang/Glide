@@ -365,7 +365,7 @@ fn macro_routes(args: *Vector<Expr>) -> *Vector<Stmt> {
 
 // "<method>|<path>" — used as the dup-detection key. Returns "" when the
 // attribute doesn't decode into a method+path pair (malformed @route).
-fn _route_key(s: Stmt, a: Attr) -> string {
+fn _route_key(_s: Stmt, a: Attr) -> string {
     let mut method: string = "";
     let mut path: string = "";
     if a.name.eq("route") {

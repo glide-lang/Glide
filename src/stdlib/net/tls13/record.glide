@@ -89,11 +89,11 @@ pub fn tls13_seal(aead: i32, key: string, iv: string, seq: u64,
     let aad: string = _record_header(plaintext.len() + 16);
     let nonce: string = tls13_record_nonce(iv, seq);
     let ct: !string = _aead_seal(aead, key, nonce, plaintext, aad);
-    if !ct.ok { return err(ct.err); }
+    if !ct.is_ok() { return err(ct.unwrap_err()); }
 
     let rec: *ByteBuffer = ByteBuffer::new();
     rec.push_str(aad);           // header (same 5 bytes)
-    rec.push_str(ct.val);
+    rec.push_str(ct.unwrap());
     let out: string = rec.to_string();
     rec.free();
     return ok(out);
@@ -114,8 +114,8 @@ pub fn tls13_open(aead: i32, key: string, iv: string, seq: u64, record: string) 
     let body: string = record.substring(5, record.len());
     let nonce: string = tls13_record_nonce(iv, seq);
     let pt: !string = _aead_open(aead, key, nonce, body, aad);
-    if !pt.ok { return err(pt.err); }
-    let plaintext: string = pt.val;
+    if !pt.is_ok() { return err(pt.unwrap_err()); }
+    let plaintext: string = pt.unwrap();
     // strip trailing zero padding, then the last non-zero byte is the type.
     let mut end: i32 = plaintext.len();
     while end > 0 && _recb(plaintext, end - 1) == 0 { end = end - 1; }

@@ -111,11 +111,11 @@ pub fn jwt_verify(token: string, key: string) -> !JwtClaims {
     }
 
     let payload_r: !string = _b64url_decode(parts.get(1));
-    if !payload_r.ok {
+    if !payload_r.is_ok() {
         return err("400:malformed jwt");
     }
 
-    let raw: *JsonValue = JsonValue::parse(payload_r.val);
+    let raw: *JsonValue = JsonValue::parse(payload_r.unwrap());
     if raw == null || raw.kind != JSON_OBJECT {
         return err("400:malformed jwt");
     }

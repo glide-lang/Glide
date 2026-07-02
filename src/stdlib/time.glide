@@ -205,7 +205,7 @@ fn _four_digit(n: i32) -> string {
 
 fn int_str(n: i32) -> string {
     if n == 0 { return "0"; }
-    let mut neg: bool = n < 0;
+    let neg: bool = n < 0;
     let mut x: i32 = n;
     if neg { x = -x; }
     let mut out: string = "";

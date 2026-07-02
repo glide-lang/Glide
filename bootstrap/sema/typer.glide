@@ -4521,6 +4521,17 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         // wrapper fields, and give a clear "unwrap first" error for anything else
         // instead of leaking a confusing generated-C failure.
         if recv_ty != null && (recv_ty.kind == TY_RESULT || recv_ty.kind == TY_OPTION || recv_ty.kind == TY_OPT_RESULT) && e.field != null && !e.field.eq("") {
+            // The `.ok` / `.val` / `.err` fields on a Result are deprecated in
+            // favour of the `.is_ok()` / `.unwrap()` / `.unwrap_err()` methods.
+            // Emit a warning carrying a mechanical fix so `glide fix` migrates.
+            if recv_ty.kind == TY_RESULT && (e.field.eq("val") || e.field.eq("ok") || e.field.eq("err")) {
+                let ml: i32 = _field_pos_line(e);
+                let mc: i32 = _field_pos_col(e);
+                let repl: string = if e.field.eq("val") { "unwrap()" } else { if e.field.eq("ok") { "is_ok()" } else { "unwrap_err()" } };
+                t.warn_with_fix(ml, mc, e.field.len(), "deprecated-result-field",
+                    "`.".concat(e.field).concat("` on a Result is deprecated; use `.").concat(repl).concat("`"),
+                    ml, mc, ml, mc + e.field.len(), repl);
+            }
             if e.field.eq("val") {
                 return recv_ty.inner;
             }

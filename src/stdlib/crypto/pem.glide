@@ -42,10 +42,10 @@ pub fn pem_decode(text: string) -> *Vector<*PemBlock> {
         let body: string = text.substring(body_start, end_pos);
         let b64: string = _strip_ws(body);
         let der: !string = b64_decode(b64);
-        if der.ok {
+        if der.is_ok() {
             let blk: *PemBlock = malloc(sizeof(PemBlock)) as *PemBlock;
             blk.label = label;
-            blk.der = der.val;
+            blk.der = der.unwrap();
             out.push(blk);
         }
         pos = end_pos + end_marker.len();

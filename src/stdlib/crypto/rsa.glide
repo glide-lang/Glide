@@ -134,14 +134,14 @@ pub const RSA_SHA1_PREFIX: string = "\x30\x21\x30\x09\x06\x05\x2b\x0e\x03\x02\x1
 pub fn rsa_pkcs1_verify(pubkey_der: string, prefix: string, hash: string, signature: string) -> !bool {
     let d: *Der = der_new(pubkey_der);
     let seq: !*Tlv = der_expect(d, ASN1_SEQUENCE);
-    if !seq.ok { return err(seq.err); }
-    let sd: *Der = der_into(seq.val);
+    if !seq.is_ok() { return err(seq.unwrap_err()); }
+    let sd: *Der = der_into(seq.unwrap());
     let ntlv: !*Tlv = der_expect(sd, ASN1_INTEGER);
-    if !ntlv.ok { return err(ntlv.err); }
+    if !ntlv.is_ok() { return err(ntlv.unwrap_err()); }
     let etlv: !*Tlv = der_expect(sd, ASN1_INTEGER);
-    if !etlv.ok { return err(etlv.err); }
-    let n: string = der_int_bytes(ntlv.val);
-    let e: string = der_int_bytes(etlv.val);
+    if !etlv.is_ok() { return err(etlv.unwrap_err()); }
+    let n: string = der_int_bytes(ntlv.unwrap());
+    let e: string = der_int_bytes(etlv.unwrap());
     let k: i32 = n.len();
     if signature.len() != k { return ok(false); }
 
@@ -224,14 +224,14 @@ fn _bitlen8(b: i32) -> i32 {
 pub fn rsa_pss_verify(pubkey_der: string, sel: i32, message: string, signature: string) -> !bool {
     let d: *Der = der_new(pubkey_der);
     let seq: !*Tlv = der_expect(d, ASN1_SEQUENCE);
-    if !seq.ok { return err(seq.err); }
-    let sd: *Der = der_into(seq.val);
+    if !seq.is_ok() { return err(seq.unwrap_err()); }
+    let sd: *Der = der_into(seq.unwrap());
     let ntlv: !*Tlv = der_expect(sd, ASN1_INTEGER);
-    if !ntlv.ok { return err(ntlv.err); }
+    if !ntlv.is_ok() { return err(ntlv.unwrap_err()); }
     let etlv: !*Tlv = der_expect(sd, ASN1_INTEGER);
-    if !etlv.ok { return err(etlv.err); }
-    let n: string = der_int_bytes(ntlv.val);
-    let e: string = der_int_bytes(etlv.val);
+    if !etlv.is_ok() { return err(etlv.unwrap_err()); }
+    let n: string = der_int_bytes(ntlv.unwrap());
+    let e: string = der_int_bytes(etlv.unwrap());
     let k: i32 = n.len();
     if signature.len() != k { return ok(false); }
 
