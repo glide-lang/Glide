@@ -571,6 +571,18 @@ case_feature("member completion after .unwrap() on a Result<string>",
         "contains" in labs and "i32" not in labs and len(labs) < 100,
         f"got {len(labs)} items: {labs[:6]}"))([it.get("label") for it in (r.get("result",[]) if r else [])]))
 
+case_feature("module-qualified free fn resolves to its OWN return type, not a Type_method-key collision",
+    'import stdlib::fs;\n'
+    'fn main() -> i32 {\n'
+    '    let b = fs::read("x");\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/hover",
+     "params":{"position":{"line":2,"character":9}}},
+    lambda r: check("fs::read is !*ByteBuffer (not fs_read's string)",
+        r and r.get("result") and "ByteBuffer" in r["result"]["contents"]["value"],
+        f"got {r.get('result') if r else None}"))
+
 case_feature("hover on a let bound to a module-qualified call is its return type, not *module",
     'import stdlib::fs;\n'
     'fn main() -> i32 {\n'
