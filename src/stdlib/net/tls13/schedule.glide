@@ -1,0 +1,107 @@
+// TLS 1.3 key schedule (RFC 8446 §7.1), pure Glide over HKDF-SHA256.
+// This is the derivation tree that turns the (EC)DHE shared secret and the
+// handshake transcript into the traffic secrets and per-record AEAD keys.
+//
+// The two building blocks are HKDF-Expand-Label and Derive-Secret; on top
+// of them the schedule walks Early -> Handshake -> Master secrets and the
+// client/server traffic secrets at each stage.
+//
+// ```glide
+// import stdlib::net::tls13::schedule::*;
+//
+// let early: string = tls13_early_secret("");             // no PSK
+// let derived: string = derive_secret(early, "derived", transcript_hash(""));
+// let hs: string = hkdf_extract(derived, ecdhe_shared);
+// let s_hs: !string = derive_secret_r(hs, "s hs traffic", th);
+// ```
+
+import stdlib::crypto::hkdf::*;
+import stdlib::crypto::*;          // sha256
+import stdlib::bytes::*;
+
+// SHA-256 output length — the only hash TLS 1.3 uses with these cipher
+// suites here (AES-128-GCM / ChaCha20-Poly1305, both _SHA256).
+pub const TLS13_HASH_LEN: i32 = 32;
+
+/// HKDF-Expand-Label (RFC 8446 §7.1):
+///   HkdfLabel = uint16(length) || opaque("tls13 "+label) || opaque(context)
+///   result    = HKDF-Expand(secret, HkdfLabel, length)
+pub fn hkdf_expand_label(secret: string, label: string, context: string, length: i32) -> !string {
+    let full_label: string = "tls13 ".concat(label);
+    let bb: *ByteBuffer = ByteBuffer::new();
+    bb.push(((length >> 8) & 255) as u8);
+    bb.push((length & 255) as u8);
+    bb.push((full_label.len() & 255) as u8);
+    bb.push_str(full_label);
+    bb.push((context.len() & 255) as u8);
+    bb.push_str(context);
+    let hkdf_label: string = bb.to_string();
+    bb.free();
+    return hkdf_expand(secret, hkdf_label, length);
+}
+
+/// Derive-Secret(secret, label, transcript_hash) — the transcript hash is
+/// already computed by the caller (Transcript-Hash of the handshake
+/// messages). Output is one hash length (32).
+pub fn derive_secret_r(secret: string, label: string, transcript_hash: string) -> !string {
+    return hkdf_expand_label(secret, label, transcript_hash, TLS13_HASH_LEN);
+}
+
+/// The Early Secret: HKDF-Extract(0, PSK). With no PSK, pass "" and the
+/// IKM defaults to HashLen zero bytes.
+pub fn tls13_early_secret(psk: string) -> string {
+    let mut ikm: string = psk;
+    if ikm.len() == 0 {
+        let bb: *ByteBuffer = ByteBuffer::new();
+        for let i: i32 = 0; i < TLS13_HASH_LEN; i++ { bb.push(0 as u8); }
+        ikm = bb.to_string();
+        bb.free();
+    }
+    return hkdf_extract("", ikm);
+}
+
+/// The Handshake Secret: HKDF-Extract(Derive-Secret(early, "derived", ""),
+/// ECDHE). `early` is the Early Secret; `ecdhe` is the (EC)DHE output.
+pub fn tls13_handshake_secret(early: string, ecdhe: string) -> !string {
+    let d: !string = derive_secret_r(early, "derived", sha256(""));
+    if !d.ok { return err(d.err); }
+    return ok(hkdf_extract(d.val, ecdhe));
+}
+
+/// The Master Secret: HKDF-Extract(Derive-Secret(handshake, "derived", ""),
+/// 0). IKM is HashLen zero bytes.
+pub fn tls13_master_secret(handshake: string) -> !string {
+    let d: !string = derive_secret_r(handshake, "derived", sha256(""));
+    if !d.ok { return err(d.err); }
+    let bb: *ByteBuffer = ByteBuffer::new();
+    for let i: i32 = 0; i < TLS13_HASH_LEN; i++ { bb.push(0 as u8); }
+    let zeros: string = bb.to_string();
+    bb.free();
+    return ok(hkdf_extract(d.val, zeros));
+}
+
+// A derived AEAD traffic key + iv pair.
+pub struct TrafficKeys {
+    pub key: string,
+    pub iv: string,
+}
+
+/// Per-RFC 8446 §7.3, derive the record-protection key and IV from a
+/// traffic secret. `key_len` is 16 for AES-128-GCM / 32 for AES-256-GCM /
+/// 32 for ChaCha20-Poly1305; the IV is always 12 bytes.
+pub fn tls13_traffic_keys(traffic_secret: string, key_len: i32) -> !*TrafficKeys {
+    let k: !string = hkdf_expand_label(traffic_secret, "key", "", key_len);
+    if !k.ok { return err(k.err); }
+    let iv: !string = hkdf_expand_label(traffic_secret, "iv", "", 12);
+    if !iv.ok { return err(iv.err); }
+    let tk: *TrafficKeys = malloc(sizeof(TrafficKeys)) as *TrafficKeys;
+    tk.key = k.val;
+    tk.iv = iv.val;
+    return ok(tk);
+}
+
+/// The Finished-message MAC key for a handshake traffic secret
+/// (HKDF-Expand-Label(secret, "finished", "", HashLen)).
+pub fn tls13_finished_key(traffic_secret: string) -> !string {
+    return hkdf_expand_label(traffic_secret, "finished", "", TLS13_HASH_LEN);
+}
