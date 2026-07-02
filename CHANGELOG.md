@@ -19,6 +19,33 @@
   if "abc" < "abd" { ... }           // string ordering
   ```
 
+- **Literal patterns in `match`.** Arms can be integer (including negative),
+  string, or char literals; they compare by value (strings by bytes) and
+  lower to an if/else chain. A `_` arm is required — a literal set can never
+  cover the whole value domain — and the typer rejects a literal whose type
+  doesn't match the scrutinee.
+
+  ```glide
+  let verb: i32 = match method {
+      "GET" => 1
+      "POST" => 2
+      _ => 0
+  };
+  ```
+
+- **`?!T` grew its method family.** `is_some` / `is_none` / `is_err`,
+  `unwrap`, `expect`, `unwrap_or`, `unwrap_or_else` and `unwrap_err` now work
+  on an opt-result — previously `.unwrap()` didn't exist and died in the C
+  compile. `??` also handles a `?!T` left-hand side: a plain fallback
+  extracts the Some value, and an `err(...)` fallback collapses to `!T`.
+
+- **`opt ?? err(msg)` works end to end.** The err-form of `??` (convert an
+  Option's none — or replace a Result's error — with a new `err`) now types
+  as `!T` and emits valid C, so it chains with `?`:
+  `let v = (lookup(k) ?? err("missing"))?;`. A `?` applied directly to a bare
+  `ok/err/some/none` constructor (the unparenthesized misread of that idiom)
+  is now an `invalid-try` error instead of a runtime segfault.
+
 ### Tooling
 
 - **`glide upgrade`** self-updates the toolchain to the latest published
@@ -34,6 +61,27 @@
 - Hover infers the type of a `let` bound to a method / function call, `?`
   propagation, unary / binary expressions, `as` casts, indexing, tuple literals
   and `format!` — cases that previously showed the name with no type.
+
+### Fixes
+
+- **Four silent-miscompile bugs are gone.** Each produced a wrong value or a
+  runtime crash with no diagnostic: a shadowing `let` in a nested scope read
+  the inner, uninitialized binding; a block-expression containing a range-for
+  or `if let` yielded the wrong value; `return ok(local)` / `some(local)`
+  freed the pointee it was returning (dangling pointer); and a `defer` inside
+  an `if` arm fired even when the branch was not taken.
+- **Assignment no longer frees the overwritten value before evaluating its
+  replacement** — `x = f(x)` was a use-after-free when `f` read its argument.
+- **Two `Vector<*dyn A>` / `Vector<*dyn B>` of different traits in one
+  program no longer collide.** `dyn Trait` mangled to `void`, so both vectors
+  monomorphized into one instantiation typed after whichever trait registered
+  first; the second vector's `push`/`get` then failed in the C compile.
+- **`some()` / `none()` / `ok()` / `err()` work in argument position.**
+  The payload-less constructors had no type context as call arguments and
+  emitted undefined C calls — they had to be bound through an annotated `let`
+  first. The callee's declared param type now propagates, including through
+  a generic receiver: `v.push(none())` on a `Vector<?i32>` works.
+- **Generic-fn call arguments no longer trip a false use-after-move.**
 
 ## 0.6.1 — 2026-07-01
 
