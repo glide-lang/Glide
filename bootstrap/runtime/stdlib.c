@@ -68,22 +68,21 @@ static const char* __glide_string_concat(const char* a, const char* b) {
     return out;
 }
 static const char* __glide_string_substring(const char* s, int start, int end) {
-    /* O(end-start), not O(strlen(s)): copy from `start` up to `end`, stopping
-       at the NUL terminator. The actual copied length `j` may be < cap, so we
-       stamp the header with `j`. Callers always pass start within [0, len]. */
+    /* Binary-safe O(end-start) slice: copy the byte range verbatim. `end`
+       is clamped to the real (header) length so an out-of-range end never
+       reads past the data; NUL bytes inside the range are preserved (a
+       socket read / archive body may contain them). */
+    int slen = __glide_str_hdr_len(s);
     if (start < 0) start = 0;
+    if (start > slen) start = slen;
     if (end < start) end = start;
+    if (end > slen) end = slen;
     int cap = end - start;
     char* base = (char*)__glide_palloc(4 + cap + 1);
     char* out = base + 4;
-    int j = 0;
-    for (int i = 0; i < cap; i++) {
-        char c = s[start + i];
-        if (c == 0) break;
-        out[j++] = c;
-    }
-    out[j] = 0;
-    __glide_str_hdr_set(base, j);
+    if (cap > 0) memcpy(out, s + start, (size_t)cap);
+    out[cap] = 0;
+    __glide_str_hdr_set(base, cap);
     return out;
 }
 /* Backs the panic! / todo! / unimplemented! / unreachable! macros: print the

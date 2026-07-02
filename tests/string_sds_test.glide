@@ -56,3 +56,43 @@ fn test_ffi_string_len() -> i32 {
     assert_eq!(name.concat("!").len(), n + 1);
     return 0;
 }
+
+// A NUL byte in the middle of a string must NOT truncate it: strings are
+// length-prefixed, so every op works off the header, not strlen. This is
+// what makes binary socket reads / archive bodies survive intact. The NUL
+// is introduced via concat of a `\x00`-terminated literal (the unambiguous
+// form — a `\x00` immediately followed by hex digits would be swallowed by
+// the C hex-escape, a separate literal-emission quirk).
+fn test_embedded_nul_is_binary_safe() -> i32 {
+    let s: string = "ab\x00".concat("cd");      // 5 bytes, NUL at index 2
+    assert_eq!(s.len(), 5);
+    assert_eq!(s.at(2).to_int(), 0);
+    assert_eq!(s.at(3).to_int(), 99);           // 'c' after the NUL
+
+    // substring across the NUL keeps every byte (no NUL-stop truncation).
+    let mid: string = s.substring(1, 5);        // "b" NUL "cd"
+    assert_eq!(mid.len(), 4);
+    assert_eq!(mid.at(1).to_int(), 0);
+    assert_eq!(mid.at(3).to_int(), 100);        // 'd'
+
+    // A leading-NUL slice is still its full length, not empty.
+    let head: string = s.substring(2, 4);       // NUL "c"
+    assert_eq!(head.len(), 2);
+    assert_eq!(head.at(0).to_int(), 0);
+
+    // concat past a NUL preserves both halves' full byte counts.
+    let joined: string = s.concat(s);
+    assert_eq!(joined.len(), 10);
+    assert_eq!(joined.at(7).to_int(), 0);       // second copy's NUL
+    return 0;
+}
+
+// substring clamps an out-of-range end to the real length instead of
+// reading past the buffer.
+fn test_substring_end_clamp() -> i32 {
+    let s: string = "hello";
+    assert_eq!(s.substring(0, 999).len(), 5);
+    assert_eq!(s.substring(3, 999).len(), 2);
+    assert_eq!(s.substring(10, 20).len(), 0);
+    return 0;
+}
