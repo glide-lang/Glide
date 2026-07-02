@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Toolchain — zig removed
+
+- **Glide no longer ships or uses zig.** The install drops from ~358MB to
+  ~18MB unpacked (zig was 95% of it), and nothing is downloaded from a
+  third-party toolchain vendor anymore. Host builds use the system C
+  compiler (`$CC` → `cc` → `gcc` → `clang`; MSYS2 gcc on Windows, Apple
+  clang on macOS). Cross-compilation (`--target=`) uses the system
+  **clang + lld** against v2 sysroots that now carry the target's C
+  library (`libc/` tree: musl + crt + libgcc for linux, mingw-w64 for
+  windows), fetched automatically on first use — still plug-and-play,
+  just not bundled. Freestanding/kernel builds use the host gcc/clang
+  (and gained their first smoke test). One deliberate trade: a machine
+  with **no** C compiler gets a clear per-platform install hint instead
+  of a bundled compiler. Cross-compiling **to** macOS (from another OS)
+  is no longer supported — build natively on a Mac; native macOS builds
+  are unchanged. Old installs' zig caches under `~/.glide` are removed
+  automatically; `glide upgrade` clears the rest.
+- **Glide integers now wrap on overflow** (`-fwrapv` everywhere): signed
+  overflow in the emitted C was UB the optimizer could exploit.
+- **CI runs the suite under UBSan** (clang `-fsanitize=undefined`) —
+  replacing the UB-trapping the zig-clang backend provided by accident.
+  Its first run already caught three real bugs, fixed here: channel ring
+  cells allocated below their declared 64-byte alignment, IPv6
+  group/byte packing shifting into the sign bit, and the overflow
+  semantics above.
+- **linux-musl sysroots build in a pinned Alpine container** (Docker) —
+  Alpine gcc is a native musl toolchain, so the openssl 3.5.7 + ngtcp2 +
+  nghttp3 stack needs no cross shims; APKs and source tarballs are
+  sha256-pinned.
+
 ### Language
 
 - **Operator overloading.** `==` / `!=` now compare *values*: strings by bytes
