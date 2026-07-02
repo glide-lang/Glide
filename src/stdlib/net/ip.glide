@@ -362,16 +362,18 @@ fn _parse_v6(s: string) -> !*IpAddr {
     for let i: i32 = 0; i < right.len(); i++ { groups.push(right.get(i)); }
     if groups.len() != 8 { return err("ipv6: wrong group count after expand"); }
 
-    let g0: i64 = groups.get(0) as i64;
-    let g1: i64 = groups.get(1) as i64;
-    let g2: i64 = groups.get(2) as i64;
-    let g3: i64 = groups.get(3) as i64;
-    let g4: i64 = groups.get(4) as i64;
-    let g5: i64 = groups.get(5) as i64;
-    let g6: i64 = groups.get(6) as i64;
-    let g7: i64 = groups.get(7) as i64;
-    let hi: i64 = (g0 << 48) | (g1 << 32) | (g2 << 16) | g3;
-    let lo: i64 = (g4 << 48) | (g5 << 32) | (g6 << 16) | g7;
+    // Shift in u64: a group >= 0x8000 shifted by 48 lands in the sign
+    // bit, and signed-overflowing shifts are UB in the emitted C.
+    let g0: u64 = groups.get(0) as u64;
+    let g1: u64 = groups.get(1) as u64;
+    let g2: u64 = groups.get(2) as u64;
+    let g3: u64 = groups.get(3) as u64;
+    let g4: u64 = groups.get(4) as u64;
+    let g5: u64 = groups.get(5) as u64;
+    let g6: u64 = groups.get(6) as u64;
+    let g7: u64 = groups.get(7) as u64;
+    let hi: i64 = ((g0 << 48) | (g1 << 32) | (g2 << 16) | g3) as i64;
+    let lo: i64 = ((g4 << 48) | (g5 << 32) | (g6 << 16) | g7) as i64;
     return ok(IpAddr::v6(hi, lo));
 }
 

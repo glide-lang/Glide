@@ -114,20 +114,24 @@ c_raw! {
         __glide_dns_result* r = (__glide_dns_result*)h;
         if (!r || i < 0 || i >= r->n) return 0;
         unsigned char* p = r->bytes + i*16;
-        return ((int64_t)p[0] << 56) | ((int64_t)p[1] << 48)
-             | ((int64_t)p[2] << 40) | ((int64_t)p[3] << 32)
-             | ((int64_t)p[4] << 24) | ((int64_t)p[5] << 16)
-             | ((int64_t)p[6] << 8)  |  (int64_t)p[7];
+        /* shift as unsigned: a top byte >= 0x80 shifted into the sign
+           bit is UB on int64_t */
+        return (int64_t)(((uint64_t)p[0] << 56) | ((uint64_t)p[1] << 48)
+             | ((uint64_t)p[2] << 40) | ((uint64_t)p[3] << 32)
+             | ((uint64_t)p[4] << 24) | ((uint64_t)p[5] << 16)
+             | ((uint64_t)p[6] << 8)  |  (uint64_t)p[7]);
     }
 
     static int64_t __glide_dns_v6_lo(void* h, int i) {
         __glide_dns_result* r = (__glide_dns_result*)h;
         if (!r || i < 0 || i >= r->n) return 0;
         unsigned char* p = r->bytes + i*16 + 8;
-        return ((int64_t)p[0] << 56) | ((int64_t)p[1] << 48)
-             | ((int64_t)p[2] << 40) | ((int64_t)p[3] << 32)
-             | ((int64_t)p[4] << 24) | ((int64_t)p[5] << 16)
-             | ((int64_t)p[6] << 8)  |  (int64_t)p[7];
+        /* shift as unsigned: a top byte >= 0x80 shifted into the sign
+           bit is UB on int64_t */
+        return (int64_t)(((uint64_t)p[0] << 56) | ((uint64_t)p[1] << 48)
+             | ((uint64_t)p[2] << 40) | ((uint64_t)p[3] << 32)
+             | ((uint64_t)p[4] << 24) | ((uint64_t)p[5] << 16)
+             | ((uint64_t)p[6] << 8)  |  (uint64_t)p[7]);
     }
 
     static void __glide_dns_free(void* h) {
