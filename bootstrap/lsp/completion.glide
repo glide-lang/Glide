@@ -3206,7 +3206,28 @@ fn _push_arg_type_items(stmts: *Vector<Stmt>, ctx: SigCallCtx, items: *JsonValue
         return;
     }
     let pm: Param = callee.fn_params.get(pidx);
-    let ty: *Type = pm.ty;
+    _push_expected_type_items(stmts, pm.ty, items, seen);
+}
+
+// The declared type of the active argument slot (for boosting matching locals).
+fn _arg_expected_type(stmts: *Vector<Stmt>, ctx: SigCallCtx) -> *Type {
+    let callee: *Stmt = _callee_decl(stmts, ctx);
+    if callee == null || callee.kind != ST_FN || callee.fn_params == null {
+        return null;
+    }
+    let pidx: i32 = _callee_param_idx(callee, ctx);
+    if pidx < 0 || pidx >= callee.fn_params.len() {
+        return null;
+    }
+    return callee.fn_params.get(pidx).ty;
+}
+
+// Emit the items an EXPECTED type wants at a value slot: a closure snippet for
+// a fn-pointer, `some/none` for an Option, `ok/err[/none]` for a Result, one
+// item per variant for an enum, a `Type {…}` literal + its constructors for a
+// struct. Shared by the argument, struct-field-value, return, tuple, let-RHS
+// and condition positions. Items float via `_arg_item`'s `sortText`.
+fn _push_expected_type_items(stmts: *Vector<Stmt>, ty: *Type, items: *JsonValue, seen: *HashMap<bool>) {
     if ty == null {
         return;
     }
@@ -3260,6 +3281,214 @@ fn _push_arg_type_items(stmts: *Vector<Stmt>, ctx: SigCallCtx, items: *JsonValue
             list_methods_for_type(stmts, tn, items, seen, false);
         }
     }
+}
+
+// True when a candidate value's type satisfies an expected type, reconciling
+// `*T` vs `T` (a `*File` value fits a `*File` slot; strip pointers/borrows).
+fn _type_matches_expected(cand: *Type, expected: *Type) -> bool {
+    if cand == null || expected == null {
+        return false;
+    }
+    if type_to_string_pretty(cand).eq(type_to_string_pretty(expected)) {
+        return true;
+    }
+    let sc: *Type = _arg_strip(cand);
+    let se: *Type = _arg_strip(expected);
+    if sc == null || se == null {
+        return false;
+    }
+    return type_to_string_pretty(sc).eq(type_to_string_pretty(se));
+}
+
+// Float in-scope params/locals whose type matches `expected` to the top of the
+// list (via `_arg_item`'s sortText) and mark them in `seen` so the later
+// generic pass skips the duplicate. A priority-boost, never a filter — so a
+// `takes_bool(<here>)` still lists everything, with the bool locals first.
+fn _boost_matching_locals(stmts: *Vector<Stmt>, host: *Stmt, line0: i32, path: string, expected: *Type, items: *JsonValue, seen: *HashMap<bool>) {
+    if host == null || expected == null {
+        return;
+    }
+    if host.fn_params != null {
+        for let i: i32 = 0; i < host.fn_params.len(); i++ {
+            let p: Param = host.fn_params.get(i);
+            if p.name == null || seen.contains(p.name) {
+                continue;
+            }
+            if _type_matches_expected(p.ty, expected) {
+                seen.insert(p.name, true);
+                json_arr_push(items, _arg_item(p.name, 6, "param ".concat(p.name).concat(": ").concat(type_to_string_pretty(p.ty)), p.name, false));
+            }
+        }
+    }
+    let locals: *Vector<Stmt> = Vector::new();
+    collect_locals(host.fn_body, line0, locals);
+    for let i: i32 = 0; i < locals.len(); i++ {
+        let s: Stmt = locals.get(i);
+        if s.name == null || seen.contains(s.name) {
+            continue;
+        }
+        let mut ct: *Type = s.let_ty;
+        if ct == null && s.let_value != null {
+            ct = _let_node_type(&s, stmts, line0, path, 0);
+            if ct == null {
+                ct = lsp_infer_expr(stmts, host, s.let_value);
+            }
+        }
+        if _type_matches_expected(ct, expected) {
+            seen.insert(s.name, true);
+            json_arr_push(items, _arg_item(s.name, 6, "let ".concat(s.name).concat(": ").concat(type_to_string_pretty(ct)), s.name, false));
+        }
+    }
+}
+
+// When the cursor sits at a field-VALUE slot inside `StructName { field: | }`,
+// return "StructName\tfield"; else "". Mirrors `_struct_lit_ctx` (which owns the
+// field-NAME slot) but reports the value context so completion can offer values
+// of the field's declared type.
+fn _struct_val_ctx(text: string, line0: i32, col0: i32) -> string {
+    let toks: *Vector<Token> = Vector::new();
+    let lex: *Lexer = Lexer::new(text);
+    while true {
+        let tok: Token = lex.next_token();
+        if tok.kind == TOK_EOF {
+            break;
+        }
+        let tline: i32 = tok.line - 1;
+        let tcol: i32 = tok.column - 1;
+        if tline > line0 {
+            break;
+        }
+        if tline == line0 && tcol >= col0 {
+            break;
+        }
+        toks.push(tok);
+    }
+    let n: i32 = toks.len();
+    if n == 0 {
+        return "";
+    }
+    let mut depth: i32 = 0;
+    let mut open_idx: i32 = -1;
+    let mut field_idx: i32 = -1;
+    let mut boundary: bool = false;
+    let mut sawvalue: bool = false;
+    for let i: i32 = n - 1; i >= 0; i = i - 1 {
+        let t: Token = toks.get(i);
+        if t.kind != TOK_OP {
+            continue;
+        }
+        if t.lexeme.eq(")") || t.lexeme.eq("]") || t.lexeme.eq("}") {
+            depth = depth + 1;
+            continue;
+        }
+        if t.lexeme.eq("(") || t.lexeme.eq("[") {
+            if depth > 0 {
+                depth = depth - 1;
+                continue;
+            }
+            return ""; // call / index enclosure, not a literal
+        }
+        if t.lexeme.eq("{") {
+            if depth > 0 {
+                depth = depth - 1;
+                continue;
+            }
+            open_idx = i;
+            break;
+        }
+        if depth == 0 {
+            if t.lexeme.eq(";") {
+                return "";
+            }
+            if t.lexeme.eq(",") {
+                boundary = true;
+            }
+            if t.lexeme.eq(":") && !boundary && !sawvalue {
+                sawvalue = true;
+                field_idx = i - 1;
+            }
+        }
+    }
+    if !sawvalue || open_idx < 1 || field_idx < 0 {
+        return "";
+    }
+    let name_tok: Token = toks.get(open_idx - 1);
+    if name_tok.kind != TOK_IDENT {
+        return "";
+    }
+    if open_idx >= 2 {
+        let kw: Token = toks.get(open_idx - 2);
+        if kw.lexeme.eq("impl") || kw.lexeme.eq("for") || kw.lexeme.eq("struct") || kw.lexeme.eq("enum") || kw.lexeme.eq("trait") || kw.lexeme.eq("->") {
+            return "";
+        }
+    }
+    let ftok: Token = toks.get(field_idx);
+    if ftok.kind != TOK_IDENT {
+        return "";
+    }
+    return name_tok.lexeme.concat("\t").concat(ftok.lexeme);
+}
+
+// Expected type at a callee-less value slot on the current statement: after
+// `return` (the enclosing fn's return type) or inside an `if`/`while`
+// condition (bool). Returns null when the cursor is not at such a slot. The
+// scan stops at the current statement's boundary (`;`) or its enclosing opener
+// (`{`/`(`/`[`), so it never crosses into a previous statement or a block body.
+fn _expected_type_at(text: string, host: *Stmt, line0: i32, col0: i32) -> *Type {
+    if host == null {
+        return null;
+    }
+    let toks: *Vector<Token> = Vector::new();
+    let lex: *Lexer = Lexer::new(text);
+    while true {
+        let tok: Token = lex.next_token();
+        if tok.kind == TOK_EOF {
+            break;
+        }
+        let tl: i32 = tok.line - 1;
+        let tc: i32 = tok.column - 1;
+        if tl > line0 {
+            break;
+        }
+        if tl == line0 && tc >= col0 {
+            break;
+        }
+        toks.push(tok);
+    }
+    let n: i32 = toks.len();
+    if n == 0 {
+        return null;
+    }
+    let mut depth: i32 = 0;
+    for let i: i32 = n - 1; i >= 0; i = i - 1 {
+        let t: Token = toks.get(i);
+        if t.kind == TOK_OP {
+            if t.lexeme.eq(")") || t.lexeme.eq("]") || t.lexeme.eq("}") {
+                depth = depth + 1;
+                continue;
+            }
+            if t.lexeme.eq("(") || t.lexeme.eq("[") || t.lexeme.eq("{") {
+                if depth > 0 {
+                    depth = depth - 1;
+                    continue;
+                }
+                return null; // the enclosing opener — left the current expression
+            }
+            if depth == 0 && t.lexeme.eq(";") {
+                return null; // statement boundary
+            }
+            continue;
+        }
+        if depth == 0 {
+            if t.lexeme.eq("return") {
+                return host.fn_ret_ty;
+            }
+            if t.lexeme.eq("if") || t.lexeme.eq("while") {
+                return ty_named("bool");
+            }
+        }
+    }
+    return null;
 }
 
 // Detect the cursor sitting at a fresh arm slot inside `match <expr> { | }`.
@@ -3806,6 +4035,16 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
     let actx: SigCallCtx = _find_call_context(doc.text, line0, col0);
     if actx.found {
         _push_arg_type_items(doc.stmts, actx, items, seen);
+        // Also float in-scope values whose type matches the expected parameter.
+        // Free functions only: method-callee resolution is name-only today and
+        // would resolve the wrong overload's param type.
+        if !actx.is_method {
+            let _arg_ety: *Type = _arg_expected_type(doc.stmts, actx);
+            if _arg_ety != null {
+                let _arg_host: *Stmt = fn_containing(doc.stmts, line0, uri_to_path(uri));
+                _boost_matching_locals(doc.stmts, _arg_host, line0, uri_to_path(uri), _arg_ety, items, seen);
+            }
+        }
     }
     // Struct-literal field completion: cursor at a field-name slot inside
     // `StructName { ... }`. Offer the struct's not-yet-written fields. Gated
@@ -3874,6 +4113,34 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
         seen.free();
         lsp_send_response(id, items);
         return;
+    }
+    // Struct-literal field VALUE slot: `StructName { field: | }`. Float values
+    // of the field's declared type (enum variants, ok/err/some/none, a nested
+    // struct literal + ctors, and matching in-scope locals) to the top, then
+    // fall through so ordinary completion still appears.
+    let _sv_ctx: string = _struct_val_ctx(doc.text, line0, col0);
+    let _sv_tab: i32 = _sv_ctx.index_of("\t");
+    if _sv_tab > 0 {
+        let _sv_struct: string = _sv_ctx.substring(0, _sv_tab);
+        let _sv_field: string = _sv_ctx.substring(_sv_tab + 1, _sv_ctx.len());
+        let mut _sv_sd: *Stmt = _struct_decl_local_first(doc.stmts, _sv_struct, uri_to_path(uri));
+        if _sv_sd == null || _sv_sd.kind != ST_STRUCT {
+            let _sv_ist: *Vector<Stmt> = _index_struct_stmts(state, _sv_struct);
+            if _sv_ist != null {
+                let _sv_isd: *Stmt = find_top_decl(_sv_ist, _sv_struct);
+                if _sv_isd != null && _sv_isd.kind == ST_STRUCT {
+                    _sv_sd = _sv_isd;
+                }
+            }
+        }
+        if _sv_sd != null && _sv_sd.kind == ST_STRUCT {
+            let _sv_fty: *Type = _struct_field_type(doc.stmts, ty_named(_sv_struct), _sv_field);
+            if _sv_fty != null {
+                _push_expected_type_items(doc.stmts, _sv_fty, items, seen);
+                let _sv_host: *Stmt = fn_containing(doc.stmts, line0, uri_to_path(uri));
+                _boost_matching_locals(doc.stmts, _sv_host, line0, uri_to_path(uri), _sv_fty, items, seen);
+            }
+        }
     }
     // Type-annotation position (`: T`, `-> T`, `<T>`): seed the list with the
     // primitive type names + the enclosing fn/impl type params up front, so
@@ -4086,6 +4353,26 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
             seen.free();
             lsp_send_response(id, items);
             return;
+        }
+    }
+    // Expected-type boost at a callee-less slot (a `return` expression or an
+    // `if`/`while` condition): float values of the expected type and matching
+    // in-scope locals, then fall through so ordinary completion still appears.
+    let _et_host: *Stmt = fn_containing(doc.stmts, line0, uri_to_path(uri));
+    let _et_ty: *Type = _expected_type_at(doc.text, _et_host, line0, col0);
+    if _et_ty != null {
+        _push_expected_type_items(doc.stmts, _et_ty, items, seen);
+        _boost_matching_locals(doc.stmts, _et_host, line0, uri_to_path(uri), _et_ty, items, seen);
+        let _et_strip: *Type = _arg_strip(_et_ty);
+        if _et_strip != null && _et_strip.kind == TY_NAMED && _et_strip.name != null && _et_strip.name.eq("bool") {
+            if !seen.contains("true") {
+                seen.insert("true", true);
+                json_arr_push(items, _arg_item("true", 12, "boolean", "true", false));
+            }
+            if !seen.contains("false") {
+                seen.insert("false", true);
+                json_arr_push(items, _arg_item("false", 12, "boolean", "false", false));
+            }
         }
     }
     // 1. Locals in scope (params + lets above the cursor in the containing fn).

@@ -1323,6 +1323,33 @@ case_completion_absent("match arm completion stays quiet for an int scrutinee",
     {"line":3,"character":8},
     ["ok(v) => {}","some(v) => {}"])
 
+# ---- expected-type completion in a struct-literal field value ----
+
+# `Style { color: | }` where `color: Color` -> the enum's variants on top.
+case_completion_has("struct field value offers the field type's values",
+    'enum Color { Red, Green, Blue }\n'
+    'struct Style { color: Color, width: i32 }\n'
+    'fn main() -> i32 {\n'
+    '    let s = Style {\n'
+    '        color: \n'
+    '    };\n'
+    '    return 0;\n'
+    '}',
+    {"line":4,"character":15},
+    ["Color::Red","Color::Green","Color::Blue"])
+
+# An `if` condition expects bool -> offer true/false up front.
+case_completion_has("if condition offers true/false",
+    'fn main() -> i32 {\n'
+    '    let flag: bool = true;\n'
+    '    if  {\n'
+    '        return 1;\n'
+    '    }\n'
+    '    return 0;\n'
+    '}',
+    {"line":2,"character":7},
+    ["true","false"])
+
 # ---- struct hover (fields) + outline (field children) ----
 
 def _hover_val(r):
