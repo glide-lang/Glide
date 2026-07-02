@@ -1,0 +1,42 @@
+import stdlib::testing::*;
+
+enum Dir { North, South, East, West }
+enum Shape { Circle(i32), Rect(i32, i32), Dot }
+
+fn test_payload_free_enum_eq() -> i32 {
+    let a: Dir = Dir::North;
+    let b: Dir = Dir::North;
+    let c: Dir = Dir::South;
+    assert!(a == b);
+    assert!(a != c);
+    assert!(!(a == c));
+    return 0;
+}
+
+fn test_payload_enum_eq_same_variant() -> i32 {
+    let a: Shape = Shape::Circle(5);
+    let b: Shape = Shape::Circle(5);
+    let c: Shape = Shape::Circle(9);
+    assert!(a == b);           // same tag + payload
+    assert!(a != c);           // same tag, different payload
+    return 0;
+}
+
+fn test_payload_enum_eq_multi_field() -> i32 {
+    let a: Shape = Shape::Rect(1, 2);
+    let b: Shape = Shape::Rect(1, 2);
+    let c: Shape = Shape::Rect(1, 3);
+    assert!(a == b);
+    assert!(a != c);
+    return 0;
+}
+
+fn test_payload_enum_eq_cross_variant() -> i32 {
+    let a: Shape = Shape::Circle(1);
+    let b: Shape = Shape::Rect(1, 1);
+    let d: Shape = Shape::Dot;
+    assert!(a != b);           // different tags
+    assert!(b != d);
+    assert!(d == Shape::Dot);
+    return 0;
+}

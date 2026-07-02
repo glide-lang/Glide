@@ -2757,6 +2757,49 @@ fn _emit_tuple_eq(g: *CG, elems: *Vector<Type>, a: string, b: string, is_ptr: bo
     }
 }
 
+// Emit a C bool comparing two enum values: tags must match, and for the active
+// payload variant its fields must match (recursively, so string/struct
+// payloads compare by value). Enums lower to `{ int tag; union { … } data; }`,
+// so `struct == struct` isn't valid C — this replaces it.
+fn _emit_enum_eq(g: *CG, es: *Stmt, a: string, b: string, is_ptr: bool) {
+    let acc: string = if is_ptr { "->" } else { "." };
+    let ename: string = c_safe_ident(es.name);
+    if is_ptr {
+        print!("((".concat(a).concat(" == ").concat(b).concat(") || (").concat(a).concat(" && ").concat(b).concat(" && "));
+    }
+    print!("(".concat(a).concat(acc).concat("tag == ").concat(b).concat(acc).concat("tag"));
+    if es.enum_variants != null {
+        let seen: *Vector<string> = Vector::new();
+        for let i: i32 = 0; i < es.enum_variants.len(); i++ {
+            let v: EnumVariant = es.enum_variants.get(i);
+            if v.fields == null || v.fields.len() == 0 {
+                continue;
+            }
+            // Only the active variant's payload matters: `tag != V || fields eq`.
+            print!(" && (".concat(a).concat(acc).concat("tag != ").concat(ename).concat("_").concat(v.name).concat(" || ("));
+            for let j: i32 = 0; j < v.fields.len(); j++ {
+                if j > 0 {
+                    print!(" && ");
+                }
+                let ft: Type = v.fields.get(j);
+                let mut af: string = a.concat(acc).concat("data.v_").concat(v.name);
+                let mut bf: string = b.concat(acc).concat("data.v_").concat(v.name);
+                if v.fields.len() > 1 {
+                    af = af.concat(".f").concat(int_to_str(j));
+                    bf = bf.concat(".f").concat(int_to_str(j));
+                }
+                _emit_eq_of(g, &ft, af, bf, seen, 0);
+            }
+            print!("))");
+        }
+        seen.free();
+    }
+    print!(")");
+    if is_ptr {
+        print!("))");
+    }
+}
+
 // Emit a "null" appropriate for the expected type. For `*dyn Trait`
 // the fat-pointer struct gets zero-initialised (vtable=NULL,
 // data=NULL); for everything else, plain `NULL`.
@@ -3280,6 +3323,24 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 let eq_seen: *Vector<string> = Vector::new();
                 _emit_eq_of(g, elt, "__eqa", "__eqb", eq_seen, 0);
                 eq_seen.free();
+                print!("; }))");
+                return;
+            }
+            // Enums lower to tagged structs; compare by tag (+ active payload).
+            if est != null && est.kind == TY_NAMED && g.enums.contains(est.name) {
+                let tc: string = type_to_c(elt);
+                let is_ptr: bool = elt != null && (elt.kind == TY_POINTER || elt.kind == TY_BORROW || elt.kind == TY_BORROW_MUT);
+                print!("(");
+                if e.op_code == OP_NE {
+                    print!("!");
+                }
+                print!("({ ".concat(tc).concat(" __eqa = ("));
+                emit_expr(g, e.lhs);
+                print!("); ".concat(tc).concat(" __eqb = ("));
+                emit_expr(g, e.rhs);
+                print!("); ");
+                let _es: Stmt = g.enums.get(est.name);
+                _emit_enum_eq(g, &_es, "__eqa", "__eqb", is_ptr);
                 print!("; }))");
                 return;
             }
