@@ -1,6 +1,9 @@
 import stdlib::testing::*;
 import stdlib::http::*;
 import stdlib::http::client::*;
+import stdlib::net::listener::*;
+import stdlib::net::tcp::*;
+import stdlib::time::*;
 
 fn _echo_handler(req: *HttpRequest) -> HttpResponse {
     return HttpResponse::ok()
@@ -49,5 +52,43 @@ fn test_post_json_works() -> i32 {
     let r: !*HttpResponse = http_post_json(url, body);
     assert!(r.ok);
     assert_eq!(r.val.status, 200);
+    return 0;
+}
+
+// A raw TCP responder that answers one request with a chunked-transfer
+// body: three chunks (one carrying an embedded NUL, one with a chunk
+// extension), then the "0\r\n\r\n" terminator. The client must de-chunk
+// it back to the exact bytes, NUL included.
+fn _chunked_server_thread() {
+    let lr: !*TcpListener = TcpListener::bind(45201);
+    if !lr.ok { println!("chunk server: ${lr.err}"); return; }
+    let ln: *TcpListener = lr.val;
+    let cr: !*TcpStream = ln.accept();
+    if !cr.ok { ln.close(); return; }
+    let c: *TcpStream = cr.val;
+    let _rd: !string = c.read_str(4096);
+    let mut wire: string = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+    wire = wire.concat("7\r\nHello, \r\n");            // "Hello, "
+    wire = wire.concat("d;ext=1\r\nchunked\x00world\r\n"); // 13 bytes incl NUL
+    wire = wire.concat("1\r\n!\r\n");                  // "!"
+    wire = wire.concat("0\r\n\r\n");                   // terminator
+    let _w: !i32 = c.write_all(wire);
+    c.close();
+    ln.close();
+}
+
+fn test_chunked_transfer_is_decoded() -> i32 {
+    spawn_thread _chunked_server_thread();
+    sleep_ms(200);
+    let r: !*HttpResponse = http_get("http://127.0.0.1:45201/");
+    assert!(r.ok);
+    let resp: *HttpResponse = r.val;
+    assert_eq!(resp.status, 200);
+    // "Hello, " (7) + "chunked\0world" (13) + "!" (1) = 21 bytes
+    let b: string = resp.body;
+    assert_eq!(b.len(), 21);
+    assert_str_eq!(b.substring(0, 7), "Hello, ");
+    assert_eq!(b.at(14).to_int(), 0);              // the embedded NUL survived
+    assert_str_eq!(b.substring(15, 21), "world!");
     return 0;
 }

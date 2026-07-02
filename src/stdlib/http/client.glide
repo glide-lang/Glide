@@ -21,6 +21,7 @@ import stdlib::http::*;
 import stdlib::http::cookies::*;
 import stdlib::http::h2::*;
 import stdlib::http::hpack::*;
+import stdlib::bytes::*;
 
 /// A request being assembled — mutable holder; not the same shape as
 /// the server-side `HttpRequest` (which is parsed-from-wire).
@@ -529,7 +530,7 @@ fn _hcli_parse_response(raw: string) -> !*HttpResponse {
     let head_end: i32 = raw.index_of("\r\n\r\n");
     if head_end < 0 { return err("http_client: malformed response (no header terminator)"); }
     let head: string = raw.substring(0, head_end);
-    let body: string = raw.substring(head_end + 4, raw.len());
+    let mut body: string = raw.substring(head_end + 4, raw.len());
 
     let lines: *Vector<string> = head.split("\r\n");
     if lines.len() == 0 { return err("http_client: empty header"); }
@@ -551,11 +552,104 @@ fn _hcli_parse_response(raw: string) -> !*HttpResponse {
         hdr = hdr.concat(lines.get(i));
     }
 
+    // Decode the body per its framing. The client always sends
+    // `Connection: close`, so `body` is everything up to EOF — but a
+    // chunked response still needs de-chunking, and a Content-Length one
+    // may carry trailing noise the server flushed before closing.
+    let hlow: string = hdr.to_lower();
+    let te: string = _hcli_find_header(hlow, "transfer-encoding");
+    if te.index_of("chunked") >= 0 {
+        let dec: !string = _hcli_dechunk(body);
+        if !dec.ok { return err(dec.err); }
+        body = dec.val;
+    } else {
+        let cls: string = _hcli_find_header(hlow, "content-length");
+        if cls.len() > 0 {
+            let clr: !i32 = cls.try_parse_int();
+            if clr.ok && clr.val >= 0 && clr.val < body.len() {
+                body = body.substring(0, clr.val);
+            }
+        }
+    }
+
     let r: *HttpResponse = malloc(sizeof(HttpResponse)) as *HttpResponse;
     r.status = cr.val;
     r.headers_block = hdr;
     r.body = body;
     return ok(r);
+}
+
+// First matching header's value from an already-lowercased header block
+// (lines joined with CRLF), trimmed. "" when absent.
+fn _hcli_find_header(block_lower: string, name_lower: string) -> string {
+    let lines: *Vector<string> = block_lower.split("\r\n");
+    let pfx: string = name_lower.concat(":");
+    for let i: i32 = 0; i < lines.len(); i++ {
+        let l: string = lines.get(i);
+        if l.starts_with(pfx) {
+            return l.substring(pfx.len(), l.len()).trim();
+        }
+    }
+    return "";
+}
+
+// Index of the next CRLF at or after `from`, or -1.
+fn _hcli_find_crlf(s: string, from: i32) -> i32 {
+    let n: i32 = s.len();
+    let mut i: i32 = from;
+    while i + 1 < n {
+        if s.at(i).to_int() == 13 && s.at(i + 1).to_int() == 10 { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// Parse a hex chunk-size (no "0x", no sign). Rejects empty / bad digits.
+fn _hcli_parse_hex(s: string) -> !i32 {
+    if s.len() == 0 { return err("http_client: empty chunk size"); }
+    let mut v: i32 = 0;
+    for let i: i32 = 0; i < s.len(); i++ {
+        let c: i32 = s.at(i).to_int();
+        let mut d: i32 = 0 - 1;
+        if c >= 48 && c <= 57 { d = c - 48; }
+        else { if c >= 97 && c <= 102 { d = c - 87; }
+        else { if c >= 65 && c <= 70 { d = c - 55; } } }
+        if d < 0 { return err("http_client: bad hex in chunk size"); }
+        v = v * 16 + d;
+    }
+    return ok(v);
+}
+
+// Decode an HTTP/1.1 chunked-transfer body: a run of
+// "<hex>[;ext]\r\n<data>\r\n" chunks terminated by a "0\r\n" chunk.
+// Trailers after the terminator are ignored. Binary-safe (works off
+// byte lengths, not NUL scans).
+fn _hcli_dechunk(body: string) -> !string {
+    let bb: *ByteBuffer = ByteBuffer::new();
+    let n: i32 = body.len();
+    let mut pos: i32 = 0;
+    while pos < n {
+        let le: i32 = _hcli_find_crlf(body, pos);
+        if le < 0 { bb.free(); return err("http_client: malformed chunk header"); }
+        let mut size_line: string = body.substring(pos, le);
+        let semi: i32 = size_line.index_of(";");
+        if semi >= 0 { size_line = size_line.substring(0, semi); }
+        let sz: !i32 = _hcli_parse_hex(size_line.trim());
+        if !sz.ok { bb.free(); return err(sz.err); }
+        let size: i32 = sz.val;
+        let data_start: i32 = le + 2;
+        if size == 0 {
+            let out: string = bb.to_string();
+            bb.free();
+            return ok(out);
+        }
+        if data_start + size > n { bb.free(); return err("http_client: truncated chunk body"); }
+        bb.push_str(body.substring(data_start, data_start + size));
+        pos = data_start + size + 2;   // skip the chunk's trailing CRLF
+    }
+    let out: string = bb.to_string();
+    bb.free();
+    return ok(out);
 }
 
 fn _hcli_is_redirect(status: i32) -> bool {
