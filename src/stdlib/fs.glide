@@ -1,8 +1,12 @@
 // Filesystem helpers. The raw C-runtime entry points (`read_file`,
 // `write_file`, `__glide_file_exists`, `__glide_list_dir`) are private
-// to this module; user code goes through the `fs_*` wrappers below,
-// which pick safer defaults (sorted listings, trimmed trailing newline,
-// `Vector<string>` returns).
+// to this module; user code goes through the wrappers below.
+//
+// Naming: qualified use reads best UNPREFIXED — `fs::read_to_string`,
+// `fs::write`, `fs::exists` (cf. Go `os.ReadFile`, Rust `std::fs::read`).
+// The legacy `fs_*` names remain as thin delegators for wildcard importers
+// and existing callers; prefer the verb-only forms in new code.
+
 
 extern fn read_file(path: string) -> string;
 extern fn write_file(path: string, content: string) -> bool;
@@ -410,15 +414,6 @@ c_raw! {
     #endif // GLIDE_FS_VIA_CRAW
 }
 
-/// Read the entire contents of `path` into a heap-allocated string.
-/// Returns `""` on any error (missing file, permission denied, …).
-/// Use `fs_exists` first when you need to distinguish "missing" from
-/// "empty file".
-///
-/// ```glide
-/// let body: string = fs_read("config.toml");
-/// if body.eq("") { eprintln("config missing or empty"); }
-/// ```
 extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
 
 extern fn __glide_read_file_buf(path: string, len_out: *i32) -> *void;
@@ -447,6 +442,15 @@ c_raw! {
     }
 }
 
+/// Read the entire contents of `path` into a heap-allocated string.
+/// Returns `""` on any error (missing file, permission denied, …).
+/// Use `fs::exists` first when you need to distinguish "missing" from
+/// "empty file". Prefer the unprefixed `fs::read_to_string` in new code.
+///
+/// ```glide
+/// let body: string = fs::read_to_string("config.toml");
+/// if body.eq("") { eprintln("config missing or empty"); }
+/// ```
 pub fn fs_read(path: string) -> string {
     let mut n: i32 = 0;
     let buf: *void = __glide_read_file_buf(path, &n);
@@ -761,3 +765,62 @@ fn _walk_dir_into(out: *Vector<string>, dir: string, suffix: string) {
         _walk_dir_into(out, dir.concat("/").concat(sub), suffix);
     }
 }
+
+// ============================================================================
+// Unprefixed API — the preferred surface for qualified use (fs::read_to_string
+// reads better than fs::fs_read). Thin delegators to the fs_* functions above;
+// existing callers and wildcard importers keep the fs_* names. Follows the
+// Go (`os.ReadFile`) / Rust (`std::fs::read` / `read_to_string`) split of
+// bytes vs. text.
+// ============================================================================
+
+/// Whole file as UTF-8 text. `""` on any error. See [`fs_read`].
+/// For raw bytes use [`fs_read_bytes`] — a clean `fs::read(path)` form is
+/// still blocked (the typer mis-resolves a qualified call whose leaf is the
+/// exact libc name `read`, and `fs::read_bytes` collides with io::read_bytes).
+pub fn read_to_string(path: string) -> string { return fs_read(path); }
+
+/// Write `content` to `path`, replacing any existing file. See [`fs_write`].
+pub fn write(path: string, content: string) -> bool { return fs_write(path, content); }
+
+/// Write `n` raw bytes from `data` to `path`. See [`fs_write_bytes`].
+pub fn write_bytes(path: string, data: *void, n: i32) -> bool { return fs_write_bytes(path, data, n); }
+
+/// True when `path` exists. See [`fs_exists`].
+pub fn exists(path: string) -> bool { return fs_exists(path); }
+
+/// True when `path` is a directory. See [`fs_is_dir`].
+pub fn is_dir(path: string) -> bool { return fs_is_dir(path); }
+
+/// File size in bytes, or a negative value on error. See [`fs_size`].
+pub fn size(path: string) -> i64 { return fs_size(path); }
+
+/// Sorted directory listing filtered by `suffix` (""=all). See [`fs_list`].
+pub fn list(dir: string, suffix: string) -> *Vector<string> { return fs_list(dir, suffix); }
+
+/// File split into lines. See [`fs_read_lines`].
+pub fn read_lines(path: string) -> *Vector<string> { return fs_read_lines(path); }
+
+/// Create `path` and all missing parents (Rust `create_dir_all`). See [`fs_mkdir_p`].
+pub fn mkdir_p(path: string) -> bool { return fs_mkdir_p(path); }
+
+/// Delete a single file. See [`fs_remove_file`].
+pub fn remove_file(path: string) -> bool { return fs_remove_file(path); }
+
+/// Recursively delete a directory (Rust `remove_dir_all`). See [`fs_remove_dir_rec`].
+pub fn remove_dir_all(path: string) -> bool { return fs_remove_dir_rec(path); }
+
+/// Copy a single file. See [`fs_copy_file`].
+pub fn copy(src: string, dst: string) -> bool { return fs_copy_file(src, dst); }
+
+/// Recursively copy a directory. See [`fs_copy_dir_rec`].
+pub fn copy_dir_all(src: string, dst: string) -> bool { return fs_copy_dir_rec(src, dst); }
+
+/// Final path component. See [`fs_basename`].
+pub fn basename(path: string) -> string { return fs_basename(path); }
+
+/// File extension without the dot. See [`fs_extension`].
+pub fn extension(path: string) -> string { return fs_extension(path); }
+
+/// Make `link` a symlink to `target`, idempotently. See [`fs_symlink`].
+pub fn symlink(target: string, link: string) -> bool { return fs_symlink(target, link); }

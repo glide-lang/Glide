@@ -407,6 +407,11 @@ pub fn is_libc_symbol(s: string) -> bool {
     if s.eq("index") || s.eq("rindex") || s.eq("sbrk") || s.eq("brk") {
         return true;
     }
+    // libgen.h — a user `fs::basename` / `dirname` must be renamed away from
+    // these or the emitted C clashes with the libc prototype.
+    if s.eq("basename") || s.eq("dirname") {
+        return true;
+    }
     return false;
 }
 

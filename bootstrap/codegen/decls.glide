@@ -1093,7 +1093,7 @@ pub fn emit_enum(s: *Stmt) {
 // so users can write either the full or partial qualified form. Single-
 // segment paths only register the full form. Last write wins on collisions
 // (Phase 2 territory).
-fn register_alias_suffixes(g: *CG, mod_path: string, name: string) {
+fn register_alias_suffixes(g: *CG, mod_path: string, name: string, cname: string) {
     if mod_path == null || mod_path.eq("") {
         return;
     }
@@ -1104,7 +1104,9 @@ fn register_alias_suffixes(g: *CG, mod_path: string, name: string) {
     let mut start: i32 = 0;
     while start < n {
         let suffix: string = mod_path.substring(start, n);
-        g.module_aliases.insert(suffix.concat("::").concat(name), name);
+        // Key is the Glide-level `mod::name`; value is the emitted C name,
+        // which differs when a body-bearing fn was renamed off a libc symbol.
+        g.module_aliases.insert(suffix.concat("::").concat(name), cname);
         let mut next: i32 = -1;
         let mut i: i32 = start;
         while i + 1 < n {
@@ -1889,7 +1891,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
             } else {
                 g.structs.insert(s.name, s);
             }
-            register_alias_suffixes(g, mod_path, s.name);
+            register_alias_suffixes(g, mod_path, s.name, s.name);
         }
         if s.kind == ST_FN {
             if s.type_params != null && s.type_params.len() > 0 {
@@ -1897,11 +1899,19 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
             } else {
                 g.fns.insert(s.name, s);
             }
-            register_alias_suffixes(g, mod_path, s.name);
+            // A body-bearing fn whose name shadows a libc symbol is emitted
+            // under a mangled C name (see decls.glide fn-decl path); the
+            // qualified alias must point at that same mangled name, or a
+            // `mod::read` call would emit a bare `read(...)` and clash.
+            let mut fn_cname: string = s.name;
+            if s.fn_body != null && is_libc_symbol(s.name) {
+                fn_cname = userfn_mangle(s.name);
+            }
+            register_alias_suffixes(g, mod_path, s.name, fn_cname);
         }
         if s.kind == ST_ENUM {
             g.enums.insert(s.name, s);
-            register_alias_suffixes(g, mod_path, s.name);
+            register_alias_suffixes(g, mod_path, s.name, s.name);
         }
         if s.kind == ST_CONST && s.let_ty != null {
             g.consts.insert(s.name, *s.let_ty);
