@@ -72,6 +72,11 @@ c_raw! {
     #ifndef GLIDE_PROCESS_HELPERS_DEFINED
     #define GLIDE_PROCESS_HELPERS_DEFINED
 
+    /* Pipe reads hand strings back to Glide, which expects the managed
+       (length-headered) representation — a raw malloc'd char* reads a
+       garbage len(). */
+    extern const char* __glide_string_from_buf(void* buf, int n);
+
     #ifdef _WIN32
     #include <windows.h>
     #else
@@ -838,7 +843,7 @@ c_raw! {
     }
 
     static int __glide_pipe_read(int64_t handle, int max, const char** out) {
-        *out = "";
+        *out = __glide_string_from_buf((void*)"", 0);
         if (handle < 0 || max <= 0) return -1;
         char* buf = (char*)malloc((size_t)max + 1);
         if (!buf) return -1;
@@ -847,30 +852,32 @@ c_raw! {
         if (!ReadFile((HANDLE)(intptr_t)handle, buf, (DWORD)max, &got, NULL)) {
             free(buf); return -1;
         }
-        buf[got] = 0;
-        *out = buf;
+        *out = __glide_string_from_buf(buf, (int)got);
+        free(buf);
         return (int)got;
     #else
         ssize_t n;
         do { n = read((int)handle, buf, (size_t)max); } while (n < 0 && errno == EINTR);
         if (n < 0) { free(buf); return -1; }
-        buf[n] = 0;
-        *out = buf;
+        *out = __glide_string_from_buf(buf, (int)n);
+        free(buf);
         return (int)n;
     #endif
     }
 
     static int __glide_pipe_read_all(int64_t handle, const char** out) {
-        *out = "";
+        *out = __glide_string_from_buf((void*)"", 0);
         if (handle < 0) return -1;
     #ifdef _WIN32
         char* buf = __glide_proc_drain_handle((HANDLE)(intptr_t)handle);
     #else
         char* buf = __glide_proc_drain_fd((int)handle);
     #endif
-        if (!buf) { *out = ""; return 0; }
-        *out = buf;
-        return (int)strlen(buf);
+        if (!buf) return 0;
+        int n = (int)strlen(buf);
+        *out = __glide_string_from_buf(buf, n);
+        free(buf);
+        return n;
     }
 
     static int __glide_pipe_close(int64_t handle) {
