@@ -3436,9 +3436,12 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         if e.rhs != null && e.rhs.kind == EX_IDENT && op_to_c(e.op_code).eq("=") && _is_owned_local(g, e.rhs.str_val) {
             g.moved_locals.insert(e.rhs.str_val, true);
         }
-        print!("(");
-        if _ov {
-            let _ci: *Type = strip_ptr(g.lookup(e.lhs.str_val));
+        let _lty: *Type = if _ov { g.lookup(e.lhs.str_val) } else { null };
+        if _ov && _lty != null {
+            // Evaluate the RHS into a temp BEFORE freeing the old value, so a
+            // self-referencing RHS (`a = a + b`, `a = f(a)`) reads the live
+            // value, not freed memory.
+            let _ci: *Type = strip_ptr(_lty);
             let mut _ovhasown: bool = false;
             if _ci != null && _ci.kind == TY_NAMED && g.structs.contains(_ci.name) {
                 let _osd: Stmt = g.structs.get(_ci.name);
@@ -3451,20 +3454,30 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                     }
                 }
             }
+            print!("({ ".concat(type_to_c(_lty)).concat(" __ovnew = ("));
+            emit_expr(g, e.rhs);
+            print!("); ");
             if _ci != null && _ci.kind == TY_NAMED && g.fns.contains(_ci.name.concat("_free")) {
                 print!(_ci.name.concat("_free("));
                 emit_expr(g, e.lhs);
-                print!("), ");
+                print!("); ");
             } else if _ovhasown {
                 print!("__glide_drop_".concat(_ci.name).concat("("));
                 emit_expr(g, e.lhs);
-                print!("), ");
+                print!("); ");
             } else {
                 print!("free((void*)(");
                 emit_expr(g, e.lhs);
-                print!(")), ");
+                print!(")); ");
             }
+            emit_expr(g, e.lhs);
+            print!(" = __ovnew; })");
+            if e.lhs != null && e.lhs.kind == EX_IDENT {
+                g.moved_locals.insert(e.lhs.str_val, false);
+            }
+            return;
         }
+        print!("(");
         emit_expr(g, e.lhs);
         print!(" ", op_to_c(e.op_code), " ");
         emit_expr(g, e.rhs);
