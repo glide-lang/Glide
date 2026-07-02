@@ -3112,6 +3112,49 @@ fn _check_match_coverage(t: *Typer, scrut_ty: *Type, arms: *Vector<MatchArm>, li
             t.push_diag(line, col, 1, "match-not-exhaustive", "match on `".concat(scrut_ty.name).concat("` is not exhaustive: missing ").concat(missing).concat(". Add an arm for each, or `_ =>` to handle the rest."));
         }
     }
+    // Result / Option / OptResult are closed sums too — require every
+    // constructor (or a `_`), so a `match r { ok(v) => {} }` that silently drops
+    // the error arm is rejected. `match` is exhaustive, like Rust.
+    let is_optres: bool = scrut_ty != null && scrut_ty.kind == TY_OPT_RESULT;
+    if !has_wildcard && !has_literal && (is_opt || is_res || is_optres) {
+        let needed: *Vector<string> = Vector::new();
+        if is_opt {
+            needed.push("some");
+            needed.push("none");
+        }
+        if is_res {
+            needed.push("ok");
+            needed.push("err");
+        }
+        if is_optres {
+            needed.push("ok");
+            needed.push("err");
+            needed.push("none");
+        }
+        let mut missing2: string = "";
+        let mut mc2: i32 = 0;
+        for let i: i32 = 0; i < needed.len(); i++ {
+            let nm: string = needed.get(i);
+            if !covered.contains(nm) {
+                if mc2 > 0 {
+                    missing2 = missing2.concat(", ");
+                }
+                missing2 = missing2.concat("`").concat(nm).concat("`");
+                mc2 = mc2 + 1;
+            }
+        }
+        if mc2 > 0 {
+            let mut kindname: string = "Option";
+            if is_res {
+                kindname = "Result";
+            }
+            if is_optres {
+                kindname = "OptResult";
+            }
+            t.push_diag(line, col, 1, "match-not-exhaustive", "match on a ".concat(kindname).concat(" is not exhaustive: missing ").concat(missing2).concat(". Add an arm for each, or `_ =>` to handle the rest."));
+        }
+        needed.free();
+    }
     if parts != null {
         parts.free();
     }

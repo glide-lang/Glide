@@ -3524,7 +3524,7 @@ fn _expected_type_at(text: string, host: *Stmt, line0: i32, col0: i32) -> *Type 
 // scrutinee. A cursor inside an arm BODY (`ok(x) => { | }`) resolves to that
 // body's brace, whose preceding token is `=>` (not `match <expr>`), so it
 // correctly returns -1 and ordinary completion runs there.
-fn _match_arm_ctx(text: string, line0: i32, col0: i32) -> i32 {
+fn _match_arm_ctx(text: string, line0: i32, col0: i32, covered: *HashMap<bool>) -> i32 {
     let toks: *Vector<Token> = Vector::new();
     let lex: *Lexer = Lexer::new(text);
     while true {
@@ -3607,6 +3607,45 @@ fn _match_arm_ctx(text: string, line0: i32, col0: i32) -> i32 {
     if match_idx < 0 || match_idx > open_idx - 2 {
         return -1; // no `match`, or an empty scrutinee (`match {`)
     }
+    // Collect the constructor of every arm already written between `{` and the
+    // cursor, so completion can skip an arm the user already has. An arm head
+    // is an ident at the match-brace level (outside any arm body / binding)
+    // immediately followed by `(` or `=>`.
+    if covered != null {
+        let mut bdepth: i32 = 0;
+        let mut pdepth: i32 = 0;
+        for let k: i32 = open_idx + 1; k < n; k = k + 1 {
+            let tk: Token = toks.get(k);
+            if tk.kind == TOK_OP {
+                if tk.lexeme.eq("{") {
+                    bdepth = bdepth + 1;
+                } else {
+                    if tk.lexeme.eq("}") {
+                        if bdepth > 0 {
+                            bdepth = bdepth - 1;
+                        }
+                    } else {
+                        if tk.lexeme.eq("(") || tk.lexeme.eq("[") {
+                            pdepth = pdepth + 1;
+                        } else {
+                            if tk.lexeme.eq(")") || tk.lexeme.eq("]") {
+                                if pdepth > 0 {
+                                    pdepth = pdepth - 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+            if bdepth == 0 && pdepth == 0 && (tk.kind == TOK_IDENT || tk.kind == TOK_KEYWORD) && k + 1 < n {
+                let nx: Token = toks.get(k + 1);
+                if nx.kind == TOK_OP && (nx.lexeme.eq("(") || nx.lexeme.eq("=>")) {
+                    covered.insert(tk.lexeme, true);
+                }
+            }
+        }
+    }
     let last: Token = toks.get(open_idx - 1);
     return _line_col_offset(text, last.line - 1, last.column - 1) + last.lexeme.len();
 }
@@ -3616,25 +3655,25 @@ fn _match_arm_ctx(text: string, line0: i32, col0: i32) -> i32 {
 // Option, ok/err/none for an OptResult, and one arm per variant (binding any
 // payload) for an enum. Returns true when it produced arms — the caller then
 // early-returns so the ~900-symbol global dump never runs at an arm slot.
-fn _push_match_arm_items(stmts: *Vector<Stmt>, scrut_end: i32, text: string, line0: i32, path: string, items: *JsonValue, seen: *HashMap<bool>) -> bool {
+fn _push_match_arm_items(stmts: *Vector<Stmt>, scrut_end: i32, text: string, line0: i32, path: string, covered: *HashMap<bool>, snip: bool, items: *JsonValue, seen: *HashMap<bool>) -> bool {
     let ty: *Type = _chain_resolve_type(text, scrut_end, stmts, line0, path);
     if ty == null {
         return false;
     }
     if ty.kind == TY_RESULT {
-        json_arr_push(items, _arg_item("ok(v) => {}", 20, "match the success value", "ok(${1:v}) => {$0}", true));
-        json_arr_push(items, _arg_item("err(e) => {}", 20, "match the error", "err(${1:e}) => {$0}", true));
+        _emit_arm(covered, "ok", _arm_insert("ok", true, snip), "match the success value", snip, items);
+        _emit_arm(covered, "err", _arm_insert("err", true, snip), "match the error", snip, items);
         return true;
     }
     if ty.kind == TY_OPTION {
-        json_arr_push(items, _arg_item("some(v) => {}", 20, "match the present value", "some(${1:v}) => {$0}", true));
-        json_arr_push(items, _arg_item("none() => {}", 20, "match the empty case", "none() => {$0}", true));
+        _emit_arm(covered, "some", _arm_insert("some", true, snip), "match the present value", snip, items);
+        _emit_arm(covered, "none", _arm_insert("none", false, snip), "match the empty case", snip, items);
         return true;
     }
     if ty.kind == TY_OPT_RESULT {
-        json_arr_push(items, _arg_item("ok(v) => {}", 20, "match the success value", "ok(${1:v}) => {$0}", true));
-        json_arr_push(items, _arg_item("err(e) => {}", 20, "match the error", "err(${1:e}) => {$0}", true));
-        json_arr_push(items, _arg_item("none() => {}", 20, "match the empty case", "none() => {$0}", true));
+        _emit_arm(covered, "ok", _arm_insert("ok", true, snip), "match the success value", snip, items);
+        _emit_arm(covered, "err", _arm_insert("err", true, snip), "match the error", snip, items);
+        _emit_arm(covered, "none", _arm_insert("none", false, snip), "match the empty case", snip, items);
         return true;
     }
     let inner: *Type = _strip_ptr_borrow(ty);
@@ -3645,33 +3684,88 @@ fn _push_match_arm_items(stmts: *Vector<Stmt>, scrut_end: i32, text: string, lin
     if d == null || d.kind != ST_ENUM || d.enum_variants == null {
         return false;
     }
-    let mut emitted: bool = false;
     for let i: i32 = 0; i < d.enum_variants.len(); i++ {
         let ev: EnumVariant = d.enum_variants.get(i);
-        if ev.name == null {
+        if ev.name == null || covered.contains(ev.name) {
             continue;
         }
+        let has_payload: bool = ev.fields != null && ev.fields.len() > 0;
         let mut label: string = ev.name.concat(" => {}");
-        let mut insert: string = ev.name.concat(" => {$0}");
-        if ev.fields != null && ev.fields.len() > 0 {
-            let mut binds: string = "";
-            for let k: i32 = 0; k < ev.fields.len(); k++ {
-                if k > 0 {
-                    binds = binds.concat(", ");
-                }
-                binds = binds.concat("${").concat(format!("{}", k + 1)).concat(":").concat(_arg_pname(k)).concat("}");
-            }
+        if has_payload {
             label = ev.name.concat("(…) => {}");
-            insert = ev.name.concat("(").concat(binds).concat(") => {$0}");
         }
         if seen.contains(label) {
             continue;
         }
         seen.insert(label, true);
-        json_arr_push(items, _arg_item(label, 20, "match ".concat(inner.name).concat("::").concat(ev.name), insert, true));
-        emitted = true;
+        let mut insert: string = ev.name.concat(" => {}");
+        if snip {
+            insert = ev.name.concat(" => {$0}");
+        }
+        if has_payload {
+            insert = ev.name.concat(_arm_binds(ev.fields.len(), snip));
+            if snip {
+                insert = insert.concat(" => {$0}");
+            } else {
+                insert = insert.concat(" => {}");
+            }
+        }
+        json_arr_push(items, _arg_item(label, 20, "match ".concat(inner.name).concat("::").concat(ev.name), insert, snip));
     }
-    return emitted;
+    return true;
+}
+
+// The insertText for a fixed ctor arm (`ok`/`err`/`some`/`none`). When the
+// client supports snippets, place a tab stop on the binding + the body;
+// otherwise emit plain, VALID Glide (`ok(v) => {}`) so a naive client never
+// mangles `${1:v}` into a bare `1`.
+fn _arm_insert(ctor: string, has_bind: bool, snip: bool) -> string {
+    let mut bind: string = "v";
+    if ctor.eq("err") {
+        bind = "e";
+    }
+    if !has_bind {
+        if snip {
+            return ctor.concat("() => {$0}");
+        }
+        return ctor.concat("() => {}");
+    }
+    if snip {
+        return ctor.concat("(${1:").concat(bind).concat("}) => {$0}");
+    }
+    return ctor.concat("(").concat(bind).concat(") => {}");
+}
+
+// Binding list for an enum payload arm: `(${1:a}, ${2:b})` (snippet) or
+// `(a, b)` (plain).
+fn _arm_binds(n: i32, snip: bool) -> string {
+    let mut s: string = "(";
+    for let k: i32 = 0; k < n; k = k + 1 {
+        if k > 0 {
+            s = s.concat(", ");
+        }
+        if snip {
+            s = s.concat("${").concat(format!("{}", k + 1)).concat(":").concat(_arg_pname(k)).concat("}");
+        } else {
+            s = s.concat(_arg_pname(k));
+        }
+    }
+    return s.concat(")");
+}
+
+// Emit one fixed-ctor arm unless the user already wrote it.
+fn _emit_arm(covered: *HashMap<bool>, ctor: string, insert: string, detail: string, snip: bool, items: *JsonValue) {
+    if covered.contains(ctor) {
+        return;
+    }
+    let mut label: string = ctor.concat("(v) => {}");
+    if ctor.eq("err") {
+        label = "err(e) => {}";
+    }
+    if ctor.eq("none") {
+        label = "none() => {}";
+    }
+    json_arr_push(items, _arg_item(label, 20, detail, insert, snip));
 }
 
 // ===================== C completion inside `c_raw! { }` =====================
@@ -4370,14 +4464,17 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
     // some/none for an Option, one arm per enum variant) instead of the generic
     // symbol dump. Falls through to ordinary completion when the scrutinee isn't
     // a Result/Option/enum (e.g. `match n {` over an int).
-    let _marm_end: i32 = _match_arm_ctx(doc.text, line0, col0);
+    let _marm_covered: *HashMap<bool> = HashMap::new();
+    let _marm_end: i32 = _match_arm_ctx(doc.text, line0, col0, _marm_covered);
     if _marm_end >= 0 {
-        if _push_match_arm_items(doc.stmts, _marm_end, doc.text, line0, uri_to_path(uri), items, seen) {
+        if _push_match_arm_items(doc.stmts, _marm_end, doc.text, line0, uri_to_path(uri), _marm_covered, state.client_snippets, items, seen) {
+            _marm_covered.free();
             seen.free();
             lsp_send_response(id, items);
             return;
         }
     }
+    _marm_covered.free();
     // Expected-type boost at a callee-less slot (a `return` expression or an
     // `if`/`while` condition): float values of the expected type and matching
     // in-scope locals, then fall through so ordinary completion still appears.

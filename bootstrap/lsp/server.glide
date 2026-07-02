@@ -233,6 +233,11 @@ pub struct LspState {
     // project (not on every file open), so the editor doesn't re-hit the
     // network on every keystroke.
     pub fetch_attempted: *HashMap<bool>,
+    // Does the client expand `${1:x}` / `$0` snippet placeholders? Read from
+    // capabilities.textDocument.completion.completionItem.snippetSupport at
+    // `initialize`. When false, completion must emit plain, valid text — a
+    // naive client otherwise mangles `${1:v}` into a bare `1`.
+    pub client_snippets: bool,
 }
 
 pub fn lsp_state_new() -> *LspState {
@@ -254,6 +259,7 @@ pub fn lsp_state_new() -> *LspState {
     s.lint_applied_root = "";
     let fa: *HashMap<bool> = HashMap::new();
     s.fetch_attempted = fa;
+    s.client_snippets = false;
     populate_stdlib_index(s);
     return s;
 }
@@ -3038,6 +3044,9 @@ fn _ui_collect_type(t: *Type, used: *HashMap<bool>) {
 fn lsp_dispatch(req: *JsonValue, state: *LspState) -> bool {
     let method: string = json_as_string(json_get(req, "method"));
     if method.eq("initialize") {
+        // capabilities.textDocument.completion.completionItem.snippetSupport
+        let _ci: *JsonValue = json_get(json_get(json_get(json_get(json_get(req, "params"), "capabilities"), "textDocument"), "completion"), "completionItem");
+        state.client_snippets = json_as_bool(json_get(_ci, "snippetSupport"));
         handle_initialize(req);
         return false;
     }

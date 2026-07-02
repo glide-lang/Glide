@@ -108,6 +108,28 @@ case_diagnostics("unused fn",
     'fn helper() -> i32 { return 1; }\nfn main() -> i32 { return 0; }',
     expect_codes_present=["unused-fn"])
 
+# match is exhaustive like Rust: a Result match missing the `err` arm is flagged.
+case_diagnostics("non-exhaustive Result match",
+    'fn f() -> !i32 { return ok(1); }\n'
+    'fn main() -> i32 {\n'
+    '    match f() {\n'
+    '        ok(v) => { return v; }\n'
+    '    }\n'
+    '    return 0;\n'
+    '}',
+    expect_codes_present=["match-not-exhaustive"])
+
+# An Option match with both arms is exhaustive -> no diagnostic.
+case_diagnostics("exhaustive Option match is clean",
+    'fn f() -> ?i32 { return some(1); }\n'
+    'fn main() -> i32 {\n'
+    '    match f() {\n'
+    '        some(v) => { return v; }\n'
+    '        none() => { return 0; }\n'
+    '    }\n'
+    '}',
+    expect_codes_absent=["match-not-exhaustive"])
+
 case_diagnostics("for-in over a scalar (bare int var)",
     'fn main() -> i32 {\n    let n: i32 = 5;\n    for i in n { println!(i); }\n    return 0;\n}',
     expect_codes_present=["for-in-not-iterable"])
@@ -1322,6 +1344,19 @@ case_completion_absent("match arm completion stays quiet for an int scrutinee",
     '}',
     {"line":3,"character":8},
     ["ok(v) => {}","some(v) => {}"])
+
+# Dedup: an arm already written (`ok(v) => {}`) is not offered again.
+case_completion_absent("match arm completion skips an already-written arm",
+    'fn f() -> !i32 { return ok(1); }\n'
+    'fn main() -> i32 {\n'
+    '    match f() {\n'
+    '        ok(v) => {}\n'
+    '        \n'
+    '    }\n'
+    '    return 0;\n'
+    '}',
+    {"line":4,"character":8},
+    ["ok(v) => {}"])
 
 # ---- expected-type completion in a struct-literal field value ----
 
