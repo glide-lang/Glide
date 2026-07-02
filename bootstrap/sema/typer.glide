@@ -3958,7 +3958,16 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             //      propagated.
             // A null `inner` means the operand type wasn't inferable here (e.g.
             // a `*dyn Trait` method whose return only codegen recovers), not
-            // that it is wrong — stay quiet on rule 1 in that case.
+            // that it is wrong — stay quiet on rule 1 in that case. One shape
+            // IS always wrong even uninferable: `?` directly on a bare
+            // `ok/err/some/none` constructor (postfix binds tighter than `??`,
+            // so `a ?? err(m)?` lands here with nothing to propagate from).
+            if e.operand != null && e.operand.kind == EX_CALL && e.operand.lhs != null && e.operand.lhs.kind == EX_IDENT {
+                let cn: string = e.operand.lhs.str_val;
+                if cn.eq("err") || cn.eq("ok") || cn.eq("some") || cn.eq("none") {
+                    t.err_code(e.line, e.column, "invalid-try", "`?` applied directly to a bare `".concat(cn).concat("(...)` constructor has nothing to propagate; if this is a `??` fallback, parenthesize the whole expression: `(expr ?? ").concat(cn).concat("(...))?`"));
+                }
+            }
             if inner != null && inner.kind != TY_RESULT && inner.kind != TY_OPTION && inner.kind != TY_OPT_RESULT {
                 t.err(e.line, e.column, "`?` expects a `!T`, `?T`, or `?!T` value, got ".concat(type_to_string(inner)));
                 return inner;
