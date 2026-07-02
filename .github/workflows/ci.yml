@@ -44,20 +44,18 @@ jobs:
             curl zip unzip tar gzip
 
       - name: Install build deps (Linux)
+        # clang + lld drive cross/promoted builds against the sysroot's
+        # libc/ tree — the cross backend since the zig removal.
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential zlib1g-dev curl python3 python-is-python3
-
-      - name: Fetch Zig toolchain
-        run: bash tools/install_toolchain.sh
+          sudo apt-get install -y build-essential clang lld zlib1g-dev curl python3 python-is-python3
 
       - name: Bootstrap compiler from a published release
         # Glide is self-hosting, so there is no checked-in C seed: download a
         # previously published release binary and use it to build the current
-        # sources. The release archive bundles its own runtime/zig, but we run
-        # from the repo root so it uses the toolchain fetched above. Bump
-        # BOOT_TAG only when an older release can no longer compile `main`.
+        # sources with the host C compiler. Bump BOOT_TAG only when an older
+        # release can no longer compile `main`.
         run: |
           set -e
           BOOT_TAG=v0.4.1
@@ -81,19 +79,41 @@ jobs:
             ./glide version
           fi
 
+      - name: Cache linux sysroot v2
+        if: matrix.os == 'ubuntu-latest'
+        id: sysroot-cache
+        uses: actions/cache@v4
+        with:
+          path: dist/glide-sysroot-x86_64-linux-musl-ci.tar.gz
+          key: sysroot-v2-${{ matrix.triple }}-${{ hashFiles('tools/build_sysroot.sh', 'tools/bundle/linux-x86_64-musl/Dockerfile', 'tools/bundle/linux-x86_64-musl/build.sh') }}
+
+      - name: Build linux sysroot v2 (Docker)
+        # Built in-workflow instead of `glide target add`: the published
+        # asset for the current SYSROOT_VERSION predates the v2 layout
+        # (libc/ tree), and building here also exercises the release
+        # pipeline on every PR that touches it.
+        if: matrix.os == 'ubuntu-latest' && steps.sysroot-cache.outputs.cache-hit != 'true'
+        run: bash tools/build_sysroot.sh --target=${{ matrix.triple }} --version=ci
+
       - name: Install host sysroot
-        # A lib-linking `glide build` auto-promotes to the host triple and links
-        # the sysroot's bundled openssl / zlib (and ngtcp2 / nghttp3 where the
-        # platform ships them), so no system -dev packages are needed.
+        # A lib-linking `glide build` auto-promotes to the host triple and
+        # links the sysroot's static openssl / zlib (+ ngtcp2 / nghttp3
+        # where present), so no system -dev packages are needed.
         run: |
-          if [ "${{ runner.os }}" = "Windows" ]; then ./glide.exe target add ${{ matrix.triple }}; \
-          else ./glide target add ${{ matrix.triple }}; fi
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            mkdir -p ~/.glide/targets/${{ matrix.triple }}
+            tar -xzf dist/glide-sysroot-x86_64-linux-musl-ci.tar.gz -C ~/.glide/targets/${{ matrix.triple }}
+          elif [ "${{ runner.os }}" = "Windows" ]; then
+            ./glide.exe target add ${{ matrix.triple }}
+          else
+            ./glide target add ${{ matrix.triple }}
+          fi
 
       - name: Skip HTTP/3 test where ngtcp2 is unavailable
-        # The Linux (musl) / macOS sysroots don't ship a static
-        # ngtcp2_crypto_ossl (Alpine only has the gnutls variant), so the
-        # HTTP/3 test can't link there. Run it only on Windows for now.
-        if: matrix.os != 'windows-latest'
+        # The macOS sysroot (Homebrew) ships no static ngtcp2_crypto_ossl,
+        # so the HTTP/3 test can't link there. Linux runs it against the
+        # v2 sysroot's h3 stack; Windows against the MSYS2 packages.
+        if: matrix.os == 'macos-latest'
         run: |
           [ -f tests/http_h3_test.glide ] && mv tests/http_h3_test.glide tests/http_h3_test.glide.skip || true
 
@@ -101,3 +121,48 @@ jobs:
         run: |
           if [ "${{ runner.os }}" = "Windows" ]; then GLIDE="$PWD/glide.exe" bash tools/test_all.sh; \
           else GLIDE="$PWD/glide" bash tools/test_all.sh; fi
+
+  # Undefined-behavior sanitizer pass over the emitted C. The zig-clang
+  # backend used to trap UB incidentally (it caught real stdlib bugs);
+  # with zig gone this job does it explicitly and deliberately.
+  ubsan:
+    name: linux-ubsan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        # System libssl/zlib dev packages: the UBSan run stays on the
+        # host-cc path (no sysroot), since sanitizer runtimes for the
+        # cross musl target aren't shipped.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang lld zlib1g-dev libssl-dev curl python3 python-is-python3
+
+      - name: Bootstrap compiler from a published release
+        run: |
+          set -e
+          BOOT_TAG=v0.4.1
+          ver="${BOOT_TAG#v}"
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${BOOT_TAG}"
+          mkdir -p .boot
+          asset="glide-linux-x86_64-${ver}.tar.gz"
+          curl -fL -o ".boot/${asset}" "${base}/${asset}"
+          tar -xzf ".boot/${asset}" -C .boot
+          cp "$(find .boot -name glide -type f | head -1)" glide_boot
+          chmod +x glide_boot
+          ./glide_boot build bootstrap/main.glide -o glide
+          ./glide version
+
+      - name: Skip tests that need the cross sysroot
+        # h3 links ngtcp2/nghttp3 statics only the sysroot carries; the
+        # UBSan job deliberately runs without one (see deps note above).
+        run: |
+          [ -f tests/http_h3_test.glide ] && mv tests/http_h3_test.glide tests/http_h3_test.glide.skip || true
+
+      - name: Run test suite under UBSan
+        run: |
+          export CC=clang
+          export GLIDE_CFLAGS="-fsanitize=undefined -fno-sanitize-recover=undefined -g"
+          export GLIDE_LDFLAGS="-fsanitize=undefined"
+          ./glide test tests
