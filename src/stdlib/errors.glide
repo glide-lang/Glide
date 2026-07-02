@@ -1,0 +1,338 @@
+// Central error handling for Glide.
+//
+// A `!T` result carries its error in a single channel: a `string`. That keeps
+// code simple — there is no family of error types to thread around. But the
+// string need not be opaque: when it follows this module's canonical format it
+// can be RECOGNIZED back along two dimensions — the KIND (`ErrorKind`: not
+// found, permission denied, already exists…) and the ORIGIN (the module, the
+// operation, the path, and the operating-system code that failed).
+//
+// Canonical format:
+//
+//     "<module>: <op>: <Kind>: <message> [<path>] (os:<n>)"
+//     e.g. "fs: open: NotFound: no such file or directory [/tmp/x] (os:2)"
+//
+// The `[<path>]` and `(os:<n>)` are optional. A module builds the error with
+// `error(...)` (or `Error::new(...).emit()`) and passes the string to `err(...)`;
+// the caller handling the failure decodes it with `Error::of(msg)` and branches
+// on `.kind()`.
+
+extern fn __glide_strerror(errno: i32) -> string;
+extern fn __glide_errno_kind(errno: i32) -> i32;
+
+c_raw! {
+    #ifndef GLIDE_ERRORS_HELPERS_DEFINED
+    #define GLIDE_ERRORS_HELPERS_DEFINED
+    #include <string.h>
+    #include <stdlib.h>
+    #include <errno.h>
+    // Human OS message for an errno. Returns a heap copy (strerror points at a
+    // static buffer; a Glide string needs a pointer it owns, like read_file).
+    static const char* __glide_strerror(int e) {
+        const char* m = strerror(e);
+        if (!m) m = "";
+        size_t n = strlen(m);
+        char* out = (char*)malloc(n + 1);
+        memcpy(out, m, n + 1);
+        return out;
+    }
+    // OS errno -> ErrorKind ordinal. Done in C so the platform's own errno
+    // macros are used (the numeric values vary across platforms).
+    static int __glide_errno_kind(int e) {
+        switch (e) {
+            case ENOENT:    return 1;   // NotFound
+            case EACCES:    return 2;   // PermissionDenied
+            case EPERM:     return 2;
+            case EEXIST:    return 3;   // AlreadyExists
+            case ENOTDIR:   return 4;   // NotADirectory
+            case EISDIR:    return 5;   // IsADirectory
+            case ENOTEMPTY: return 6;   // DirectoryNotEmpty
+            case EINVAL:    return 7;   // InvalidInput
+            case EINTR:     return 8;   // Interrupted
+            case EROFS:     return 9;   // ReadOnlyFilesystem
+            case EMFILE:    return 10;  // TooManyOpenFiles
+            case ENFILE:    return 10;
+            case EAGAIN:    return 11;  // WouldBlock
+            default:        return 0;   // Other
+        }
+    }
+    #endif
+}
+
+// The KIND of a failure, independent of platform. This is what code inspects
+// to decide what to do (create the file that doesn't exist, warn about a
+// permission problem, and so on).
+pub enum ErrorKind {
+    NotFound,            // the target does not exist
+    PermissionDenied,    // no permission for the operation
+    AlreadyExists,       // the target already exists (e.g. exclusive create)
+    NotADirectory,       // expected a directory and found something else
+    IsADirectory,        // expected a file and found a directory
+    DirectoryNotEmpty,   // removing a directory that still has contents
+    InvalidInput,        // an invalid argument (path, flag, size)
+    Interrupted,         // the call was interrupted and may be retried
+    ReadOnlyFilesystem,  // writing to a read-only filesystem
+    TooManyOpenFiles,    // the open-descriptor limit was reached
+    WouldBlock,          // the operation would block (non-blocking I/O)
+    UnexpectedEof,       // end of file arrived earlier than expected
+    Other,               // any other failure (see `.message()`/`.os_code()`)
+}
+
+impl ErrorKind {
+    /// The stable name of the kind, used in the canonical format and readable
+    /// by humans. It is the same spelling `from_token` recognizes back.
+    ///
+    /// ```glide
+    /// ErrorKind::NotFound.to_string();   // "NotFound"
+    /// ```
+    pub fn to_string(self: ErrorKind) -> string {
+        match self {
+            NotFound           => { return "NotFound"; }
+            PermissionDenied   => { return "PermissionDenied"; }
+            AlreadyExists      => { return "AlreadyExists"; }
+            NotADirectory      => { return "NotADirectory"; }
+            IsADirectory       => { return "IsADirectory"; }
+            DirectoryNotEmpty  => { return "DirectoryNotEmpty"; }
+            InvalidInput       => { return "InvalidInput"; }
+            Interrupted        => { return "Interrupted"; }
+            ReadOnlyFilesystem => { return "ReadOnlyFilesystem"; }
+            TooManyOpenFiles   => { return "TooManyOpenFiles"; }
+            WouldBlock         => { return "WouldBlock"; }
+            UnexpectedEof      => { return "UnexpectedEof"; }
+            Other              => { return "Other"; }
+        }
+        return "Other";
+    }
+
+    /// Derives the kind from an operating-system error code (an `errno`).
+    /// Unknown codes become `Other`.
+    ///
+    /// ```glide
+    /// ErrorKind::from_os(2);   // ErrorKind::NotFound   (ENOENT)
+    /// ```
+    pub fn from_os(errno: i32) -> ErrorKind {
+        return _kind_from_ordinal(__glide_errno_kind(errno));
+    }
+
+    /// Recognizes the kind from its canonical name (the `<Kind>` token in the
+    /// error string). Unrecognized text becomes `Other`.
+    ///
+    /// ```glide
+    /// ErrorKind::from_token("PermissionDenied");   // ErrorKind::PermissionDenied
+    /// ```
+    pub fn from_token(tok: string) -> ErrorKind {
+        if tok.eq("NotFound")           { return ErrorKind::NotFound; }
+        if tok.eq("PermissionDenied")   { return ErrorKind::PermissionDenied; }
+        if tok.eq("AlreadyExists")      { return ErrorKind::AlreadyExists; }
+        if tok.eq("NotADirectory")      { return ErrorKind::NotADirectory; }
+        if tok.eq("IsADirectory")       { return ErrorKind::IsADirectory; }
+        if tok.eq("DirectoryNotEmpty")  { return ErrorKind::DirectoryNotEmpty; }
+        if tok.eq("InvalidInput")       { return ErrorKind::InvalidInput; }
+        if tok.eq("Interrupted")        { return ErrorKind::Interrupted; }
+        if tok.eq("ReadOnlyFilesystem") { return ErrorKind::ReadOnlyFilesystem; }
+        if tok.eq("TooManyOpenFiles")   { return ErrorKind::TooManyOpenFiles; }
+        if tok.eq("WouldBlock")         { return ErrorKind::WouldBlock; }
+        if tok.eq("UnexpectedEof")      { return ErrorKind::UnexpectedEof; }
+        return ErrorKind::Other;
+    }
+}
+
+fn _kind_from_ordinal(o: i32) -> ErrorKind {
+    if o == 1  { return ErrorKind::NotFound; }
+    if o == 2  { return ErrorKind::PermissionDenied; }
+    if o == 3  { return ErrorKind::AlreadyExists; }
+    if o == 4  { return ErrorKind::NotADirectory; }
+    if o == 5  { return ErrorKind::IsADirectory; }
+    if o == 6  { return ErrorKind::DirectoryNotEmpty; }
+    if o == 7  { return ErrorKind::InvalidInput; }
+    if o == 8  { return ErrorKind::Interrupted; }
+    if o == 9  { return ErrorKind::ReadOnlyFilesystem; }
+    if o == 10 { return ErrorKind::TooManyOpenFiles; }
+    if o == 11 { return ErrorKind::WouldBlock; }
+    if o == 12 { return ErrorKind::UnexpectedEof; }
+    return ErrorKind::Other;
+}
+
+// A decoded error: the same content as the canonical string, but in fields you
+// can inspect. Built by a module with `Error::new` (or the `error(...)`
+// shortcut) and reconstructed by the failure handler with `Error::of`.
+pub struct Error {
+    module: string,     // which subsystem it came from ("fs", "net", …)
+    op: string,         // which operation failed ("open", "read", "rename", …)
+    kind: ErrorKind,    // the kind of failure
+    message: string,    // human detail (usually the OS message)
+    path: string,       // the target involved, when any ("" otherwise)
+    os_code: i32,       // the OS errno, when any (0 otherwise)
+}
+
+impl Error {
+    /// Builds a structured error. A module normally uses the `error(...)`
+    /// shortcut instead of calling this directly; use `new` when you want a
+    /// kind/message that does not come from an `errno`.
+    ///
+    /// ```glide
+    /// let e = Error::new("fs", "open", ErrorKind::NotFound,
+    ///                    "no such file or directory", "/tmp/x", 2);
+    /// ```
+    pub fn new(module: string, op: string, kind: ErrorKind, message: string, path: string, os_code: i32) -> *Error {
+        let e: *Error = malloc(sizeof(Error)) as *Error;
+        e.module = module; e.op = op; e.kind = kind;
+        e.message = message; e.path = path; e.os_code = os_code;
+        return e;
+    }
+
+    /// Produces the canonical string — what goes inside `err(...)`. Empty
+    /// fields (path "", os_code 0) are omitted.
+    ///
+    /// ```glide
+    /// Error::new("fs","open",ErrorKind::NotFound,"no such file","/tmp/x",2).emit();
+    /// // "fs: open: NotFound: no such file [/tmp/x] (os:2)"
+    /// ```
+    pub fn emit(self: *Error) -> string {
+        let mut s: string = self.module.concat(": ").concat(self.op).concat(": ")
+            .concat(self.kind.to_string()).concat(": ").concat(self.message);
+        if !self.path.eq("") {
+            s = s.concat(" [").concat(self.path).concat("]");
+        }
+        if self.os_code != 0 {
+            s = s.concat(" (os:").concat(_errors_itoa(self.os_code)).concat(")");
+        }
+        return s;
+    }
+
+    /// Decodes a canonical error string back into its fields. A string that
+    /// does not follow the format still works: it becomes `Other` with the
+    /// whole string in `.message()` — this never fails.
+    ///
+    /// ```glide
+    /// let e = Error::of(r.err);
+    /// match e.kind() { NotFound => { ... } _ => { eprintln!(e.message()); } }
+    /// ```
+    pub fn of(msg: string) -> *Error {
+        let e: *Error = malloc(sizeof(Error)) as *Error;
+        e.module = ""; e.op = ""; e.kind = ErrorKind::Other;
+        e.message = msg; e.path = ""; e.os_code = 0;
+        // Three fixed leading segments: "<module>: <op>: <Kind>: ".
+        let i1: i32 = msg.index_of(": ");
+        if i1 < 0 { return e; }
+        let r1: string = msg.substring(i1 + 2, msg.len());
+        let i2: i32 = r1.index_of(": ");
+        if i2 < 0 { return e; }
+        let r2: string = r1.substring(i2 + 2, r1.len());
+        let i3: i32 = r2.index_of(": ");
+        if i3 < 0 { return e; }
+        e.module = msg.substring(0, i1);
+        e.op = r1.substring(0, i2);
+        e.kind = ErrorKind::from_token(r2.substring(0, i3));
+        // The remainder is "<message> [<path>] (os:<n>)" — path and os are read
+        // from the tail so a ':' inside the message doesn't confuse the parse.
+        let mut body: string = r2.substring(i3 + 2, r2.len());
+        if body.ends_with(")") {
+            let op_i: i32 = _rfind(body, "(os:");
+            if op_i >= 0 {
+                let num: string = body.substring(op_i + 4, body.len() - 1);
+                e.os_code = _atoi(num);
+                body = body.substring(0, op_i);
+                if body.ends_with(" ") { body = body.substring(0, body.len() - 1); }
+            }
+        }
+        if body.ends_with("]") {
+            let br_i: i32 = _rfind(body, "[");
+            if br_i >= 0 {
+                e.path = body.substring(br_i + 1, body.len() - 1);
+                body = body.substring(0, br_i);
+                if body.ends_with(" ") { body = body.substring(0, body.len() - 1); }
+            }
+        }
+        e.message = body;
+        return e;
+    }
+
+    /// The kind of the failure. This is the field you normally inspect.
+    pub fn kind(self: *Error) -> ErrorKind { return self.kind; }
+    /// `true` if the failure is of kind `k` — sugar for `self.kind() == k`.
+    pub fn is(self: *Error, k: ErrorKind) -> bool { return self.kind == k; }
+    /// The originating subsystem ("fs", "net", …). "" if unknown.
+    pub fn module(self: *Error) -> string { return self.module; }
+    /// The operation that failed ("open", "read", …). "" if unknown.
+    pub fn op(self: *Error) -> string { return self.op; }
+    /// The target involved (path). "" when not applicable.
+    pub fn path(self: *Error) -> string { return self.path; }
+    /// The OS error code (errno). 0 when not applicable.
+    pub fn os_code(self: *Error) -> i32 { return self.os_code; }
+    /// The human detail of the failure (usually the OS message).
+    pub fn message(self: *Error) -> string { return self.message; }
+    /// The full canonical string — the same one that arrived in the `!T`.
+    pub fn to_string(self: *Error) -> string { return self.emit(); }
+
+    /// Frees the decoded error.
+    pub fn free(self: *Error) { free(self as *void); }
+}
+
+/// Shortcut to build the error string a module passes to `err(...)`. Derives
+/// the kind and message from the OS `errno`. Pass `os_code = 0` (and use
+/// `Error::new`) when the failure does not come from a system call.
+///
+/// ```glide
+/// // inside fs::open, after an open() that returned -errno:
+/// return err(error("fs", "open", path, errno));
+/// // -> "fs: open: NotFound: no such file or directory [/tmp/x] (os:2)"
+/// ```
+pub fn error(module: string, op: string, path: string, os_code: i32) -> string {
+    let kind: ErrorKind = ErrorKind::from_os(os_code);
+    let msg: string = if os_code != 0 { __glide_strerror(os_code) } else { "" };
+    let e: *Error = Error::new(module, op, kind, msg, path, os_code);
+    let s: string = e.emit();
+    e.free();
+    return s;
+}
+
+/// Extracts just the KIND from an error string, without allocating an `Error`.
+/// Ideal for a quick `match` when you don't need the path/message.
+///
+/// ```glide
+/// match kind_of(r.err) { NotFound => { ... } _ => { ... } }
+/// ```
+pub fn kind_of(msg: string) -> ErrorKind {
+    // Third segment of the "<module>: <op>: <Kind>: …" format.
+    let i1: i32 = msg.index_of(": ");
+    if i1 < 0 { return ErrorKind::Other; }
+    let r1: string = msg.substring(i1 + 2, msg.len());
+    let i2: i32 = r1.index_of(": ");
+    if i2 < 0 { return ErrorKind::Other; }
+    let r2: string = r1.substring(i2 + 2, r1.len());
+    let i3: i32 = r2.index_of(": ");
+    if i3 < 0 { return ErrorKind::Other; }
+    return ErrorKind::from_token(r2.substring(0, i3));
+}
+
+// ---- internal helpers ----
+
+fn _errors_itoa(n: i32) -> string { return format!("{}", n); }
+
+fn _atoi(s: string) -> i32 {
+    let mut v: i32 = 0;
+    let mut neg: bool = false;
+    let mut i: i32 = 0;
+    if s.len() > 0 && s.at(0).to_int() == 45 { neg = true; i = 1; }
+    while i < s.len() {
+        let c: i32 = s.at(i).to_int();
+        if c < 48 || c > 57 { break; }
+        v = v * 10 + (c - 48);
+        i = i + 1;
+    }
+    if neg { return -v; }
+    return v;
+}
+
+// Last occurrence of `needle` in `hay` (there is no last_index_of builtin).
+fn _rfind(hay: string, needle: string) -> i32 {
+    let nl: i32 = needle.len();
+    if nl == 0 { return -1; }
+    let mut i: i32 = hay.len() - nl;
+    while i >= 0 {
+        if hay.substring(i, i + nl).eq(needle) { return i; }
+        i = i - 1;
+    }
+    return -1;
+}
