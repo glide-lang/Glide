@@ -1,0 +1,182 @@
+// New fs API: File, OpenOptions, Metadata, read_dir, fallible `!T` free
+// functions, path helpers, the path! macro, and error recognition.
+import stdlib::testing::*;
+import stdlib::fs;
+import stdlib::errors::*;
+import stdlib::bytes::*;
+
+const D: string = "/tmp/glide_fs2_test";
+
+fn _setup() { let _r: ! = fs::remove_dir_all(D); let _c: ! = fs::create_dir_all(D); }
+
+// File: create -> write_all (binary with NUL) -> open -> binary read_to_end.
+fn test_file_roundtrip() -> i32 {
+    _setup();
+    let p: string = fs::join(D, "a.bin");
+    let f: !*fs::File = fs::File::create(p);
+    assert!(f.ok);
+    let w: ! = f.val.write_all("ab\x00cd\x00ef");   // 8 bytes, two embedded NULs
+    assert!(w.ok);
+    f.val.close();
+    let g: !*fs::File = fs::File::open(p);
+    assert!(g.ok);
+    let r: !*ByteBuffer = g.val.read_to_end();
+    g.val.close();
+    assert!(r.ok);
+    assert_eq!(r.val.len(), 8);
+    r.val.free();
+    return 0;
+}
+
+// seek: Start/Current/End + stream_position.
+fn test_seek() -> i32 {
+    _setup();
+    let p: string = fs::join(D, "s.txt");
+    let _w: ! = fs::write(p, "0123456789");
+    let f: !*fs::File = fs::File::open(p);
+    let s1: !i64 = f.val.seek(fs::SeekFrom::Start(3));
+    assert_eq!(s1.val as i32, 3);
+    let pos: !i64 = f.val.stream_position();
+    assert_eq!(pos.val as i32, 3);
+    let s2: !i64 = f.val.seek(fs::SeekFrom::End(-2));
+    assert_eq!(s2.val as i32, 8);
+    let s3: !i64 = f.val.seek(fs::SeekFrom::Current(1));
+    assert_eq!(s3.val as i32, 9);
+    f.val.close();
+    return 0;
+}
+
+// Free functions: read/write/read_to_string, copy, rename.
+fn test_free_ops() -> i32 {
+    _setup();
+    let a: string = fs::join(D, "a.txt");
+    let _w: ! = fs::write(a, "content");
+    let t: !string = fs::read_to_string(a);
+    assert_str_eq!(t.val, "content");
+    let b: !*ByteBuffer = fs::read(a);
+    assert!(b.ok);
+    b.val.free();
+    let c: string = fs::join(D, "c.txt");
+    let n: !i64 = fs::copy(a, c);
+    assert!(n.ok);
+    assert!(fs::exists(c));
+    let d: string = fs::join(D, "d.txt");
+    let _r: ! = fs::rename(c, d);
+    assert!(fs::exists(d));
+    assert!(!fs::exists(c));
+    return 0;
+}
+
+// Directories: create_dir_all, read_dir + for-in + file_type, remove_dir_all.
+fn test_dirs() -> i32 {
+    _setup();
+    let _m: ! = fs::create_dir_all(fs::join(D, "sub/deep"));
+    let _w1: ! = fs::write(fs::join(D, "f1"), "x");
+    let _w2: ! = fs::write(fs::join(D, "f2"), "y");
+    let rd: !*fs::ReadDir = fs::read_dir(D);
+    assert!(rd.ok);
+    let mut files: i32 = 0;
+    let mut dirs: i32 = 0;
+    for e in rd.val {
+        let ft: !fs::FileType = e.file_type();
+        if ft.ok && ft.val.is_dir() { dirs = dirs + 1; } else { files = files + 1; }
+    }
+    rd.val.free();
+    assert_eq!(files, 2);
+    assert_eq!(dirs, 1);
+    let _rm: ! = fs::remove_dir_all(fs::join(D, "sub"));
+    assert!(!fs::exists(fs::join(D, "sub")));
+    return 0;
+}
+
+// OpenOptions: append accumulates; create_new fails with AlreadyExists.
+fn test_open_options() -> i32 {
+    _setup();
+    let p: string = fs::join(D, "log");
+    let _w: ! = fs::write(p, "1");
+    let ap: !*fs::File = fs::OpenOptions::new().write(true).append(true).open(p);
+    assert!(ap.ok);
+    let _wa: ! = ap.val.write_all("2");
+    ap.val.close();
+    assert_str_eq!(fs::read_to_string(p).val, "12");
+    let cn: !*fs::File = fs::File::create_new(p);
+    assert!(!cn.ok);
+    assert!(Error::of(cn.err).kind() == ErrorKind::AlreadyExists);
+    return 0;
+}
+
+// Metadata + symlink + read_link.
+fn test_metadata_symlink() -> i32 {
+    _setup();
+    let p: string = fs::join(D, "m.txt");
+    let _w: ! = fs::write(p, "12345");
+    let m: !*fs::Metadata = fs::metadata(p);
+    assert!(m.ok);
+    assert_eq!(m.val.len() as i32, 5);
+    assert!(m.val.is_file());
+    m.val.free();
+    let lk: string = fs::join(D, "lnk");
+    let sl: ! = fs::symlink(p, lk);
+    if sl.ok {
+        let tgt: !string = fs::read_link(lk);
+        assert_str_eq!(tgt.val, p);
+        let sm: !*fs::Metadata = fs::symlink_metadata(lk);
+        assert!(sm.val.is_symlink());
+        sm.val.free();
+    }
+    return 0;
+}
+
+// Error recognition: kind + origin.
+fn test_error_recognition() -> i32 {
+    _setup();
+    let r: !*ByteBuffer = fs::read("/nonexistent/file");
+    assert!(!r.ok);
+    let e: *Error = Error::of(r.err);
+    assert!(e.kind() == ErrorKind::NotFound);
+    assert_str_eq!(e.op(), "open");
+    assert_str_eq!(e.path(), "/nonexistent/file");
+    assert_str_eq!(e.module(), "fs");
+    e.free();
+    // removing a non-empty directory -> DirectoryNotEmpty
+    let _m: ! = fs::create_dir_all(fs::join(D, "ne"));
+    let _w: ! = fs::write(fs::join(D, "ne/f"), "x");
+    let rd: ! = fs::remove_dir(fs::join(D, "ne"));
+    assert!(!rd.ok);
+    assert!(kind_of(rd.err) == ErrorKind::DirectoryNotEmpty);
+    return 0;
+}
+
+// Idiomatic style: unannotated `let` + `?` on `!*File`, `!void`, and `!string`.
+// Exercises the two compiler resolutions (qualified free fn `fs::read`;
+// `?` over `!void`).
+fn _write_read(p: string) -> !string {
+    let f = fs::File::create(p)?;   // !*File, unannotated
+    f.write_all("idiom")?;          // ? over !void
+    f.close();
+    let bytes = fs::read(p)?;       // qualified fs::read, unannotated
+    let s = bytes.to_string();
+    bytes.free();
+    return ok(s);
+}
+fn test_idiomatic() -> i32 {
+    _setup();
+    let r: !string = _write_read(fs::join(D, "id.txt"));
+    assert!(r.ok);
+    assert_str_eq!(r.val, "idiom");
+    return 0;
+}
+
+// Path helpers and the path! macro.
+fn test_paths() -> i32 {
+    assert_str_eq!(fs::file_name("/a/b/c.txt"), "c.txt");
+    assert_str_eq!(fs::parent("/a/b/c.txt"), "/a/b");
+    assert_str_eq!(fs::extension("/a/Foo.PNG"), "png");
+    assert_str_eq!(fs::file_stem("/a/foo.tar.gz"), "foo.tar");
+    assert!(fs::is_absolute("/x"));
+    assert!(!fs::is_absolute("x/y"));
+    assert_str_eq!(fs::join("/a/b", "c"), "/a/b/c");
+    assert_str_eq!(fs::join("/a/b/", "c"), "/a/b/c");
+    assert_str_eq!(path!("home", "u", "cfg.toml"), "home/u/cfg.toml");
+    return 0;
+}
