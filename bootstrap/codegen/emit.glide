@@ -3252,6 +3252,12 @@ fn _is_extern_string_call(g: *CG, e: *Expr) -> bool {
     if name.eq("__glide_read_bytes") {
         return false;
     }
+    // _bytes_to_string (net/ip.glide) delegates to __glide_string_from_buf, so
+    // its result is already headered — every socket read flows through it, and
+    // a double adopt would strlen-truncate any binary body at its first NUL.
+    if name.eq("_bytes_to_string") {
+        return false;
+    }
     if !g.fns.contains(name) {
         return false;
     }

@@ -11,11 +11,15 @@ c_raw! {
     #define GLIDE_BYTES_TO_STRING_DEFINED
     #include <string.h>
     #include <stdlib.h>
+    // Build a length-prefixed (headered) Glide string, NOT a raw
+    // NUL-terminated char*: a socket read carries arbitrary bytes, and a
+    // raw buffer's `.len()` strlen's to the first 0x00 — silently
+    // truncating any binary payload (e.g. a gzip/tar/image download) at
+    // its first NUL. __glide_string_from_buf stamps the 4-byte header so
+    // `.len()` / `.at()` see the real byte count.
+    extern const char* __glide_string_from_buf(void* buf, int n);
     const char* _bytes_to_string(unsigned char* p, int n) {
-        char* out = (char*)malloc((size_t)(n + 1));
-        memcpy(out, p, (size_t)n);
-        out[n] = 0;
-        return out;
+        return __glide_string_from_buf((void*)p, n);
     }
     #endif
 }
