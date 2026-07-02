@@ -1,0 +1,219 @@
+// SHA-512 and SHA-384 (FIPS 180-4), plus their HMAC (RFC 2104).
+// C kernel in a c_raw! block — the compression function is 64-bit,
+// bit-twiddly and hot, exactly the shape the existing SHA-256 core uses.
+// Needed for TLS: the SHA-384 cipher suites' PRF/HKDF and the AES-256-GCM
+// key schedule.
+//
+// ```glide
+// import stdlib::crypto::sha512::*;
+//
+// sha512_hex("abc");   // ddaf35a1...
+// sha384_hex("abc");   // cb00753f...
+// let mac: string = hmac_sha512("key", "msg");
+// ```
+
+c_raw! {
+    #ifndef GLIDE_SHA512_DEFINED
+    #define GLIDE_SHA512_DEFINED
+    #include <stdint.h>
+    #include <string.h>
+    #include <stdlib.h>
+
+    static const uint64_t __glide_sha512_K[80] = {
+        0x428a2f98d728ae22ULL, 0x7137449123ef65cdULL, 0xb5c0fbcfec4d3b2fULL, 0xe9b5dba58189dbbcULL,
+        0x3956c25bf348b538ULL, 0x59f111f1b605d019ULL, 0x923f82a4af194f9bULL, 0xab1c5ed5da6d8118ULL,
+        0xd807aa98a3030242ULL, 0x12835b0145706fbeULL, 0x243185be4ee4b28cULL, 0x550c7dc3d5ffb4e2ULL,
+        0x72be5d74f27b896fULL, 0x80deb1fe3b1696b1ULL, 0x9bdc06a725c71235ULL, 0xc19bf174cf692694ULL,
+        0xe49b69c19ef14ad2ULL, 0xefbe4786384f25e3ULL, 0x0fc19dc68b8cd5b5ULL, 0x240ca1cc77ac9c65ULL,
+        0x2de92c6f592b0275ULL, 0x4a7484aa6ea6e483ULL, 0x5cb0a9dcbd41fbd4ULL, 0x76f988da831153b5ULL,
+        0x983e5152ee66dfabULL, 0xa831c66d2db43210ULL, 0xb00327c898fb213fULL, 0xbf597fc7beef0ee4ULL,
+        0xc6e00bf33da88fc2ULL, 0xd5a79147930aa725ULL, 0x06ca6351e003826fULL, 0x142929670a0e6e70ULL,
+        0x27b70a8546d22ffcULL, 0x2e1b21385c26c926ULL, 0x4d2c6dfc5ac42aedULL, 0x53380d139d95b3dfULL,
+        0x650a73548baf63deULL, 0x766a0abb3c77b2a8ULL, 0x81c2c92e47edaee6ULL, 0x92722c851482353bULL,
+        0xa2bfe8a14cf10364ULL, 0xa81a664bbc423001ULL, 0xc24b8b70d0f89791ULL, 0xc76c51a30654be30ULL,
+        0xd192e819d6ef5218ULL, 0xd69906245565a910ULL, 0xf40e35855771202aULL, 0x106aa07032bbd1b8ULL,
+        0x19a4c116b8d2d0c8ULL, 0x1e376c085141ab53ULL, 0x2748774cdf8eeb99ULL, 0x34b0bcb5e19b48a8ULL,
+        0x391c0cb3c5c95a63ULL, 0x4ed8aa4ae3418acbULL, 0x5b9cca4f7763e373ULL, 0x682e6ff3d6b2b8a3ULL,
+        0x748f82ee5defb2fcULL, 0x78a5636f43172f60ULL, 0x84c87814a1f0ab72ULL, 0x8cc702081a6439ecULL,
+        0x90befffa23631e28ULL, 0xa4506cebde82bde9ULL, 0xbef9a3f7b2c67915ULL, 0xc67178f2e372532bULL,
+        0xca273eceea26619cULL, 0xd186b8c721c0c207ULL, 0xeada7dd6cde0eb1eULL, 0xf57d4f7fee6ed178ULL,
+        0x06f067aa72176fbaULL, 0x0a637dc5a2c898a6ULL, 0x113f9804bef90daeULL, 0x1b710b35131c471bULL,
+        0x28db77f523047d84ULL, 0x32caab7b40c72493ULL, 0x3c9ebe0a15c9bebcULL, 0x431d67c49c100d4cULL,
+        0x4cc5d4becb3e42b6ULL, 0x597f299cfc657e2aULL, 0x5fcb6fab3ad6faecULL, 0x6c44198c4a475817ULL,
+    };
+
+    #define ROTR64(x, n) (((x) >> (n)) | ((x) << (64 - (n))))
+
+    static void __glide_sha512_compress(uint64_t H[8], const uint8_t block[128]) {
+        uint64_t W[80];
+        for (int i = 0; i < 16; i++) {
+            W[i] = 0;
+            for (int j = 0; j < 8; j++) W[i] = (W[i] << 8) | block[i*8 + j];
+        }
+        for (int i = 16; i < 80; i++) {
+            uint64_t s0 = ROTR64(W[i-15], 1) ^ ROTR64(W[i-15], 8) ^ (W[i-15] >> 7);
+            uint64_t s1 = ROTR64(W[i-2], 19) ^ ROTR64(W[i-2], 61) ^ (W[i-2] >> 6);
+            W[i] = W[i-16] + s0 + W[i-7] + s1;
+        }
+        uint64_t a = H[0], b = H[1], c = H[2], d = H[3];
+        uint64_t e = H[4], f = H[5], g = H[6], h = H[7];
+        for (int i = 0; i < 80; i++) {
+            uint64_t S1 = ROTR64(e, 14) ^ ROTR64(e, 18) ^ ROTR64(e, 41);
+            uint64_t ch = (e & f) ^ ((~e) & g);
+            uint64_t T1 = h + S1 + ch + __glide_sha512_K[i] + W[i];
+            uint64_t S0 = ROTR64(a, 28) ^ ROTR64(a, 34) ^ ROTR64(a, 39);
+            uint64_t mj = (a & b) ^ (a & c) ^ (b & c);
+            uint64_t T2 = S0 + mj;
+            h = g; g = f; f = e; e = d + T1;
+            d = c; c = b; b = a; a = T1 + T2;
+        }
+        H[0]+=a; H[1]+=b; H[2]+=c; H[3]+=d;
+        H[4]+=e; H[5]+=f; H[6]+=g; H[7]+=h;
+    }
+
+    // is384 selects the IV; the full 64-byte state is written to out (the
+    // caller truncates to 48 for SHA-384). The 128-bit length field is
+    // written as a 64-bit big-endian value in its low half (messages here
+    // never approach 2^64 bytes).
+    static void __glide_sha512_raw(const uint8_t* p, int64_t n, uint8_t out[64], int is384) {
+        uint64_t H512[8] = {
+            0x6a09e667f3bcc908ULL, 0xbb67ae8584caa73bULL, 0x3c6ef372fe94f82bULL, 0xa54ff53a5f1d36f1ULL,
+            0x510e527fade682d1ULL, 0x9b05688c2b3e6c1fULL, 0x1f83d9abfb41bd6bULL, 0x5be0cd19137e2179ULL,
+        };
+        uint64_t H384[8] = {
+            0xcbbb9d5dc1059ed8ULL, 0x629a292a367cd507ULL, 0x9159015a3070dd17ULL, 0x152fecd8f70e5939ULL,
+            0x67332667ffc00b31ULL, 0x8eb44a8768581511ULL, 0xdb0c2e0d64f98fa7ULL, 0x47b5481dbefa4fa4ULL,
+        };
+        uint64_t H[8];
+        memcpy(H, is384 ? H384 : H512, sizeof(H));
+
+        int64_t total = n;
+        while (n >= 128) {
+            __glide_sha512_compress(H, p);
+            p += 128; n -= 128;
+        }
+        uint8_t tail[256];
+        memcpy(tail, p, (size_t)n);
+        tail[n] = 0x80;
+        int64_t pad_end;
+        if (n + 1 + 16 <= 128) pad_end = 112;
+        else                   pad_end = 240;
+        for (int64_t i = n + 1; i < pad_end; i++) tail[i] = 0;
+        /* 128-bit length: high 64 bits are 0 for any realistic message. */
+        for (int i = 0; i < 8; i++) tail[pad_end + i] = 0;
+        uint64_t bit_len = (uint64_t)total * 8;
+        for (int i = 0; i < 8; i++) tail[pad_end + 8 + i] = (uint8_t)(bit_len >> (56 - i*8));
+        __glide_sha512_compress(H, tail);
+        if (pad_end == 240) __glide_sha512_compress(H, tail + 128);
+        for (int i = 0; i < 8; i++) {
+            for (int j = 0; j < 8; j++) out[i*8 + j] = (uint8_t)(H[i] >> (56 - j*8));
+        }
+    }
+
+    static void* __glide_sha512_buf(void* s, int n) {
+        void* out = malloc(64);
+        __glide_sha512_raw((const uint8_t*)s, (int64_t)n, (uint8_t*)out, 0);
+        return out;
+    }
+    static void* __glide_sha384_buf(void* s, int n) {
+        uint8_t full[64];
+        __glide_sha512_raw((const uint8_t*)s, (int64_t)n, full, 1);
+        void* out = malloc(48);
+        memcpy(out, full, 48);
+        return out;
+    }
+    static const char* __glide_sha512_hex_str(void* s, int n) {
+        uint8_t d[64];
+        __glide_sha512_raw((const uint8_t*)s, (int64_t)n, d, 0);
+        char* out = (char*)malloc(129);
+        static const char H[] = "0123456789abcdef";
+        for (int i = 0; i < 64; i++) { out[i*2] = H[(d[i]>>4)&0xf]; out[i*2+1] = H[d[i]&0xf]; }
+        out[128] = 0;
+        return out;
+    }
+    static const char* __glide_sha384_hex_str(void* s, int n) {
+        uint8_t d[64];
+        __glide_sha512_raw((const uint8_t*)s, (int64_t)n, d, 1);
+        char* out = (char*)malloc(97);
+        static const char H[] = "0123456789abcdef";
+        for (int i = 0; i < 48; i++) { out[i*2] = H[(d[i]>>4)&0xf]; out[i*2+1] = H[d[i]&0xf]; }
+        out[96] = 0;
+        return out;
+    }
+
+    // HMAC over SHA-512 / SHA-384. Block size = 128 for both. `outlen` is
+    // 64 (512) or 48 (384); the digest of the inner hash is always 64/48.
+    static void __glide_hmac_sha512_raw(const uint8_t* key, int64_t klen,
+                                        const uint8_t* msg, int64_t mlen,
+                                        uint8_t* out, int is384) {
+        int dlen = is384 ? 48 : 64;
+        uint8_t k_block[128];
+        if (klen > 128) {
+            uint8_t kh[64];
+            __glide_sha512_raw(key, klen, kh, is384);
+            memcpy(k_block, kh, (size_t)dlen);
+            for (int i = dlen; i < 128; i++) k_block[i] = 0;
+        } else {
+            memcpy(k_block, key, (size_t)klen);
+            for (int64_t i = klen; i < 128; i++) k_block[i] = 0;
+        }
+        uint8_t ipad[128], opad[128];
+        for (int i = 0; i < 128; i++) { ipad[i] = k_block[i] ^ 0x36; opad[i] = k_block[i] ^ 0x5c; }
+        uint8_t* buf = (uint8_t*)malloc((size_t)(128 + mlen));
+        memcpy(buf, ipad, 128);
+        if (mlen > 0) memcpy(buf + 128, msg, (size_t)mlen);
+        uint8_t inner[64];
+        __glide_sha512_raw(buf, 128 + mlen, inner, is384);
+        free(buf);
+        uint8_t obuf[128 + 64];
+        memcpy(obuf, opad, 128);
+        memcpy(obuf + 128, inner, (size_t)dlen);
+        __glide_sha512_raw(obuf, 128 + dlen, out, is384);
+    }
+    static void* __glide_hmac_sha512_buf(void* key, int klen, void* msg, int mlen) {
+        void* out = malloc(64);
+        __glide_hmac_sha512_raw((const uint8_t*)key,(int64_t)klen,(const uint8_t*)msg,(int64_t)mlen,(uint8_t*)out,0);
+        return out;
+    }
+    static void* __glide_hmac_sha384_buf(void* key, int klen, void* msg, int mlen) {
+        uint8_t full[64];
+        __glide_hmac_sha512_raw((const uint8_t*)key,(int64_t)klen,(const uint8_t*)msg,(int64_t)mlen,full,1);
+        void* out = malloc(48);
+        memcpy(out, full, 48);
+        return out;
+    }
+    #endif
+}
+
+extern fn __glide_sha512_buf(s: *void, n: i32) -> *void;
+extern fn __glide_sha384_buf(s: *void, n: i32) -> *void;
+extern fn __glide_sha512_hex_str(s: *void, n: i32) -> string;
+extern fn __glide_sha384_hex_str(s: *void, n: i32) -> string;
+extern fn __glide_hmac_sha512_buf(key: *void, klen: i32, msg: *void, mlen: i32) -> *void;
+extern fn __glide_hmac_sha384_buf(key: *void, klen: i32, msg: *void, mlen: i32) -> *void;
+extern fn __glide_string_from_buf(p: *void, n: i32) -> string;
+
+/// SHA-512 of `data` — 64 raw bytes. Binary-safe.
+pub fn sha512(data: string) -> string {
+    return __glide_string_from_buf(__glide_sha512_buf(data as *void, data.len()), 64);
+}
+/// SHA-512 of `data` as 128 lowercase hex chars.
+pub fn sha512_hex(data: string) -> string {
+    return __glide_sha512_hex_str(data as *void, data.len());
+}
+/// SHA-384 of `data` — 48 raw bytes. Binary-safe.
+pub fn sha384(data: string) -> string {
+    return __glide_string_from_buf(__glide_sha384_buf(data as *void, data.len()), 48);
+}
+/// SHA-384 of `data` as 96 lowercase hex chars.
+pub fn sha384_hex(data: string) -> string {
+    return __glide_sha384_hex_str(data as *void, data.len());
+}
+/// HMAC-SHA-512 — 64 raw bytes. Binary-safe (RFC 2104).
+pub fn hmac_sha512(key: string, msg: string) -> string {
+    return __glide_string_from_buf(__glide_hmac_sha512_buf(key as *void, key.len(), msg as *void, msg.len()), 64);
+}
+/// HMAC-SHA-384 — 48 raw bytes. Binary-safe (RFC 2104).
+pub fn hmac_sha384(key: string, msg: string) -> string {
+    return __glide_string_from_buf(__glide_hmac_sha384_buf(key as *void, key.len(), msg as *void, msg.len()), 48);
+}

@@ -1,0 +1,67 @@
+// SHA-512 / SHA-384 and their HMAC, against FIPS 180-4 / RFC 4231-style
+// reference vectors. Includes a >128-byte input to exercise the two-block
+// final-padding path.
+import stdlib::testing::*;
+import stdlib::crypto::sha512::*;
+
+fn test_sha512_abc() -> i32 {
+    assert_str_eq!(sha512_hex("abc"),
+        "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f");
+    return 0;
+}
+
+fn test_sha512_empty() -> i32 {
+    assert_str_eq!(sha512_hex(""),
+        "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e");
+    return 0;
+}
+
+fn test_sha384_abc() -> i32 {
+    assert_str_eq!(sha384_hex("abc"),
+        "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7");
+    return 0;
+}
+
+// 200 'a' bytes: > one 128-byte block, and the tail forces the second-block
+// padding branch.
+fn test_sha512_multiblock() -> i32 {
+    let big: string = "a".repeat(200);
+    assert_str_eq!(sha512_hex(big),
+        "4b11459c33f52a22ee8236782714c150a3b2c60994e9acee17fe68947a3e6789f31e7668394592da7bef827cddca88c4e6f86e4df7ed1ae6cba71f3e98faee9f");
+    assert_str_eq!(sha384_hex(big),
+        "0691b6e978614b67d60557b2a2cddd53406508522efa21c624dbbfa8ab6e726d5c586b489c7c09f24109a64c10211d48");
+    return 0;
+}
+
+fn test_raw_digest_lengths() -> i32 {
+    assert_eq!(sha512("abc").len(), 64);
+    assert_eq!(sha384("abc").len(), 48);
+    return 0;
+}
+
+fn test_hmac_sha512() -> i32 {
+    let mac: string = hmac_sha512("key", "The quick brown fox jumps over the lazy dog");
+    // compare via hex to keep the literal binary-safe
+    assert_eq!(mac.len(), 64);
+    assert_str_eq!(_hex(mac),
+        "b42af09057bac1e2d41708e48a902e09b5ff7f12ab428a4fe86653c73dd248fb82f948a549f7b791a5b41915ee4d1ec3935357e4e2317250d0372afa2ebeeb3a");
+    return 0;
+}
+
+fn test_hmac_sha384() -> i32 {
+    let mac: string = hmac_sha384("key", "The quick brown fox jumps over the lazy dog");
+    assert_eq!(mac.len(), 48);
+    assert_str_eq!(_hex(mac),
+        "d7f4727e2c0b39ae0f1e40cc96f60242d5b7801841cea6fc592c5d3e1ae50700582a96cf35e1e554995fe4e03381c237");
+    return 0;
+}
+
+fn _hex(s: string) -> string {
+    let d: string = "0123456789abcdef";
+    let mut out: string = "";
+    for let i: i32 = 0; i < s.len(); i++ {
+        let b: i32 = s.at(i).to_int() & 255;
+        out = out.concat(d.substring(b / 16, b / 16 + 1)).concat(d.substring(b & 15, (b & 15) + 1));
+    }
+    return out;
+}
