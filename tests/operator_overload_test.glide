@@ -17,6 +17,11 @@ impl Vec2 {
 struct Id { n: i32, note: string }
 impl Id { fn eq(self: *Id, o: *Id) -> bool { return self.n == o.n; } }
 
+// `impl Ord` (not just an inherent `cmp`) so a generic `T: Ord` bound is met.
+struct Score { v: i32 }
+impl Ord for Score { fn cmp(self: *Score, o: *Score) -> i32 { return self.v - o.v; } }
+fn max_ord<T: Ord>(a: *T, b: *T) -> *T { if a > b { return a; } return b; }
+
 fn test_string_value_equality() -> i32 {
     assert!("alelo" == "ale".concat("lo"));   // same bytes, different pointers
     assert!("alelo" != "pinto");
@@ -73,6 +78,13 @@ fn test_struct_ordering() -> i32 {
     assert!(b > a);
     assert!(a >= a);
     assert!(!(a > b));
+    return 0;
+}
+
+fn test_generic_ord_bound() -> i32 {
+    let a: *Score = Score { v: 5 };
+    let b: *Score = Score { v: 9 };
+    assert_eq!(max_ord(a, b).v, 9);   // operator (`>`) inside a generic `T: Ord`
     return 0;
 }
 
