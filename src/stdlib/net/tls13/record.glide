@@ -1,0 +1,128 @@
+// TLS 1.3 record protection (RFC 8446 §5.2), pure Glide. A protected
+// record is
+//     opaque_type=23 || legacy_version=0x0303 || length || encrypted_record
+// where encrypted_record = AEAD-Encrypt(key, nonce, aad, inner), the inner
+// plaintext is the real content followed by its true content-type byte
+// (and optional zero padding), the nonce is the write IV XOR the record
+// sequence number, and the AAD is the 5-byte record header.
+//
+// ```glide
+// import stdlib::net::tls13::record::*;
+//
+// let rec: !string = tls13_seal(AEAD_AES128_GCM, key, iv, 0, CT_HANDSHAKE, msg);
+// let inner: !*RecordPlain = tls13_open(AEAD_AES128_GCM, key, iv, 0, rec);
+// ```
+
+import stdlib::crypto::aes_gcm::*;
+import stdlib::crypto::chacha20poly1305::*;
+import stdlib::bytes::*;
+
+// AEAD identifiers.
+pub const AEAD_AES128_GCM: i32 = 1;
+pub const AEAD_AES256_GCM: i32 = 2;
+pub const AEAD_CHACHA20_POLY1305: i32 = 3;
+
+// TLS content types.
+pub const CT_CHANGE_CIPHER_SPEC: i32 = 20;
+pub const CT_ALERT: i32 = 21;
+pub const CT_HANDSHAKE: i32 = 22;
+pub const CT_APPLICATION_DATA: i32 = 23;
+
+fn _byte(s: string, i: i32) -> i32 { return s.at(i).to_int() & 255; }
+
+/// The per-record AEAD nonce: the 12-byte write IV XOR the 64-bit record
+/// sequence number, right-aligned (RFC 8446 §5.3).
+pub fn tls13_record_nonce(iv: string, seq: u64) -> string {
+    let bb: *ByteBuffer = ByteBuffer::new();
+    for let i: i32 = 0; i < iv.len(); i++ {
+        // sequence number occupies the low 8 bytes of the 12-byte field.
+        let shift: i32 = (iv.len() - 1 - i) * 8;
+        let sbyte: i32 = if shift < 64 { ((seq >> shift) & (255 as u64)) as i32 } else { 0 };
+        bb.push((_byte(iv, i) ^ sbyte) as u8);
+    }
+    let n: string = bb.to_string();
+    bb.free();
+    return n;
+}
+
+fn _aead_seal(aead: i32, key: string, nonce: string, plaintext: string, aad: string) -> !string {
+    if aead == AEAD_AES128_GCM || aead == AEAD_AES256_GCM {
+        return aes_gcm_encrypt(key, nonce, plaintext, aad);
+    } else if aead == AEAD_CHACHA20_POLY1305 {
+        return aead_encrypt(key, nonce, plaintext, aad);
+    }
+    return err("tls13: unknown AEAD");
+}
+fn _aead_open(aead: i32, key: string, nonce: string, ciphertext: string, aad: string) -> !string {
+    if aead == AEAD_AES128_GCM || aead == AEAD_AES256_GCM {
+        return aes_gcm_decrypt(key, nonce, ciphertext, aad);
+    } else if aead == AEAD_CHACHA20_POLY1305 {
+        return aead_decrypt(key, nonce, ciphertext, aad);
+    }
+    return err("tls13: unknown AEAD");
+}
+
+// The 5-byte record header used both as the wire header and the AEAD AAD.
+fn _record_header(payload_len: i32) -> string {
+    let bb: *ByteBuffer = ByteBuffer::new();
+    bb.push(CT_APPLICATION_DATA as u8);        // opaque_type
+    bb.push(3 as u8); bb.push(3 as u8);        // legacy_record_version 0x0303
+    bb.push(((payload_len >> 8) & 255) as u8);
+    bb.push((payload_len & 255) as u8);
+    let h: string = bb.to_string();
+    bb.free();
+    return h;
+}
+
+/// Protect one record: seal `content` (of true type `content_type`) into a
+/// TLSCiphertext record. `seq` is the write sequence number.
+pub fn tls13_seal(aead: i32, key: string, iv: string, seq: u64,
+                  content_type: i32, content: string) -> !string {
+    // inner plaintext = content || content_type (no padding).
+    let inner: *ByteBuffer = ByteBuffer::new();
+    inner.push_str(content);
+    inner.push((content_type & 255) as u8);
+    let plaintext: string = inner.to_string();
+    inner.free();
+
+    // AAD carries the ciphertext length = plaintext + 16-byte tag.
+    let aad: string = _record_header(plaintext.len() + 16);
+    let nonce: string = tls13_record_nonce(iv, seq);
+    let ct: !string = _aead_seal(aead, key, nonce, plaintext, aad);
+    if !ct.ok { return err(ct.err); }
+
+    let rec: *ByteBuffer = ByteBuffer::new();
+    rec.push_str(aad);           // header (same 5 bytes)
+    rec.push_str(ct.val);
+    let out: string = rec.to_string();
+    rec.free();
+    return ok(out);
+}
+
+// The recovered inner content of a protected record.
+pub struct RecordPlain {
+    pub content_type: i32,
+    pub content: string,
+}
+
+/// Unprotect one TLSCiphertext record (the full wire bytes including the
+/// 5-byte header). Strips any zero padding and returns the true content
+/// type and content. Fails closed on a bad tag.
+pub fn tls13_open(aead: i32, key: string, iv: string, seq: u64, record: string) -> !*RecordPlain {
+    if record.len() < 5 + 16 { return err("tls13: record too short"); }
+    let aad: string = record.substring(0, 5);
+    let body: string = record.substring(5, record.len());
+    let nonce: string = tls13_record_nonce(iv, seq);
+    let pt: !string = _aead_open(aead, key, nonce, body, aad);
+    if !pt.ok { return err(pt.err); }
+    let plaintext: string = pt.val;
+    // strip trailing zero padding, then the last non-zero byte is the type.
+    let mut end: i32 = plaintext.len();
+    while end > 0 && _byte(plaintext, end - 1) == 0 { end = end - 1; }
+    if end == 0 { return err("tls13: record has no content type"); }
+    let ct_byte: i32 = _byte(plaintext, end - 1);
+    let out: *RecordPlain = malloc(sizeof(RecordPlain)) as *RecordPlain;
+    out.content_type = ct_byte;
+    out.content = plaintext.substring(0, end - 1);
+    return ok(out);
+}

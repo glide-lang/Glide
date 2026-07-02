@@ -1,0 +1,63 @@
+// TLS 1.3 record protection: a known-answer AES-128-GCM seal (using the
+// RFC 8448 server-handshake key/iv, seq 0) cross-checked against Python,
+// plus round-trips and tamper rejection.
+import stdlib::testing::*;
+import stdlib::net::tls13::record::*;
+import stdlib::hex::*;
+
+fn _h(s: string) -> string { return hex_decode(s).unwrap(); }
+
+fn test_nonce_construction() -> i32 {
+    let iv: string = _h("5d313eb2671276ee13000b30");
+    assert_str_eq!(hex_encode(tls13_record_nonce(iv, 0)), "5d313eb2671276ee13000b30");
+    // seq 1 flips the last byte
+    assert_str_eq!(hex_encode(tls13_record_nonce(iv, 1)), "5d313eb2671276ee13000b31");
+    // seq that touches a higher byte
+    assert_str_eq!(hex_encode(tls13_record_nonce(iv, 256)), "5d313eb2671276ee13000a30");
+    return 0;
+}
+
+fn test_seal_kat() -> i32 {
+    let key: string = _h("3fce516009c21727d0f2e4e86ee403bc");
+    let iv: string  = _h("5d313eb2671276ee13000b30");
+    let content: string = _h("1122334455");
+    let rec: !string = tls13_seal(AEAD_AES128_GCM, key, iv, 0, CT_HANDSHAKE, content);
+    assert!(rec.is_ok());
+    assert_str_eq!(hex_encode(rec.unwrap()),
+        "1703030016c8dd002a03c1e0dbc091441e37113c1c68ec322e0c86");
+    return 0;
+}
+
+fn test_roundtrip_aes() -> i32 {
+    let key: string = _h("000102030405060708090a0b0c0d0e0f");
+    let iv: string  = _h("0a0b0c0d0e0f101112131415");
+    let content: string = "application payload\x00with a nul";
+    let rec: !string = tls13_seal(AEAD_AES128_GCM, key, iv, 7, CT_APPLICATION_DATA, content);
+    assert!(rec.is_ok());
+    let open: !*RecordPlain = tls13_open(AEAD_AES128_GCM, key, iv, 7, rec.unwrap());
+    assert!(open.is_ok());
+    assert_eq!(open.unwrap().content_type, CT_APPLICATION_DATA);
+    assert!(open.unwrap().content.eq(content));
+    return 0;
+}
+
+fn test_roundtrip_chacha() -> i32 {
+    let key: string = _h("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+    let iv: string  = _h("0a0b0c0d0e0f101112131415");
+    let rec: !string = tls13_seal(AEAD_CHACHA20_POLY1305, key, iv, 3, CT_HANDSHAKE, "finished-data");
+    assert!(rec.is_ok());
+    let open: !*RecordPlain = tls13_open(AEAD_CHACHA20_POLY1305, key, iv, 3, rec.unwrap());
+    assert!(open.is_ok());
+    assert_eq!(open.unwrap().content_type, CT_HANDSHAKE);
+    assert!(open.unwrap().content.eq("finished-data"));
+    return 0;
+}
+
+// Wrong sequence number => wrong nonce => auth failure (fail closed).
+fn test_wrong_seq_fails() -> i32 {
+    let key: string = _h("000102030405060708090a0b0c0d0e0f");
+    let iv: string  = _h("0a0b0c0d0e0f101112131415");
+    let rec: string = tls13_seal(AEAD_AES128_GCM, key, iv, 5, CT_HANDSHAKE, "x").unwrap();
+    assert!(tls13_open(AEAD_AES128_GCM, key, iv, 6, rec).is_err());
+    return 0;
+}
