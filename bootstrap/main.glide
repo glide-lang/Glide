@@ -2387,7 +2387,7 @@ fn _target_dir(triple: string) -> string {
 
 // Path to the host-architecture static-lib bundle shipped with the
 // glide install. `tools/build_release.sh --bundle-libs` stages
-// `lib/{libssl.a, libcrypto.a, libz.a, libngtcp2.a,
+// `lib/{libssl.a, libcrypto.a, libngtcp2.a,
 // libngtcp2_crypto_ossl.a, libnghttp3.a}` alongside the binary; host
 // builds prefer those statics over system dynamic libs, eliminating
 // the `apt install libssl-dev / libngtcp2-dev` prerequisite for end
@@ -2969,13 +2969,15 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     // c_raw header include emits the contiguous `#include <…>` directive,
     // and the concatenated needle never appears whole in this source.
     let inc: string = "#include ".concat("<");
-    let needs_zlib: bool = emitted_c.contains(inc.concat("zlib.h>"));
+    // zlib is gone: stdlib::compress is pure Glide (DEFLATE/inflate/CRC-32),
+    // so nothing emits <zlib.h> and the toolchain no longer links -lz. A user
+    // who hand-writes zlib in a c_raw block links it themselves via --ldflags.
     let needs_ngtcp2: bool = emitted_c.contains(inc.concat("ngtcp2/"));
     let needs_nghttp3: bool = emitted_c.contains(inc.concat("nghttp3/"));
     let needs_h3: bool = needs_ngtcp2 || needs_nghttp3;
     // ngtcp2_crypto_ossl pulls openssl, so HTTP/3 implies TLS underneath.
     let needs_ssl: bool = emitted_c.contains(inc.concat("openssl/")) || needs_h3;
-    let needs_any_lib: bool = needs_zlib || needs_ssl || needs_h3;
+    let needs_any_lib: bool = needs_ssl || needs_h3;
     // Plug-and-play host build: when the user passes no `--target=` but
     // the host's sysroot is already installed (or auto-fetchable), route
     // the build through the cross-compile pipeline with the host triple.
@@ -3241,9 +3243,6 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
             if needs_ssl {
                 cmd = cmd.concat(" -l:libssl.a -l:libcrypto.a");
             }
-            if needs_zlib {
-                cmd = cmd.concat(" -l:libz.a");
-            }
         } else {
             // OpenSSL 3.5+ build of ngtcp2 (required for h3.glide's
             // `ngtcp2_crypto_ossl_*` syms) usually lives at /usr/local/lib
@@ -3260,9 +3259,6 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
             if needs_ssl {
                 cmd = cmd.concat(" -lssl -lcrypto");
             }
-            if needs_zlib {
-                cmd = cmd.concat(" -lz");
-            }
         }
     } else {
         if needs_any_lib && _has_target_sysroot(eff_target) {
@@ -3271,8 +3267,8 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
             cmd = cmd.concat(" -L\"").concat(sysroot).concat("/lib\"");
             // Static-link from the sysroot; include ngtcp2 + nghttp3 only when
             // the sysroot ships them (h3-capable cross builds) and the program
-            // needs h3. The legacy unconditional `-static -lssl -lcrypto -lz`
-            // is now split so a compress-only cross binary skips openssl.
+            // needs h3. The legacy unconditional `-static -lssl -lcrypto`
+            // is now split so a lib-free cross binary skips openssl.
             let has_h3libs: bool = fs_exists(sysroot.concat("/lib/libngtcp2.a"));
             // No fully-static executables on macOS — Apple ships no static
             // libSystem/crt0, so `-static` dies with `ld: library 'crt0.o'
@@ -3286,9 +3282,6 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
             }
             if needs_ssl {
                 cmd = cmd.concat(" -lssl -lcrypto");
-            }
-            if needs_zlib {
-                cmd = cmd.concat(" -lz");
             }
         } else {
             if cross && _target_os(eff_target).eq("linux") {
@@ -3413,7 +3406,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
 }
 
 // Copy runtime DLLs the binary links against (libssl, libcrypto,
-// libngtcp2, libnghttp3, libz, plus the mingw C runtime stubs) from the
+// libngtcp2, libnghttp3, plus the mingw C runtime stubs) from the
 // cc binary's directory into the same directory as `out_path`. Windows
 // searches the .exe's own dir for DLLs before falling back to PATH, so
 // this makes the binary self-contained. No-op when the cc dir can't be
@@ -3428,9 +3421,8 @@ fn _bundle_runtime_dlls_win(out_path: string, cc: string) {
     let final_dst: string = if dst_dir.eq("") { "." } else { dst_dir };
     // Hard-coded prefixes match every shared lib the stdlib transitively
     // links: openssl 3 (ssl + crypto), ngtcp2 + nghttp3 + the OSSL crypto
-    // bridge, the optional XZ/zstd/zlib that compress.glide pulls in via
-    // libcrypto. Stable across mingw + msys2 ucrt64; the version-suffix
-    // bumps don't matter because the prefix match covers them.
+    // bridge. Stable across mingw + msys2 ucrt64; the version-suffix bumps
+    // don't matter because the prefix match covers them.
     let prefixes: *Vector<string> = Vector::new();
     prefixes.push("libssl-");
     prefixes.push("libcrypto-");
@@ -3438,8 +3430,6 @@ fn _bundle_runtime_dlls_win(out_path: string, cc: string) {
     prefixes.push("libngtcp2_crypto_ossl-");
     prefixes.push("libnghttp3-");
     prefixes.push("libnghttp2-");
-    prefixes.push("zlib1");
-    prefixes.push("libz-");
     prefixes.push("libwinpthread-");
     let entries: *Vector<string> = fs_list(cc_dir, ".dll");
     if entries == null {
