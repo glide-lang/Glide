@@ -1675,6 +1675,12 @@ pub fn _expr_type_node(e: *Expr, root: *Vector<Stmt>, line0: i32, path: string, 
                     return r2;
                 }
             }
+            // `Enum::Variant(payload)` constructor call → the enum type, so
+            // `let s = SeekFrom::Start(3)` (no annotation) resolves to SeekFrom.
+            let ce: *Stmt = find_top_decl(root, bare);
+            if ce != null && ce.kind == ST_ENUM {
+                return ty_named(bare);
+            }
             return _fn_ret_type(root, e.lhs.field);
         }
         if e.lhs.kind == EX_IDENT {
@@ -1683,6 +1689,14 @@ pub fn _expr_type_node(e: *Expr, root: *Vector<Stmt>, line0: i32, path: string, 
         if e.lhs.kind == EX_MEMBER {
             let recv: *Type = _expr_type_node(e.lhs.lhs, root, line0, path, depth + 1);
             return _method_ret_subst(root, recv, e.lhs.field);
+        }
+    }
+    if e.kind == EX_PATH && e.str_val != null {
+        // `Enum::Variant` nullary constructor (no call) → the enum type, so an
+        // unannotated `let c = Color::Red` resolves to Color.
+        let pe: *Stmt = find_top_decl(root, _last_path_seg(e.str_val));
+        if pe != null && pe.kind == ST_ENUM {
+            return ty_named(_last_path_seg(e.str_val));
         }
     }
     if e.kind == EX_UNARY {
@@ -3248,6 +3262,164 @@ fn _push_arg_type_items(stmts: *Vector<Stmt>, ctx: SigCallCtx, items: *JsonValue
     }
 }
 
+// Detect the cursor sitting at a fresh arm slot inside `match <expr> { | }`.
+// Returns the byte offset just past the scrutinee expression (so
+// `_chain_resolve_type` can type it), or -1 when the cursor is NOT at an arm
+// slot. Mirrors `_struct_lit_ctx`'s backward token scan: find the immediately
+// enclosing `{` at depth 0, then require a `match` keyword right before the
+// scrutinee. A cursor inside an arm BODY (`ok(x) => { | }`) resolves to that
+// body's brace, whose preceding token is `=>` (not `match <expr>`), so it
+// correctly returns -1 and ordinary completion runs there.
+fn _match_arm_ctx(text: string, line0: i32, col0: i32) -> i32 {
+    let toks: *Vector<Token> = Vector::new();
+    let lex: *Lexer = Lexer::new(text);
+    while true {
+        let tok: Token = lex.next_token();
+        if tok.kind == TOK_EOF {
+            break;
+        }
+        let tline: i32 = tok.line - 1;
+        let tcol: i32 = tok.column - 1;
+        if tline > line0 {
+            break;
+        }
+        if tline == line0 && tcol >= col0 {
+            break;
+        }
+        toks.push(tok);
+    }
+    let n: i32 = toks.len();
+    if n == 0 {
+        return -1;
+    }
+    // Immediately enclosing `{` at depth 0 (balanced arm bodies are skipped).
+    let mut depth: i32 = 0;
+    let mut open_idx: i32 = -1;
+    for let i: i32 = n - 1; i >= 0; i = i - 1 {
+        let t: Token = toks.get(i);
+        if t.kind != TOK_OP {
+            continue;
+        }
+        if t.lexeme.eq(")") || t.lexeme.eq("]") || t.lexeme.eq("}") {
+            depth = depth + 1;
+            continue;
+        }
+        if t.lexeme.eq("(") || t.lexeme.eq("[") {
+            if depth > 0 {
+                depth = depth - 1;
+                continue;
+            }
+            return -1; // enclosed by a call / index, not a match block
+        }
+        if t.lexeme.eq("{") {
+            if depth > 0 {
+                depth = depth - 1;
+                continue;
+            }
+            open_idx = i;
+            break;
+        }
+    }
+    if open_idx < 1 {
+        return -1;
+    }
+    // The scrutinee lives between `match` and `{`. Walk back over it (its own
+    // parens/brackets balanced) and require the `match` keyword at depth 0.
+    let mut sdepth: i32 = 0;
+    let mut match_idx: i32 = -1;
+    for let j: i32 = open_idx - 1; j >= 0; j = j - 1 {
+        let t: Token = toks.get(j);
+        if t.kind == TOK_OP {
+            if t.lexeme.eq(")") || t.lexeme.eq("]") || t.lexeme.eq("}") {
+                sdepth = sdepth + 1;
+                continue;
+            }
+            if t.lexeme.eq("(") || t.lexeme.eq("[") || t.lexeme.eq("{") {
+                if sdepth > 0 {
+                    sdepth = sdepth - 1;
+                    continue;
+                }
+                break; // a depth-0 opener before `match` — not a scrutinee
+            }
+            if sdepth == 0 && (t.lexeme.eq(";") || t.lexeme.eq(",") || t.lexeme.eq("=>")) {
+                break;
+            }
+        }
+        if sdepth == 0 && t.lexeme.eq("match") {
+            match_idx = j;
+            break;
+        }
+    }
+    if match_idx < 0 || match_idx > open_idx - 2 {
+        return -1; // no `match`, or an empty scrutinee (`match {`)
+    }
+    let last: Token = toks.get(open_idx - 1);
+    return _line_col_offset(text, last.line - 1, last.column - 1) + last.lexeme.len();
+}
+
+// Emit the correct match arms for a scrutinee whose expression ends at byte
+// `scrut_end`: `ok(v)`/`err(e)` for a Result, `some(v)`/`none()` for an
+// Option, ok/err/none for an OptResult, and one arm per variant (binding any
+// payload) for an enum. Returns true when it produced arms — the caller then
+// early-returns so the ~900-symbol global dump never runs at an arm slot.
+fn _push_match_arm_items(stmts: *Vector<Stmt>, scrut_end: i32, text: string, line0: i32, path: string, items: *JsonValue, seen: *HashMap<bool>) -> bool {
+    let ty: *Type = _chain_resolve_type(text, scrut_end, stmts, line0, path);
+    if ty == null {
+        return false;
+    }
+    if ty.kind == TY_RESULT {
+        json_arr_push(items, _arg_item("ok(v) => {}", 20, "match the success value", "ok(${1:v}) => {$0}", true));
+        json_arr_push(items, _arg_item("err(e) => {}", 20, "match the error", "err(${1:e}) => {$0}", true));
+        return true;
+    }
+    if ty.kind == TY_OPTION {
+        json_arr_push(items, _arg_item("some(v) => {}", 20, "match the present value", "some(${1:v}) => {$0}", true));
+        json_arr_push(items, _arg_item("none() => {}", 20, "match the empty case", "none() => {$0}", true));
+        return true;
+    }
+    if ty.kind == TY_OPT_RESULT {
+        json_arr_push(items, _arg_item("ok(v) => {}", 20, "match the success value", "ok(${1:v}) => {$0}", true));
+        json_arr_push(items, _arg_item("err(e) => {}", 20, "match the error", "err(${1:e}) => {$0}", true));
+        json_arr_push(items, _arg_item("none() => {}", 20, "match the empty case", "none() => {$0}", true));
+        return true;
+    }
+    let inner: *Type = _strip_ptr_borrow(ty);
+    if inner == null || inner.kind != TY_NAMED || inner.name == null {
+        return false;
+    }
+    let d: *Stmt = find_top_decl(stmts, inner.name);
+    if d == null || d.kind != ST_ENUM || d.enum_variants == null {
+        return false;
+    }
+    let mut emitted: bool = false;
+    for let i: i32 = 0; i < d.enum_variants.len(); i++ {
+        let ev: EnumVariant = d.enum_variants.get(i);
+        if ev.name == null {
+            continue;
+        }
+        let mut label: string = ev.name.concat(" => {}");
+        let mut insert: string = ev.name.concat(" => {$0}");
+        if ev.fields != null && ev.fields.len() > 0 {
+            let mut binds: string = "";
+            for let k: i32 = 0; k < ev.fields.len(); k++ {
+                if k > 0 {
+                    binds = binds.concat(", ");
+                }
+                binds = binds.concat("${").concat(format!("{}", k + 1)).concat(":").concat(_arg_pname(k)).concat("}");
+            }
+            label = ev.name.concat("(…) => {}");
+            insert = ev.name.concat("(").concat(binds).concat(") => {$0}");
+        }
+        if seen.contains(label) {
+            continue;
+        }
+        seen.insert(label, true);
+        json_arr_push(items, _arg_item(label, 20, "match ".concat(inner.name).concat("::").concat(ev.name), insert, true));
+        emitted = true;
+    }
+    return emitted;
+}
+
 // ===================== C completion inside `c_raw! { }` =====================
 //
 // The Glide lexer swallows a c_raw body as one opaque token, so ordinary Glide
@@ -3902,6 +4074,19 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
         seen.free();
         lsp_send_response(id, items);
         return;
+    }
+    // Match arms: cursor at a fresh arm slot inside `match <expr> { }`. Infer
+    // the scrutinee's type and offer the exact arms (ok/err for a Result,
+    // some/none for an Option, one arm per enum variant) instead of the generic
+    // symbol dump. Falls through to ordinary completion when the scrutinee isn't
+    // a Result/Option/enum (e.g. `match n {` over an int).
+    let _marm_end: i32 = _match_arm_ctx(doc.text, line0, col0);
+    if _marm_end >= 0 {
+        if _push_match_arm_items(doc.stmts, _marm_end, doc.text, line0, uri_to_path(uri), items, seen) {
+            seen.free();
+            lsp_send_response(id, items);
+            return;
+        }
     }
     // 1. Locals in scope (params + lets above the cursor in the containing fn).
     let host: *Stmt = fn_containing(doc.stmts, line0, uri_to_path(uri));

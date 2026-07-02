@@ -1271,6 +1271,58 @@ case_completion_has("Vector member completion offers new ergonomic methods",
     {"line":2,"character":6},
     ["sort","sort_by","contains","index_of","remove","insert","enumerate"])
 
+# ---- context-aware match-arm completion (scrutinee-typed arms) ----
+
+# Result scrutinee -> ok(v)/err(e) arms (the headline case).
+case_completion_has("match arm completion offers ok/err for a Result",
+    'fn find() -> !i32 { return ok(1); }\n'
+    'fn main() -> i32 {\n'
+    '    let r = find();\n'
+    '    match r {\n'
+    '        \n'
+    '    }\n'
+    '    return 0;\n'
+    '}',
+    {"line":4,"character":8},
+    ["ok(v) => {}","err(e) => {}"])
+
+# Option scrutinee -> some(v)/none() arms.
+case_completion_has("match arm completion offers some/none for an Option",
+    'fn find() -> ?i32 { return some(1); }\n'
+    'fn main() -> i32 {\n'
+    '    match find() {\n'
+    '        \n'
+    '    }\n'
+    '    return 0;\n'
+    '}',
+    {"line":3,"character":8},
+    ["some(v) => {}","none() => {}"])
+
+# Enum scrutinee (unannotated local) -> one arm per variant.
+case_completion_has("match arm completion offers enum variants",
+    'enum Color { Red, Green, Blue }\n'
+    'fn main() -> i32 {\n'
+    '    let c = Color::Red;\n'
+    '    match c {\n'
+    '        \n'
+    '    }\n'
+    '    return 0;\n'
+    '}',
+    {"line":4,"character":8},
+    ["Red => {}","Green => {}","Blue => {}"])
+
+# A non-matchable scrutinee (int) must NOT get bogus arms — normal completion.
+case_completion_absent("match arm completion stays quiet for an int scrutinee",
+    'fn main() -> i32 {\n'
+    '    let n = 5;\n'
+    '    match n {\n'
+    '        \n'
+    '    }\n'
+    '    return 0;\n'
+    '}',
+    {"line":3,"character":8},
+    ["ok(v) => {}","some(v) => {}"])
+
 # ---- struct hover (fields) + outline (field children) ----
 
 def _hover_val(r):
