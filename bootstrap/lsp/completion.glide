@@ -732,10 +732,20 @@ fn _list_module_members_from(idx: *Vector<ImportableSym>, path: string, items: *
         if sym.kind != SYMKIND_MODULE {
             continue;
         }
-        if !sym.module.starts_with(prefix) {
-            continue;
+        let mut rest: string = "";
+        if sym.module.starts_with(prefix) {
+            rest = sym.module.substring(prefix.len(), sym.module.len());
+        } else {
+            // Short qualifier: `http::` (typed in code) against the full
+            // module path `stdlib::http::client` — anchor on a `::` boundary
+            // so the folder's children list for the short form too.
+            let mid: string = "::".concat(prefix);
+            let mi: i32 = sym.module.index_of(mid);
+            if mi < 0 {
+                continue;
+            }
+            rest = sym.module.substring(mi + mid.len(), sym.module.len());
         }
-        let rest: string = sym.module.substring(prefix.len(), sym.module.len());
         if rest.eq("") {
             continue;
         }
@@ -807,6 +817,11 @@ fn _list_module_members_from(idx: *Vector<ImportableSym>, path: string, items: *
         }
         let mut own: bool = m.eq(path);
         if !exact_exists && leaf.eq(path) {
+            own = true;
+        }
+        // Multi-segment short form: `http::client::` matches the module
+        // `stdlib::http::client` by `::`-anchored suffix.
+        if !own && path.contains("::") && m.ends_with("::".concat(path)) {
             own = true;
         }
         let pm_reexport: bool = sym.kind == SYMKIND_PROC_MACRO && (m.eq(pm_mod) || leaf.eq(pm_mod));

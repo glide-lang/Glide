@@ -1,0 +1,12 @@
+// File+folder package: importing the parent file makes referenced folder
+// children loadable by their long path (`http::client::…`), and the short
+// form keeps working when the child is imported directly.
+import stdlib::testing::*;
+import stdlib::http;
+
+fn test_long_path_resolves() -> i32 {
+    let c = http::client::HttpClient::new();
+    assert!(c != null);
+    c.free();
+    return 0;
+}

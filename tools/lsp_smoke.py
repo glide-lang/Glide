@@ -1569,6 +1569,26 @@ case_feature("formatting refuses a file with parse errors",
     lambda r: check("no edits returned", (r.get("result") or []) == [],
                     f"got: {r.get('result')!r}"))
 
+# File+folder package: `http::` offers BOTH the file's symbols and the
+# folder's child modules; `http::client::` lists the child's pub symbols.
+case_completion_has("file+folder package lists both after ::",
+    'import stdlib::http;\n'
+    'fn main() -> i32 {\n'
+    '    http::\n'
+    '    return 0;\n'
+    '}',
+    {"line":2,"character":10},
+    ["client","handler","HttpRequest"])
+
+case_completion_has("child module symbols after long path",
+    'import stdlib::http;\n'
+    'fn main() -> i32 {\n'
+    '    http::client::\n'
+    '    return 0;\n'
+    '}',
+    {"line":2,"character":18},
+    ["HttpClient","http_get"])
+
 # A method named `free` that calls the BUILTIN free() is not self-recursion.
 case_diagnostics("method free calling builtin free is not recursion",
     'struct R { x: i32 }\n'

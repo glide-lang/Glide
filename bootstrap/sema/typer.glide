@@ -1479,6 +1479,42 @@ impl Typer {
     // True when `name` is a module the current file imported (the short
     // alias from `import a::b::name;`) or a full module path. Independent of
     // `enforce_visibility`, unlike is_module_path_allowed.
+    // How many leading segments of `qual` form a module path that
+    // suffix-matches some imported module (e.g. `http::client` against the
+    // import `stdlib::http::client` -> 2). 0 when none do.
+    fn _module_suffix_segs(self, qual: string) -> i32 {
+        let mut best: i32 = 0;
+        let mut end: i32 = qual.index_of("::");
+        let mut segs: i32 = 1;
+        while end >= 0 {
+            let cand: string = qual.substring(0, end);
+            if self.module_full_paths.contains(cand) {
+                best = segs;
+            } else {
+                let keys: *Vector<string> = self.module_full_paths.keys();
+                for let i: i32 = 0; i < keys.len(); i++ {
+                    if keys.get(i).ends_with("::".concat(cand)) {
+                        best = segs;
+                        break;
+                    }
+                }
+                keys.free();
+            }
+            let nx: i32 = qual.substring(end + 2, qual.len()).index_of("::");
+            if nx < 0 {
+                break;
+            }
+            end = end + 2 + nx;
+            segs = segs + 1;
+        }
+        // A single leading segment is the plain case handled by
+        // _is_imported_module; only multi-segment runs are interesting here.
+        if best < 2 {
+            return 0;
+        }
+        return best;
+    }
+
     fn _is_imported_module(self, name: string) -> bool {
         if name == null || name.eq("") {
             return false;
@@ -1506,6 +1542,25 @@ impl Typer {
         }
         let head: string = prefix.substring(0, cc);
         if !self._is_imported_module(head) {
+            // Multi-segment module qualifier: `http::client::HttpClient` where
+            // the import is `stdlib::http::client`. Accept the LONGEST leading
+            // run of segments that suffix-matches an imported module path and
+            // strip it whole, so file+folder packages can be referenced by
+            // their long form.
+            let mseg: i32 = self._module_suffix_segs(prefix);
+            if mseg > 0 {
+                let mut cut: i32 = 0;
+                let mut left: i32 = mseg;
+                while left > 0 {
+                    let nx: i32 = prefix.substring(cut, prefix.len()).index_of("::");
+                    if nx < 0 {
+                        return prefix;
+                    }
+                    cut = cut + nx + 2;
+                    left = left - 1;
+                }
+                return self._strip_mod_prefix(prefix.substring(cut, prefix.len()));
+            }
             return prefix;
         }
         let rest: string = prefix.substring(cc + 2, prefix.len());

@@ -102,6 +102,8 @@ pub fn load_into_str(stmts: *Vector<Stmt>, src: string, origin: string, loaded: 
             if multi_seg && s.imported_items == null && !s.import_wildcard && __glide_file_exists(resolved) {
                 s.import_is_module = true;
                 s.import_short = last_path_segment(unq);
+                let nocache: *HashMap<*Vector<Stmt>> = null;
+                load_referenced_pkg_children(stmts, src, origin, unq, s.import_short, resolved, loaded, pdiags, nocache);
             }
             load_into(stmts, resolved, loaded, pdiags);
             s.import_path = resolved;
@@ -209,6 +211,79 @@ pub fn load_into_with_cache(stmts: *Vector<Stmt>, path: string, loaded: *HashMap
 // referenced path files, resolve imports recursively, push each Stmt
 // (origin/import_path mutated on a local copy so the cached vec stays
 // invariant) into the outer `stmts`.
+// File+folder package: `import stdlib::http;` where `http.glide` sits next to
+// a directory `http/` makes the folder's files children of the same package,
+// addressed by their long path (`http::client::HttpClient`). Loading every
+// child eagerly would drag unreferenced heavyweights (h3 pulls QUIC link
+// deps), so only the children the importing source actually mentions
+// (`<short>::<child>::…`) are loaded — each also pushed as a synthesized
+// module import so the short form (`client::X`) works exactly like a
+// hand-written `import stdlib::http::client;`.
+fn load_referenced_pkg_children(stmts: *Vector<Stmt>, src_in: string, origin: string, imp_unq: string, short: string, resolved: string, loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>, cache: *HashMap<*Vector<Stmt>>) {
+    if short == null || short.eq("") || !resolved.ends_with(".glide") {
+        return;
+    }
+    let pkg_dir: string = resolved.substring(0, resolved.len() - 6);
+    let mut src: string = src_in;
+    if src == null || src.eq("") {
+        src = read_file(origin);
+    }
+    if src == null || src.eq("") {
+        return;
+    }
+    let needle: string = short.concat("::");
+    let done: *HashMap<bool> = HashMap::new();
+    let mut from: i32 = 0;
+    while from < src.len() {
+        let idx: i32 = src.substring(from, src.len()).index_of(needle);
+        if idx < 0 {
+            break;
+        }
+        let mut p: i32 = from + idx + needle.len();
+        from = p;
+        let start: i32 = p;
+        while p < src.len() {
+            let c: i32 = src.at(p).to_int();
+            if c == 95 || (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) {
+                p = p + 1;
+            } else {
+                break;
+            }
+        }
+        // Only `<short>::<child>::` (a MODULE path) counts — `http::http_get(`
+        // is a plain member of the file and loads nothing.
+        if p == start || p + 1 >= src.len() {
+            continue;
+        }
+        if !(src.at(p).to_int() == 58 && src.at(p + 1).to_int() == 58) {
+            continue;
+        }
+        let child: string = src.substring(start, p);
+        if done.contains(child) {
+            continue;
+        }
+        done.insert(child, true);
+        let child_file: string = pkg_dir.concat("/").concat(child).concat(".glide");
+        if !__glide_file_exists(child_file) {
+            continue;
+        }
+        if cache != null {
+            load_into_with_cache(stmts, child_file, loaded, pdiags, cache);
+        } else {
+            load_into(stmts, child_file, loaded, pdiags);
+        }
+        let si: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
+        ast_fill_defaults(si);
+        si.kind = ST_IMPORT;
+        si.import_path = child_file;
+        si.import_is_module = true;
+        si.import_short = child;
+        si.origin = origin;
+        stmts.push(*si);
+    }
+    done.free();
+}
+
 pub fn cached_resolve_and_push(stmts: *Vector<Stmt>, parsed: *Vector<Stmt>, origin: string, loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>, cache: *HashMap<*Vector<Stmt>>) {
     let auto_loads: *Vector<string> = Vector::new();
     let auto_seen: *HashMap<bool> = HashMap::new();
@@ -255,6 +330,7 @@ pub fn cached_resolve_and_push(stmts: *Vector<Stmt>, parsed: *Vector<Stmt>, orig
             if multi_seg && s.imported_items == null && !s.import_wildcard && __glide_file_exists(resolved) {
                 s.import_is_module = true;
                 s.import_short = last_path_segment(unq);
+                load_referenced_pkg_children(stmts, "", origin, unq, s.import_short, resolved, loaded, pdiags, cache);
             }
             load_into_with_cache(stmts, resolved, loaded, pdiags, cache);
             s.import_path = resolved;
