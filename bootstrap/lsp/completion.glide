@@ -5445,6 +5445,13 @@ fn collect_uses_in_expr(e: *Expr, name: string, out: *Vector<UseSite>) {
         let u: UseSite = UseSite { line: sl, col: sc };
         out.push(u);
     }
+    // The module qualifier of `mod::Struct {}` (stored in e.field, positioned
+    // at the expression start) so hovering/highlighting the module name lights
+    // up every `mod::` use.
+    if has_pos && e.kind == EX_STRUCT_LIT && e.field != null && e.field.eq(name) {
+        let u: UseSite = UseSite { line: e.line, col: e.column };
+        out.push(u);
+    }
     // `expr as *Foo` / `sizeof(Foo)` — type names in cast / sizeof slots.
     if (e.kind == EX_CAST || e.kind == EX_SIZEOF) && e.cast_to != null {
         _collect_type_uses(e.cast_to, name, out, e.line, e.column);
