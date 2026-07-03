@@ -1328,7 +1328,8 @@ def case_completion_project(label, files, open_rel, pos,
               expect_text in texts, f"got {texts}")
     shutil.rmtree(d, ignore_errors=True)
 
-def case_diagnostics_project(label, files, open_rel, present=None, absent=None):
+def case_diagnostics_project(label, files, open_rel, present=None, absent=None,
+                            msg_at=None):
     """Open `open_rel` inside a real multi-file project (rootUri + glide.glide)
     and assert the diagnostic codes published for it. Proves the declaration-
     level `unused-*` lints are cross-file-safe: a `pub` symbol defined here but
@@ -1362,6 +1363,17 @@ def case_diagnostics_project(label, files, open_rel, present=None, absent=None):
         check(f"emits `{c}`", c in codes, f"got {sorted(codes)}")
     for c in (absent or []):
         check(f"does NOT emit `{c}`", c not in codes, f"got {sorted(codes)}")
+    if msg_at:
+        diags = []
+        for r in rs:
+            if r.get("method") == "textDocument/publishDiagnostics" \
+               and r["params"].get("uri") == open_uri:
+                diags = r["params"]["diagnostics"]
+        for sub, want_char in msg_at.items():
+            hit = next((dg for dg in diags if sub in dg.get("message", "")), None)
+            got = hit and hit["range"]["start"]["character"]
+            check(f"`{sub}` underline starts at char {want_char}",
+                  got == want_char, f"got {got}")
     shutil.rmtree(d, ignore_errors=True)
 
 def case_hover_has(label, body, pos, expect_substr):
@@ -1714,6 +1726,14 @@ case_completion_project("cross-file trait impl offers the trait's methods",
      "impl.glide": "import alelo;\n\nstruct Foo {}\n\nimpl alelo::Pinto for Foo {\n    \n}\n"},
     "impl.glide", {"line": 5, "character": 4},
     present=["fn ola(\u2026)", "fn saudacao(\u2026)"])
+
+# A qualified struct literal for a missing type underlines the STRUCT NAME
+# (`Penis` at char 19), not the module prefix (`alelo`).
+case_diagnostics_project("unknown qualified struct underlines the name",
+    {"alelo.glide": "pub struct Bar {}\n",
+     "main.glide": "import alelo;\n\nfn main() -> i32 {\n    let p = alelo::Penis {};\n    return 0;\n}\n"},
+    "main.glide",
+    msg_at={"unknown struct `Penis`": 19})
 
 # A trait DEFAULT method with a non-void return and no return statement is a
 # missing-return error, same as a free fn.

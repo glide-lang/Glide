@@ -5229,7 +5229,17 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         // compiler. A qualified `mod::Struct{}` is exempt: its module was
         // auto-loaded by the path pre-pass, so the name is already registered.
         if t.enforce_visibility && e.str_val != null && !_is_known_type_name(t, e.str_val) {
-            t.err_code_range(e.line, e.column, e.str_val.len(), "", "unknown struct `".concat(e.str_val).concat("` — did you forget an `import`?"));
+            // A qualified literal (`mod::Penis {}`) carries the struct name's
+            // own position in field_line/field_col — underline `Penis`, not the
+            // module prefix. A bare literal has none, so fall back to e.column
+            // (which already sits on the name).
+            let mut _un_line: i32 = e.line;
+            let mut _un_col: i32 = e.column;
+            if e.field_col > 0 {
+                _un_line = e.field_line;
+                _un_col = e.field_col;
+            }
+            t.err_code_range(_un_line, _un_col, e.str_val.len(), "", "unknown struct `".concat(e.str_val).concat("` — did you forget an `import`?"));
             return ty_named(e.str_val);
         }
         // Construction-site field visibility: setting a field of a struct

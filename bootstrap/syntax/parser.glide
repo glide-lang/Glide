@@ -3288,6 +3288,10 @@ fn parse_prefix(p: *Parser) -> *Expr {
                 // C struct type is only emitted when its module is compiled);
                 // codegen still uses the bare `last` as the type name.
                 sl.field = prefix;
+                // Remember where the struct NAME sits (after `mod::`) so a
+                // "unknown struct" diagnostic underlines `Penis`, not `mod`.
+                sl.field_line = last_line;
+                sl.field_col = last_col;
                 return sl;
             }
             let pe: *Expr = expr_path(prefix, last, line, col);
