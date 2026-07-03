@@ -5539,6 +5539,12 @@ fn collect_uses_in_stmt(s: *Stmt, name: string, out: *Vector<UseSite>) {
     // Declaration site of fn / struct / enum / const / let / trait / macro
     // — anchor at the name position so highlight / find-refs land on the
     // identifier itself, not the leading `let` / `fn` / `struct` keyword.
+    // `import a::b::alelo;` — the module name segment (the qualifier used in
+    // code) so highlighting/renaming the module lights up the import line too.
+    if s.kind == ST_IMPORT && s.import_mod_name != null && s.import_mod_name.eq(name) && s.import_mod_line > 0 {
+        let u: UseSite = UseSite { line: s.import_mod_line, col: s.import_mod_col };
+        out.push(u);
+    }
     if (s.kind == ST_FN || s.kind == ST_STRUCT || s.kind == ST_ENUM || s.kind == ST_CONST || s.kind == ST_TRAIT || s.kind == ST_MACRO_DEF) && s.name != null && s.name.eq(name) {
         let mut nl: i32 = s.name_line;
         let mut nc: i32 = s.name_col;

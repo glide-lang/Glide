@@ -896,6 +896,22 @@ case_feature("documentHighlight anchors a method use at the method name",
             for h in (r.get("result") or [])),
         f"got {[h['range']['start'] for h in (r.get('result') or [])]}"))
 
+# The module qualifier + its import line highlight together: cursor on the
+# module name in `import w3;` lights the import segment AND every `w3::` use.
+case_feature("documentHighlight links a module import with its qualifiers",
+    'import w3;\n'
+    'fn main() -> i32 {\n'
+    '    let a = w3::Thing {};\n'
+    '    let b = w3::Thing {};\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/documentHighlight",
+     "params":{"position":{"line":0,"character":7}}},  # on `w3` in the import
+    lambda r: check("import `w3` highlights the import + both qualifiers",
+        sorted((h["range"]["start"]["line"], h["range"]["start"]["character"])
+               for h in (r.get("result") or [])) == [(0,7),(2,12),(3,12)],
+        f"got {sorted((h['range']['start']['line'], h['range']['start']['character']) for h in (r.get('result') or []))}"))
+
 case_feature("documentHighlight anchors a bare struct literal at its name",
     'struct Widget {}\n'
     'fn main() -> i32 {\n'

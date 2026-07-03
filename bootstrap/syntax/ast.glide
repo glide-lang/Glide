@@ -344,6 +344,12 @@ pub struct Stmt {
     // The short namespace name lives in `import_short`; user code can then
     // call `import_short::Item(...)` after this import.
     pub import_is_module: bool,
+    // Source position of the module name segment that becomes `import_short`
+    // (the qualifier used in code) — lets highlight/rename light up the import
+    // line. 0 when unknown (synthesized imports).
+    pub import_mod_line: i32,
+    pub import_mod_col: i32,
+    pub import_mod_name: string,
     // Synthesized nested-import module (`cookies` from `cookies::CookieJar`):
     // registers the `cookies::` qualifier but must NOT bring every pub name of
     // the module into bare scope — only the named symbol (its selective import)
@@ -432,6 +438,15 @@ pub fn ast_fill_defaults(s: *Stmt) {
     }
     if s.import_short == null {
         s.import_short = "";
+    }
+    if s.import_mod_line < 0 {
+        s.import_mod_line = 0;
+    }
+    if s.import_mod_col < 0 {
+        s.import_mod_col = 0;
+    }
+    if s.import_mod_name == null {
+        s.import_mod_name = "";
     }
     if s.macro_rep_sep == null {
         s.macro_rep_sep = "";
