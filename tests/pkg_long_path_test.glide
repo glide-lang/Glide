@@ -10,3 +10,18 @@ fn test_long_path_resolves() -> i32 {
     c.free();
     return 0;
 }
+
+// Grouped brace import: submodules (and parent-file symbols) in one line.
+import stdlib::http::{client, cookies};
+
+fn test_grouped_import() -> i32 {
+    let c = client::HttpClient::new();
+    assert!(c != null);
+    c.free();
+    let c2 = http::client::HttpClient::new();
+    assert!(c2 != null);
+    c2.free();
+    let ck = cookies::Cookie::new("alelo", "v");
+    assert!(ck != null);
+    return 0;
+}

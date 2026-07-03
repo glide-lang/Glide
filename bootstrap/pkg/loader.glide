@@ -99,6 +99,10 @@ pub fn load_into_str(stmts: *Vector<Stmt>, src: string, origin: string, loaded: 
             }
             // Pure module import: bare path resolved directly to a file
             // and no items / wildcard requested.
+            if multi_seg && s.imported_items != null && __glide_file_exists(resolved) {
+                let nocache0: *HashMap<*Vector<Stmt>> = null;
+                peel_child_module_items(stmts, &s, resolved, origin, loaded, pdiags, nocache0);
+            }
             if multi_seg && s.imported_items == null && !s.import_wildcard && __glide_file_exists(resolved) {
                 s.import_is_module = true;
                 s.import_short = last_path_segment(unq);
@@ -211,6 +215,49 @@ pub fn load_into_with_cache(stmts: *Vector<Stmt>, path: string, loaded: *HashMap
 // referenced path files, resolve imports recursively, push each Stmt
 // (origin/import_path mutated on a local copy so the cached vec stays
 // invariant) into the outer `stmts`.
+// Selective import whose braces name CHILD MODULES of a file+folder package:
+// `import stdlib::http::{client, cookies};` — each item that matches a child
+// file `http/<item>.glide` becomes a module import (loaded + synthesized), and
+// is removed from the item list so the parent-file symbol check doesn't flag
+// it. Items that are real symbols of `http.glide` stay selective as before —
+// the two kinds can mix in one brace group.
+fn peel_child_module_items(stmts: *Vector<Stmt>, s: *Stmt, resolved: string, origin: string, loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>, cache: *HashMap<*Vector<Stmt>>) {
+    if s.imported_items == null || !resolved.ends_with(".glide") {
+        return;
+    }
+    let pkg_dir: string = resolved.substring(0, resolved.len() - 6);
+    let keep: *Vector<string> = Vector::new();
+    for let i: i32 = 0; i < s.imported_items.len(); i++ {
+        let item: string = s.imported_items.get(i);
+        let child_file: string = pkg_dir.concat("/").concat(item).concat(".glide");
+        if !__glide_file_exists(child_file) {
+            keep.push(item);
+            continue;
+        }
+        if cache != null {
+            load_into_with_cache(stmts, child_file, loaded, pdiags, cache);
+        } else {
+            load_into(stmts, child_file, loaded, pdiags);
+        }
+        let si: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
+        ast_fill_defaults(si);
+        si.kind = ST_IMPORT;
+        si.import_path = child_file;
+        si.import_is_module = true;
+        si.import_short = item;
+        si.origin = origin;
+        stmts.push(*si);
+    }
+    if keep.len() == 0 {
+        // Every braced name was a module: the import carries nothing itself.
+        s.imported_items = null;
+        s.import_is_module = true;
+        s.import_short = last_path_segment(strip_quotes(s.import_path));
+    } else {
+        s.imported_items = keep;
+    }
+}
+
 // File+folder package: `import stdlib::http;` where `http.glide` sits next to
 // a directory `http/` makes the folder's files children of the same package,
 // addressed by their long path (`http::client::HttpClient`). Loading every
@@ -326,6 +373,9 @@ pub fn cached_resolve_and_push(stmts: *Vector<Stmt>, parsed: *Vector<Stmt>, orig
                         resolved = resolved_parent;
                     }
                 }
+            }
+            if multi_seg && s.imported_items != null && __glide_file_exists(resolved) {
+                peel_child_module_items(stmts, &s, resolved, origin, loaded, pdiags, cache);
             }
             if multi_seg && s.imported_items == null && !s.import_wildcard && __glide_file_exists(resolved) {
                 s.import_is_module = true;
