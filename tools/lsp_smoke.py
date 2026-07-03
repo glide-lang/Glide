@@ -1569,6 +1569,20 @@ case_feature("formatting refuses a file with parse errors",
     lambda r: check("no edits returned", (r.get("result") or []) == [],
                     f"got: {r.get('result')!r}"))
 
+# The full Rust receiver trio: self / &self / &mut self.
+case_diagnostics("borrowed receivers compile",
+    'struct C { n: i32 }\n'
+    'impl C {\n'
+    '    pub fn get(&self) -> i32 { return self.n; }\n'
+    '    pub fn bump(&mut self) { self.n = self.n + 1; }\n'
+    '}\n'
+    'fn main() -> i32 {\n'
+    '    let c: *C = malloc(8) as *C;\n'
+    '    c.bump();\n'
+    '    return c.get();\n'
+    '}',
+    expect_codes_absent=["ice"])
+
 # Rust-style bare receiver: `fn bump(self)` works in impls and traits.
 case_diagnostics("bare self receiver compiles",
     'struct C { n: i32 }\n'

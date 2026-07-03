@@ -581,6 +581,32 @@ fn parse_fn(p: *Parser) -> *Stmt {
             variadic = true;
             break;
         }
+        // Rust-style borrowed receivers: `&self` -> `self: &Self` and
+        // `&mut self` -> `self: &mut Self`; the impl post-pass substitutes
+        // the target type. Only the receiver gets this sugar.
+        if p.at_op("&") {
+            let br_line: i32 = p.current.line;
+            let br_col: i32 = p.current.column;
+            p.advance();
+            let br_mut: bool = p.eat_kw("mut");
+            let br_name: string = p.expect_ident();
+            if !br_name.eq("self") {
+                p.err("expected `self` after `&` in a parameter list (borrowed params are written `name: &T`)");
+            }
+            let bty: *Type = __glide_palloc(sizeof(Type)) as *Type;
+            if br_mut {
+                bty.kind = TY_BORROW_MUT;
+            } else {
+                bty.kind = TY_BORROW;
+            }
+            bty.inner = ty_named("Self");
+            let bprm: Param = Param { name: br_name, ty: bty, name_line: br_line, name_col: br_col };
+            params.push(bprm);
+            if !p.eat_op(",") {
+                break;
+            }
+            continue;
+        }
         // `mut` before the name binds the param as reassignable in the body.
         // Glide already treats fn-locals as mutable storage, so we accept
         // the keyword for ergonomics and discard it.

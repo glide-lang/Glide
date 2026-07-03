@@ -1217,10 +1217,19 @@ fn fmt_fn(s: *Stmt, depth: i32) -> string {
                 head = head.concat(", ");
             }
             let p: Param = s.fn_params.get(i);
-            // The receiver renders bare (`self`), Rust-style — its type is
-            // always the impl target, so the annotation carries no information.
+            // The receiver renders Rust-style — `self`, `&self`, or
+            // `&mut self`; the annotation carries no information beyond the
+            // borrow kind (the type is always the impl target).
             if i == 0 && p.name != null && p.name.eq("self") {
-                head = head.concat("self");
+                if p.ty != null && p.ty.kind == TY_BORROW_MUT {
+                    head = head.concat("&mut self");
+                } else {
+                    if p.ty != null && p.ty.kind == TY_BORROW {
+                        head = head.concat("&self");
+                    } else {
+                        head = head.concat("self");
+                    }
+                }
             } else {
                 head = head.concat(p.name).concat(": ").concat(fmt_type(p.ty));
             }
