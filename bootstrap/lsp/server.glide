@@ -358,6 +358,22 @@ fn handle_initialize(req: *JsonValue) {
     let id: *JsonValue = json_get(req, "id");
     let result: *JsonValue = json_object();
     let caps: *JsonValue = json_object();
+    // Position encoding negotiation (LSP 3.17). Glide's lexer counts byte
+    // (UTF-8) columns, so ask for UTF-8 when the client offers it — otherwise
+    // the editor's default UTF-16 misplaces every position on a line that has
+    // a multi-byte character before it (e.g. `self.ola()` after `"Olá"`).
+    // Silently stays on UTF-16 when the client doesn't advertise UTF-8.
+    let encs: *JsonValue = json_get(json_get(json_get(json_get(req, "params"), "capabilities"), "general"), "positionEncodings");
+    let mut want_u8: bool = false;
+    let en: i32 = _json_arr_len(encs);
+    for let i: i32 = 0; i < en; i++ {
+        if json_as_string(json_at(encs, i)).eq("utf-8") {
+            want_u8 = true;
+        }
+    }
+    if want_u8 {
+        json_obj_set(caps, "positionEncoding", json_string("utf-8"));
+    }
     // textDocumentSync: 1 = Full sync. We re-parse on every change.
     json_obj_set(caps, "textDocumentSync", json_int(1));
     json_obj_set(caps, "hoverProvider", json_bool(true));
