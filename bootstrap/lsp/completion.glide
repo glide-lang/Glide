@@ -107,26 +107,72 @@ fn parse_import_line(raw: string, line: i32) -> ImportInfo {
     if body.eq("") {
         return miss;
     }
-    // Selective: `module::{X, Y, …}`
+    // Selective: `module::{X, Y, …}` — entries may nest (`cookies::{A, B}`),
+    // so the group closes at the LAST `}` and items split at TOP-LEVEL commas;
+    // nested groups expand to flattened `child::A` entries for matching.
     let brace_open_in_body: i32 = find_substr(body, "::{");
     if brace_open_in_body >= 0 {
         let module: string = body.substring(0, brace_open_in_body);
         let inner_start: i32 = brace_open_in_body + 3;
-        let brace_close: i32 = find_byte(body, 125, inner_start);
+        let mut brace_close: i32 = -1;
+        for let bi: i32 = inner_start; bi < body.len(); bi++ {
+            if body.at(bi).to_int() == 125 {
+                brace_close = bi;
+            }
+        }
         let items: *HashMap<bool> = HashMap::new();
         if brace_close > 0 {
             let inner: string = body.substring(inner_start, brace_close);
-            let parts: *Vector<string> = inner.split(",");
+            let parts: *Vector<string> = Vector::new();
+            let mut depth: i32 = 0;
+            let mut seg_start: i32 = 0;
+            for let ci: i32 = 0; ci <= inner.len(); ci++ {
+                let mut is_cut: bool = ci == inner.len();
+                if !is_cut {
+                    let cc: i32 = inner.at(ci).to_int();
+                    if cc == 123 {
+                        depth = depth + 1;
+                    }
+                    if cc == 125 {
+                        depth = depth - 1;
+                    }
+                    is_cut = cc == 44 && depth == 0;
+                }
+                if is_cut {
+                    parts.push(inner.substring(seg_start, ci));
+                    seg_start = ci + 1;
+                }
+            }
             for let i: i32 = 0; i < parts.len(); i++ {
                 let nm: string = parts.get(i).trim();
-                if !nm.eq("") {
+                if nm.eq("") {
+                    continue;
+                }
+                let ob: i32 = nm.index_of("::{");
+                if ob >= 0 && nm.ends_with("}") {
+                    // `cookies::{A, B}` -> cookies::A, cookies::B
+                    let head: string = nm.substring(0, ob);
+                    let body2: string = nm.substring(ob + 3, nm.len() - 1);
+                    let subs: *Vector<string> = body2.split(",");
+                    for let k: i32 = 0; k < subs.len(); k++ {
+                        let sn: string = subs.get(k).trim();
+                        if !sn.eq("") {
+                            items.insert(head.concat("::").concat(sn), true);
+                        }
+                    }
+                } else {
                     items.insert(nm, true);
                 }
             }
         }
-        // Find `}` column in the original (un-trimmed) raw line so the
-        // text edit can splice `, NewName` directly before it.
-        let close_in_raw: i32 = find_byte(raw, 125, 0);
+        // LAST `}` column in the original raw line — the group's own closer —
+        // so the splice edit lands at the top level, not inside a nested group.
+        let mut close_in_raw: i32 = -1;
+        for let ri: i32 = 0; ri < raw.len(); ri++ {
+            if raw.at(ri).to_int() == 125 {
+                close_in_raw = ri;
+            }
+        }
         return ImportInfo { module: module, line: line, kind: IMP_SELECTIVE, items: items, close_pos: close_in_raw };
     }
     // Wildcard: `module::*`
@@ -185,6 +231,44 @@ fn build_import_edit(name: string, module: string, existing: *ImportInfo, fallba
             json_obj_set(edit, "range", range);
             json_obj_set(edit, "newText", json_string(", ".concat(name)));
             return edit;
+        }
+    }
+    // Symbol import whose module's PARENT has a brace group in the file:
+    // splice a nested entry into it (`, cookies::Cookie`) instead of adding a
+    // separate `import …::cookies::{Cookie};` line. fmt renders shared
+    // prefixes as `cookies::{CookieJar, Cookie}`.
+    if !is_module && imps != null {
+        let mut gp_cc: i32 = -1;
+        for let k: i32 = 0; k + 1 < module.len(); k++ {
+            if module.at(k).to_int() == 58 && module.at(k + 1).to_int() == 58 {
+                gp_cc = k;
+            }
+        }
+        if gp_cc > 0 {
+            let gparent: string = module.substring(0, gp_cc);
+            let child: string = module.substring(gp_cc + 2, module.len());
+            if imps.contains(gparent) {
+                let gi: ImportInfo = imps.get(gparent);
+                if gi.kind == IMP_SELECTIVE && gi.close_pos >= 0 {
+                    let nested: string = child.concat("::").concat(name);
+                    if gi.items != null && gi.items.contains(nested) {
+                        return null;
+                    }
+                    let gedit2: *JsonValue = json_object();
+                    let grange2: *JsonValue = json_object();
+                    let gs2: *JsonValue = json_object();
+                    let ge2: *JsonValue = json_object();
+                    json_obj_set(gs2, "line", json_int(gi.line));
+                    json_obj_set(gs2, "character", json_int(gi.close_pos));
+                    json_obj_set(ge2, "line", json_int(gi.line));
+                    json_obj_set(ge2, "character", json_int(gi.close_pos));
+                    json_obj_set(grange2, "start", gs2);
+                    json_obj_set(grange2, "end", ge2);
+                    json_obj_set(gedit2, "range", grange2);
+                    json_obj_set(gedit2, "newText", json_string(", ".concat(nested)));
+                    return gedit2;
+                }
+            }
         }
     }
     // Module import with same-parent siblings already in the file: merge into

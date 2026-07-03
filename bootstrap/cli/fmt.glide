@@ -956,14 +956,7 @@ fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
             if s.imported_items.len() == 1 {
                 tail_s = "::".concat(s.imported_items.get(0));
             } else {
-                tail_s = "::{";
-                for let i: i32 = 0; i < s.imported_items.len(); i++ {
-                    if i > 0 {
-                        tail_s = tail_s.concat(", ");
-                    }
-                    tail_s = tail_s.concat(s.imported_items.get(i));
-                }
-                tail_s = tail_s.concat("}");
+                tail_s = "::{".concat(_fmt_import_items(s.imported_items)).concat("}");
             }
         } else {
             if s.import_wildcard {
@@ -1683,4 +1676,49 @@ fn needs_blank_line(prev: i32, curr: i32) -> bool {
         return false;
     }
     return true;
+}
+
+// Render a brace-import item list, folding entries that share a child prefix
+// into a nested group: [client, cookies::CookieJar, cookies::Cookie] renders
+// as `client, cookies::{CookieJar, Cookie}`. A lone prefixed entry stays flat
+// (`cookies::CookieJar`) — both forms re-parse to the same import.
+fn _fmt_import_items(items: *Vector<string>) -> string {
+    let mut out: string = "";
+    let done: *HashMap<bool> = HashMap::new();
+    for let i: i32 = 0; i < items.len(); i++ {
+        let it: string = items.get(i);
+        if done.contains(it) {
+            continue;
+        }
+        let cc: i32 = it.index_of("::");
+        let mut rendered: string = it;
+        if cc > 0 {
+            let head: string = it.substring(0, cc);
+            // collect every entry sharing this head
+            let subs: *Vector<string> = Vector::new();
+            for let j: i32 = i; j < items.len(); j++ {
+                let jt: string = items.get(j);
+                if jt.starts_with(head.concat("::")) && !done.contains(jt) {
+                    subs.push(jt.substring(head.len() + 2, jt.len()));
+                    done.insert(jt, true);
+                }
+            }
+            if subs.len() > 1 {
+                rendered = head.concat("::{");
+                for let k: i32 = 0; k < subs.len(); k++ {
+                    if k > 0 {
+                        rendered = rendered.concat(", ");
+                    }
+                    rendered = rendered.concat(subs.get(k));
+                }
+                rendered = rendered.concat("}");
+            }
+        }
+        done.insert(it, true);
+        if !out.eq("") {
+            out = out.concat(", ");
+        }
+        out = out.concat(rendered);
+    }
+    return out;
 }

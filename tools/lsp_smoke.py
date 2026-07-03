@@ -1683,6 +1683,22 @@ case_diagnostics("real duplicate import still flagged",
     'fn main() -> i32 { let _e = fs::exists("/"); return 0; }',
     expect_codes_present=["redundant-import"])
 
+# fmt folds shared-prefix brace entries into a nested group.
+case_feature("formatting folds nested import groups",
+    'import stdlib::http::{client, cookies::CookieJar, cookies::Cookie};\n'
+    'fn main() -> i32 {\n'
+    '    let c = client::HttpClient::new();\n'
+    '    c.free();\n'
+    '    let j = CookieJar::new();\n'
+    '    let k = Cookie::new("a", "b");\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/formatting",
+     "params":{"options":{"tabSize":4,"insertSpaces":True}}},
+    lambda r: check("folded to cookies::{CookieJar, Cookie}",
+        "cookies::{CookieJar, Cookie}" in ((r.get("result") or [{}])[0].get("newText","") if (r.get("result") or []) else ""),
+        f"got: {((r.get('result') or [{}])[0].get('newText','')[:80]) if (r.get('result') or []) else 'no edits'!r}"))
+
 # An IMPORTED qualifier pins to its module: `client::` with
 # `import stdlib::http::client;` must not leak same-leaf modules
 # (stdlib::net::tls12::client used to dump its TLS symbols here).
