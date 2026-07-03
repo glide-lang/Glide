@@ -5425,9 +5425,14 @@ fn collect_uses_in_expr(e: *Expr, name: string, out: *Vector<UseSite>) {
             out.push(u);
         }
     }
-    // `recv.field` / `recv.method(...)` — member name itself.
+    // `recv.field` / `recv.method(...)` — member name itself. Anchor at the
+    // FIELD, not the receiver: `e.line/e.column` sit on `recv`, so a range of
+    // `name.len()` there would cover `recv.fiel…` shifted left. The parser
+    // records the field's own position in field_line/field_col.
     if has_pos && e.kind == EX_MEMBER && e.field != null && e.field.eq(name) {
-        let u: UseSite = UseSite { line: e.line, col: e.column };
+        let fl: i32 = if e.field_line > 0 { e.field_line } else { e.line };
+        let fc: i32 = if e.field_line > 0 { e.field_col } else { e.column };
+        let u: UseSite = UseSite { line: fl, col: fc };
         out.push(u);
     }
     // `Foo { a: ..., b: ... }` — struct literal type + field names.

@@ -879,6 +879,23 @@ case_feature("documentHighlight",
         r and "result" in r and len(r["result"]) == 3,
         f"got {len(r['result']) if r and 'result' in r else 0}"))
 
+# A method use `p.saudacao()` must highlight the METHOD name, not a range
+# shifted onto the receiver (`p.saudac`).
+case_feature("documentHighlight anchors a method use at the method name",
+    'struct T {}\n'
+    'impl T { pub fn go(&self) {} }\n'
+    'fn main() -> i32 {\n'
+    '    let p = T {};\n'
+    '    p.go();\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/documentHighlight",
+     "params":{"position":{"line":4,"character":7}}},  # on `go` in `p.go()`
+    lambda r: check("`p.go()` use highlights `go` at char 6, not `p` at 4",
+        any(h["range"]["start"]["character"] == 6 and h["range"]["start"]["line"] == 4
+            for h in (r.get("result") or [])),
+        f"got {[h['range']['start'] for h in (r.get('result') or [])]}"))
+
 case_feature("formatting normalizes whitespace",
     'fn   add(  a:i32,b   :i32  )->i32{return    a+b ;}',
     {"jsonrpc":"2.0","id":2,"method":"textDocument/formatting",
