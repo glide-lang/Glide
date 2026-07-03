@@ -1,4 +1,5 @@
 import stdlib::testing::*;
+import stdlib::hashmap::*;
 
 // Coverage for the Pair builtin (src/builtins/pair.glide). Pair is the
 // two-value tuple used by HashMap::entries and Vector::enumerate.

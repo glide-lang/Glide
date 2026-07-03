@@ -344,6 +344,11 @@ pub struct Stmt {
     // The short namespace name lives in `import_short`; user code can then
     // call `import_short::Item(...)` after this import.
     pub import_is_module: bool,
+    // Synthesized nested-import module (`cookies` from `cookies::CookieJar`):
+    // registers the `cookies::` qualifier but must NOT bring every pub name of
+    // the module into bare scope — only the named symbol (its selective import)
+    // does. Rust-like, unlike a bare `import a::b;` which brings all.
+    pub import_qual_only: bool,
     pub import_short: string,
     // Enum
     pub enum_variants: *Vector<EnumVariant>,

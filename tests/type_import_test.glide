@@ -1,0 +1,29 @@
+import stdlib::testing::*;
+import stdlib::hashmap::*;
+
+// A real stdlib/user type must be imported before use — a module merely being
+// loaded elsewhere in the program does not put its types into bare scope.
+// (The negative case — using an unimported type — is a compile error, covered
+// by the LSP smoke suite; a passing runtime test can only exercise the
+// positive direction.)
+
+struct Widget {
+    n: i32,
+}
+
+impl Widget {
+    pub fn make(n: i32) -> *Widget {
+        let w: *Widget = malloc(sizeof(Widget)) as *Widget;
+        w.n = n;
+        return w;
+    }
+}
+
+fn test_imported_type_resolves() -> i32 {
+    let w = Widget::make(7);
+    assert_eq!(w.n, 7);
+    let m: *HashMap<i32> = HashMap::new();
+    m.insert("a", 1);
+    assert_eq!(m.get("a"), 1);
+    return 0;
+}

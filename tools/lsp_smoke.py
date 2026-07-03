@@ -1683,6 +1683,18 @@ case_diagnostics("real duplicate import still flagged",
     'fn main() -> i32 { let _e = fs::exists("/"); return 0; }',
     expect_codes_present=["redundant-import"])
 
+# A sibling type from a nested import is NOT in bare scope (strict, Rust-style):
+# `cookies::CookieJar` loads the cookies module and brings CookieJar, but a bare
+# `Cookie` (also in cookies, not imported) is a compile error.
+case_diagnostics("sibling type not brought by nested import",
+    'import stdlib::http::{client, cookies::CookieJar};\n'
+    'fn main() -> i32 {\n'
+    '    let j = CookieJar::new();\n'    # imported: fine
+    '    let c = Cookie::new("", "");\n' # loaded but not imported: error
+    '    return 0;\n'
+    '}',
+    expect_codes_present=["type-not-in-scope"])
+
 # fmt folds shared-prefix brace entries into a nested group.
 case_feature("formatting folds nested import groups",
     'import stdlib::http::{client, cookies::CookieJar, cookies::Cookie};\n'

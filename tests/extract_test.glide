@@ -1,4 +1,5 @@
 import stdlib::testing::*;
+import stdlib::hashmap::*;
 import stdlib::http::*;
 import stdlib::http::extract::*;
 

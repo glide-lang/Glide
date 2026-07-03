@@ -4881,6 +4881,19 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             let is_type: bool = t.structs.contains(prefix);
             let is_known_method: bool = t.fns.contains(pname);
             let is_type_param: bool = _is_current_type_param(t, prefix);
+            let _was_qualified: bool = !prefix.eq(e.lhs.str_val);
+            // A type used BARE (`Cookie::new()`) must be in scope. It lives in
+            // the registry keyed by bare name (loaded regardless of import), so
+            // gate on visibility. A qualified form (`cookies::Cookie::new()`)
+            // stripped its module prefix above — that's allowed, skip it.
+            // Gate only REAL declared structs (`struct_origin` holds those
+            // with a field list); compiler intrinsics (Arena, HashMap, Vector)
+            // aren't there and are always in scope.
+            if is_type && !is_type_param && !_was_qualified && t.struct_origin.contains(prefix) && !t.is_visible(prefix) {
+                let pt_span: i32 = prefix.len() + 2 + e.lhs.field.len();
+                t.err_code_range(e.lhs.line, e.lhs.column, pt_span, "type-not-in-scope", "type `".concat(prefix).concat("` is not in scope; import it or qualify it (`<module>::").concat(prefix).concat("`)"));
+                return null;
+            }
             // Enum payload constructor `Shape::Circle(1.0)` yields the enum, so
             // an unannotated `let s = Shape::Circle(…)` types as Shape and its
             // `match` gets the variant/exhaustiveness/arity checks.

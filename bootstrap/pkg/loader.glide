@@ -292,6 +292,9 @@ fn peel_child_module_items(stmts: *Vector<Stmt>, s: *Stmt, resolved: string, dir
         si.kind = ST_IMPORT;
         si.import_path = child_file;
         si.import_is_module = true;
+        // A nested entry (`cookies::CookieJar`) only wants the qualifier; the
+        // sibling selective import already brings its named symbol.
+        si.import_qual_only = !sub_item.eq("");
         si.import_short = item;
         si.origin = origin;
         stmts.push(*si);
@@ -1033,8 +1036,12 @@ pub fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
                 } else {
                     // Wildcard / sibling: every PUB name from the target file,
                     // plus anything the target re-exports via `pub import`.
-                    let seen_reexport: *HashMap<bool> = HashMap::new();
-                    _bring_exports(t, stmts, target, f, seen_reexport);
+                    // A qual-only nested import skips the bring — it grants
+                    // `cookies::Name` access, not bare `Name`.
+                    if !s.import_qual_only {
+                        let seen_reexport: *HashMap<bool> = HashMap::new();
+                        _bring_exports(t, stmts, target, f, seen_reexport);
+                    }
                 }
             }
         }

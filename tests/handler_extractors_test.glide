@@ -4,6 +4,7 @@
 // and that the user fn body sees the typed param.
 
 import stdlib::testing::*;
+import stdlib::hashmap::*;
 import stdlib::http::*;
 import stdlib::http::extract::*;
 import stdlib::http::handler::*;
