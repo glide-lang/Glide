@@ -447,7 +447,10 @@ fn fmt_value(e: *Expr, depth: i32) -> string {
     if e == null {
         return "";
     }
-    if depth >= 0 && e.kind == EX_MATCH && match_has_comment(e) {
+    // A match-expression always formats one arm per line, like the statement
+    // form — collapsing `let res = match r { ok(v) => ... err(e) => ... };`
+    // onto a single line buries the arms. A zero-arm `match x { }` stays inline.
+    if depth >= 0 && e.kind == EX_MATCH && e.match_arms != null && e.match_arms.len() > 0 {
         return fmt_match_expr_ml(e, depth);
     }
     if depth >= 0 && e.kind == EX_BINARY && binary_has_comment(e) {
