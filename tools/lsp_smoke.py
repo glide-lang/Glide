@@ -896,6 +896,20 @@ case_feature("documentHighlight anchors a method use at the method name",
             for h in (r.get("result") or [])),
         f"got {[h['range']['start'] for h in (r.get('result') or [])]}"))
 
+case_feature("documentHighlight anchors a bare struct literal at its name",
+    'struct Widget {}\n'
+    'fn main() -> i32 {\n'
+    '    let a = Widget {};\n'
+    '    let b = Widget {};\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/documentHighlight",
+     "params":{"position":{"line":2,"character":13}}},  # on `Widget` in `let a`
+    lambda r: check("literal use highlights `Widget` at char 12",
+        any(h["range"]["start"]["character"] == 12 and h["range"]["start"]["line"] == 2
+            for h in (r.get("result") or [])),
+        f"got {[h['range']['start'] for h in (r.get('result') or [])]}"))
+
 case_feature("formatting normalizes whitespace",
     'fn   add(  a:i32,b   :i32  )->i32{return    a+b ;}',
     {"jsonrpc":"2.0","id":2,"method":"textDocument/formatting",

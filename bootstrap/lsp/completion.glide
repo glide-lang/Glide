@@ -5435,9 +5435,14 @@ fn collect_uses_in_expr(e: *Expr, name: string, out: *Vector<UseSite>) {
         let u: UseSite = UseSite { line: fl, col: fc };
         out.push(u);
     }
-    // `Foo { a: ..., b: ... }` — struct literal type + field names.
+    // `Foo { a: ..., b: ... }` — struct literal type name. For a qualified
+    // literal (`alelo::Penis {}`) the name sits after `mod::`; the parser
+    // recorded its position in field_line/field_col. A bare literal has none,
+    // so e.line/e.column already sits on the name.
     if has_pos && e.kind == EX_STRUCT_LIT && e.str_val != null && e.str_val.eq(name) {
-        let u: UseSite = UseSite { line: e.line, col: e.column };
+        let sl: i32 = if e.field_line > 0 { e.field_line } else { e.line };
+        let sc: i32 = if e.field_line > 0 { e.field_col } else { e.column };
+        let u: UseSite = UseSite { line: sl, col: sc };
         out.push(u);
     }
     // `expr as *Foo` / `sizeof(Foo)` — type names in cast / sizeof slots.
