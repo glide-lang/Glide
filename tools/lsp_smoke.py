@@ -1589,6 +1589,36 @@ case_feature("import hover shows module header",
         "HTTP/1.1 client" in (((r.get("result") or {}).get("contents", {}) or {}).get("value", "")),
         f"got: {(((r.get('result') or {}).get('contents', {}) or {}).get('value', '')[:80])!r}"))
 
+# Trait-impl body completion offers the trait's missing methods as stubs.
+case_completion_has("trait impl offers missing methods",
+    'struct A { x: i32 }\n'
+    'trait T2 {\n'
+    '    fn alpha(&self);\n'
+    '    fn beta(&self) -> string;\n'
+    '}\n'
+    'impl T2 for A {\n'
+    '    \n'
+    '}\n'
+    'fn main() -> i32 { return 0; }',
+    {"line":6,"character":4},
+    ["fn alpha(…)","fn beta(…)"])
+
+# An already-implemented trait method is not re-offered.
+case_completion_absent("implemented trait method not re-offered",
+    'struct A { x: i32 }\n'
+    'trait T2 {\n'
+    '    fn alpha(&self);\n'
+    '    fn beta(&self) -> string;\n'
+    '}\n'
+    'impl T2 for A {\n'
+    '    pub fn alpha(&self) {\n'
+    '    }\n'
+    '    \n'
+    '}\n'
+    'fn main() -> i32 { return 0; }',
+    {"line":8,"character":4},
+    ["fn alpha(…)"])
+
 # Module-qualifier hover works at USE sites too (`http::client::…` in code).
 case_feature("qualifier hover at a use site",
     'import stdlib::http::{client, cookies};\n'

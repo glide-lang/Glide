@@ -4586,9 +4586,43 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
         lsp_send_response(id, items);
         return;
     }
-    // Impl body (between methods, at a fresh decl start): only the method
-    // declaration keywords make sense here, not the struct / fn / const bag.
+    // Impl body (between methods, at a fresh decl start). In a TRAIT impl the
+    // real offer is the trait's missing methods as ready stubs — pick one and
+    // the signature lands complete, body ready to fill. Keywords follow.
     if _in_impl_body(doc.text, line0, col0) {
+        let _ti: string = _enclosing_impl_trait(doc.text, line0);
+        if !_ti.eq("") {
+            let _td: *Stmt = find_top_decl(doc.stmts, _ti);
+            if _td != null && _td.kind == ST_TRAIT && _td.impl_methods != null {
+                // Methods this impl already wrote (any impl of this trait in
+                // this file at/around the cursor).
+                let _done: *HashMap<bool> = HashMap::new();
+                for let ii: i32 = 0; ii < doc.stmts.len(); ii++ {
+                    let _is: Stmt = doc.stmts.get(ii);
+                    if _is.kind != ST_IMPL || _is.impl_trait_name == null || !_is.impl_trait_name.eq(_ti) || _is.impl_methods == null {
+                        continue;
+                    }
+                    for let mj: i32 = 0; mj < _is.impl_methods.len(); mj++ {
+                        let _im: Stmt = _is.impl_methods.get(mj);
+                        if _im.name != null {
+                            _done.insert(_im.name, true);
+                        }
+                    }
+                }
+                for let mi: i32 = 0; mi < _td.impl_methods.len(); mi++ {
+                    let tm: Stmt = _td.impl_methods.get(mi);
+                    if tm.kind != ST_FN || tm.name == null || _done.contains(tm.name) {
+                        continue;
+                    }
+                    let sig: string = _trait_method_sig(&tm);
+                    let mut det: string = "required by trait `".concat(_ti).concat("`");
+                    if tm.fn_body != null && tm.fn_body.len() > 0 {
+                        det = "default of trait `".concat(_ti).concat("` — override");
+                    }
+                    json_arr_push(items, _arg_item("fn ".concat(tm.name).concat("(…)"), 2, det, "pub ".concat(sig).concat(" {\n    $0\n}"), true));
+                }
+            }
+        }
         json_arr_push(items, completion_item("pub", 14, "export the method across files"));
         json_arr_push(items, completion_item("fn", 14, "method declaration"));
         json_arr_push(items, completion_item("const", 14, "associated constant"));
@@ -6412,4 +6446,97 @@ fn _code_action_title(code: string, new_text: string) -> string {
         return "Apply fix (delete)";
     }
     return "Apply fix";
+}
+
+// The trait name of the nearest enclosing `impl <Trait> for <Type> {` header
+// above `line0` ("" for a plain impl / none). Text-based so an EMPTY impl body
+// works — the AST helper keys off methods, which an empty impl doesn't have.
+fn _enclosing_impl_trait(text: string, line0: i32) -> string {
+    let mut ln: i32 = 0;
+    let mut cur: i32 = 0;
+    let starts: *Vector<string> = Vector::new();
+    let n: i32 = text.len();
+    let mut line_start: i32 = 0;
+    while cur <= n && ln <= line0 {
+        if cur == n || text.at(cur).to_int() == 10 {
+            starts.push(text.substring(line_start, cur));
+            line_start = cur + 1;
+            ln = ln + 1;
+        }
+        cur = cur + 1;
+    }
+    for let i: i32 = starts.len() - 1; i >= 0; i = i - 1 {
+        let line: string = starts.get(i);
+        let mut j: i32 = 0;
+        while j < line.len() && (line.at(j).to_int() == 32 || line.at(j).to_int() == 9) {
+            j = j + 1;
+        }
+        let rest: string = line.substring(j, line.len());
+        if rest.starts_with("impl ") || rest.starts_with("impl<") {
+            let fi: i32 = rest.index_of(" for ");
+            if fi < 0 {
+                return "";
+            }
+            // trait name = segment between `impl` (+ generics) and ` for `
+            let mut hs: i32 = 4;
+            if rest.starts_with("impl<") {
+                let gc: i32 = rest.index_of(">");
+                if gc < 0 {
+                    return "";
+                }
+                hs = gc + 1;
+            }
+            let mut tn: string = rest.substring(hs, fi);
+            let mut cleaned: string = "";
+            for let k: i32 = 0; k < tn.len(); k++ {
+                let c: i32 = tn.at(k).to_int();
+                if c != 32 && c != 9 {
+                    cleaned = cleaned.concat(tn.substring(k, k + 1));
+                }
+            }
+            // drop generics on the trait itself (`Iterator<T>` -> Iterator)
+            let lt: i32 = cleaned.index_of("<");
+            if lt >= 0 {
+                cleaned = cleaned.substring(0, lt);
+            }
+            return cleaned;
+        }
+        // A top-level closer above us means we left any impl.
+        if line.len() > 0 && line.at(0).to_int() == 125 {
+            return "";
+        }
+    }
+    return "";
+}
+
+// A trait method's implementable signature, receivers rendered Rust-style.
+fn _trait_method_sig(m: *Stmt) -> string {
+    let mut sig: string = "fn ".concat(m.name).concat("(");
+    if m.fn_params != null {
+        for let i: i32 = 0; i < m.fn_params.len(); i++ {
+            if i > 0 {
+                sig = sig.concat(", ");
+            }
+            let p: Param = m.fn_params.get(i);
+            if i == 0 && p.name != null && p.name.eq("self") {
+                if p.ty != null && p.ty.kind == TY_BORROW_MUT {
+                    sig = sig.concat("&mut self");
+                } else {
+                    if p.ty != null && p.ty.kind == TY_BORROW {
+                        sig = sig.concat("&self");
+                    } else {
+                        sig = sig.concat("self");
+                    }
+                }
+            } else {
+                sig = sig.concat(p.name).concat(": ").concat(type_to_string_pretty(p.ty));
+            }
+        }
+    }
+    sig = sig.concat(")");
+    let r: *Type = m.fn_ret_ty;
+    if r != null && !(r.kind == TY_NAMED && r.name != null && r.name.eq("void")) {
+        sig = sig.concat(" -> ").concat(type_to_string_pretty(r));
+    }
+    return sig;
 }
