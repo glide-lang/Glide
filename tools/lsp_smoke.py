@@ -1420,8 +1420,11 @@ def case_hover_lacks(label, body, pos, absent_substr):
     check(f"hover does NOT mention {absent_substr!r}",
           absent_substr.lower() not in str(text).lower(), f"got {str(text)[:90]!r}")
 
-# A struct literal of a type that doesn't exist must not infer a phantom type
-# (`let y = Xyz {}` hovers as `let y`, no `: Xyz`).
+# A struct literal of a type that doesn't exist shows the `{unknown}` marker
+# (rust-analyzer style), never a phantom `: Xyz`.
+case_hover_has("unknown struct literal hovers as {unknown}",
+    "fn main() -> i32 {\n    let y = Xyz {};\n    return 0;\n}\n",
+    {"line": 1, "character": 8}, "{unknown}")
 case_hover_lacks("unknown struct literal infers no phantom type",
     "fn main() -> i32 {\n    let y = Xyz {};\n    return 0;\n}\n",
     {"line": 1, "character": 8}, ": Xyz")

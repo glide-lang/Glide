@@ -1334,6 +1334,11 @@ fn render_hover_for_let(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt, hpath: stri
                                             header = header.concat(": ").concat(e.str_val);
                                             inferred = true;
                                         } else {
+                                            // Type doesn't exist — show the
+                                            // unresolved marker instead of a
+                                            // phantom name, and stop further
+                                            // inference from re-adding it.
+                                            header = header.concat(": {unknown}");
                                             _unknown_lit = true;
                                         }
                                     }
