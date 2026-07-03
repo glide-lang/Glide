@@ -3636,7 +3636,7 @@ fn check_return(t: *Typer, s: *Stmt) {
             if t.current_ret.kind == TY_RESULT && t.current_ret.inner != null && t.current_ret.inner.kind == TY_NAMED && t.current_ret.inner.name.eq("void") {
                 return;
             }
-            t.err(s.line, s.column, "missing return value");
+            t.err_code_range(s.line, s.column, 6, "missing-return-value", "missing return value");
         }
         return;
     }
@@ -3664,12 +3664,14 @@ fn check_return(t: *Typer, s: *Stmt) {
             }
         }
         if !is_param_borrow {
-            t.err(s.line, s.column, "cannot return borrow of local `".concat(n).concat("` (would dangle after function returns)"));
+            t.err_code_range(e.line, e.column, _arg_span(e), "return-borrow", "cannot return borrow of local `".concat(n).concat("` (would dangle after function returns)"));
         }
     }
     let vt: *Type = infer_expr(t, e);
     if t.current_ret == null {
-        t.err(s.line, s.column, "return with value in fn declared without ret type");
+        // Underline the returned VALUE (the offending token), not the first
+        // character of `return`.
+        t.err_code_range(e.line, e.column, _arg_span(e), "return-in-void-fn", "return with value in fn declared without ret type");
         return;
     }
     if !types_compat(t.current_ret, vt) {
