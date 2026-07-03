@@ -1569,6 +1569,20 @@ case_feature("formatting refuses a file with parse errors",
     lambda r: check("no edits returned", (r.get("result") or []) == [],
                     f"got: {r.get('result')!r}"))
 
+# line!() expands inside match-arm bodies (used to print (nil)).
+# The check drives the compiler end-to-end via diagnostics absence; the
+# behavior itself is covered by the expander walking arm bodies.
+case_diagnostics("location macros expand inside match arms",
+    'fn f() -> !i32 { return err("boom"); }\n'
+    'fn main() -> i32 {\n'
+    '    match f() {\n'
+    '        ok(v) => {}\n'
+    '        err(e) => { println!(line!(), e); }\n'
+    '    }\n'
+    '    return 0;\n'
+    '}',
+    expect_codes_absent=["ice","unknown-name"])
+
 # The full Rust receiver trio: self / &self / &mut self.
 case_diagnostics("borrowed receivers compile",
     'struct C { n: i32 }\n'

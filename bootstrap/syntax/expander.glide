@@ -235,6 +235,19 @@ fn _rewrite_loc_stmt(s: *Stmt, file: string, in_fn: string) {
     if s.for_init != null {
         _rewrite_loc_stmt(s.for_init, file, fn_name);
     }
+    // `match` arms: the scrutinee and every arm body carry location macros
+    // too — without this `println!(line!(), …)` inside an arm printed (nil).
+    if s.scrutinee != null {
+        _rewrite_loc_expr(s.scrutinee, file, fn_name);
+    }
+    if s.arms != null {
+        for let ai: i32 = 0; ai < s.arms.len(); ai++ {
+            let arm: MatchArm = s.arms.get(ai);
+            if arm.body != null {
+                _rewrite_loc_block(arm.body, file, fn_name);
+            }
+        }
+    }
 }
 
 fn _rewrite_loc_block(stmts: *Vector<Stmt>, file: string, in_fn: string) {
@@ -248,6 +261,14 @@ fn _rewrite_loc_block(stmts: *Vector<Stmt>, file: string, in_fn: string) {
 fn _rewrite_loc_expr(e: *Expr, file: string, in_fn: string) {
     if e == null {
         return;
+    }
+    if e.match_arms != null {
+        for let ai: i32 = 0; ai < e.match_arms.len(); ai++ {
+            let arm: MatchArm = e.match_arms.get(ai);
+            if arm.body != null {
+                _rewrite_loc_block(arm.body, file, in_fn);
+            }
+        }
     }
     if e.kind == EX_MACRO && _is_location_macro_call(e) {
         _replace_with_location_literal(e, file, in_fn);
@@ -377,6 +398,17 @@ fn _rewrite_pkg_stmt(s: *Stmt, m: *Manifest) {
     if s.for_init != null {
         _rewrite_pkg_stmt(s.for_init, m);
     }
+    if s.scrutinee != null {
+        _rewrite_pkg_expr(s.scrutinee, m);
+    }
+    if s.arms != null {
+        for let ai: i32 = 0; ai < s.arms.len(); ai++ {
+            let arm: MatchArm = s.arms.get(ai);
+            if arm.body != null {
+                _rewrite_pkg_block(arm.body, m);
+            }
+        }
+    }
 }
 
 fn _rewrite_pkg_block(stmts: *Vector<Stmt>, m: *Manifest) {
@@ -388,6 +420,14 @@ fn _rewrite_pkg_block(stmts: *Vector<Stmt>, m: *Manifest) {
 }
 
 fn _rewrite_pkg_expr(e: *Expr, m: *Manifest) {
+    if e != null && e.match_arms != null {
+        for let ai: i32 = 0; ai < e.match_arms.len(); ai++ {
+            let arm: MatchArm = e.match_arms.get(ai);
+            if arm.body != null {
+                _rewrite_pkg_block(arm.body, m);
+            }
+        }
+    }
     if e == null {
         return;
     }
@@ -1250,6 +1290,17 @@ fn expand_in_block(stmts: *Vector<Stmt>, sm: *HashMap<Stmt>, tm: *Vector<TypeMac
         if s.for_init != null && s.for_init.then_body != null {
             s.for_init.then_body = expand_in_block(s.for_init.then_body, sm, tm, pr, it, depth);
         }
+        // `match` arms hold statement blocks too (both forms) — user macros
+        // inside them must expand like any other block.
+        if s.arms != null {
+            for let ai: i32 = 0; ai < s.arms.len(); ai++ {
+                let mut arm: MatchArm = s.arms.get(ai);
+                if arm.body != null {
+                    arm.body = expand_in_block(arm.body, sm, tm, pr, it, depth);
+                    s.arms.set(ai, arm);
+                }
+            }
+        }
         // Expression-position macros (@proc_macro_expr) in this statement's
         // expressions: replace each `name!(...)` value node with the
         // expression the macro returns.
@@ -1505,6 +1556,15 @@ fn _run_fn_expr(it: *Interp, fn_stmt: *Stmt, call: *Expr) -> *Expr {
 // the macro returns. Walks bottom-up (inner macros first) so a macro can be
 // fed the already-expanded result of a nested one.
 fn rewrite_expr_macros(e: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>, pr: *HashMap<ProcMacroDef>, it: *Interp) -> *Expr {
+    if e != null && e.match_arms != null {
+        for let ai: i32 = 0; ai < e.match_arms.len(); ai++ {
+            let mut arm: MatchArm = e.match_arms.get(ai);
+            if arm.body != null {
+                arm.body = expand_in_block(arm.body, sm, tm, pr, it, 0);
+                e.match_arms.set(ai, arm);
+            }
+        }
+    }
     if e == null {
         return e;
     }
