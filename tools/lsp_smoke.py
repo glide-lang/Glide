@@ -1569,6 +1569,23 @@ case_feature("formatting refuses a file with parse errors",
     lambda r: check("no edits returned", (r.get("result") or []) == [],
                     f"got: {r.get('result')!r}"))
 
+# fmt merges sibling imports into one brace group.
+case_feature("formatting merges sibling imports",
+    'import stdlib::http::client;\n'
+    'import stdlib::http::cookies;\n'
+    '\n'
+    'fn main() -> i32 {\n'
+    '    let c = client::HttpClient::new();\n'
+    '    c.free();\n'
+    '    let k = cookies::Cookie::new("a", "b");\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/formatting",
+     "params":{"options":{"tabSize":4,"insertSpaces":True}}},
+    lambda r: check("merged into a brace group",
+        "import stdlib::http::{client, cookies};" in ((r.get("result") or [{}])[0].get("newText","") if (r.get("result") or []) else ""),
+        f"got: {((r.get('result') or [{}])[0].get('newText','')[:80]) if (r.get('result') or []) else 'no edits'!r}"))
+
 # File+folder package: `http::` offers BOTH the file's symbols and the
 # folder's child modules; `http::client::` lists the child's pub symbols.
 case_completion_has("file+folder package lists both after ::",

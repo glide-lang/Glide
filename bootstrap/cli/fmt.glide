@@ -1475,17 +1475,156 @@ pub fn fmt_program(stmts: *Vector<Stmt>) -> string {
     // fold re-copied the entire growing file on every statement (O(file^2)).
     let b: *ByteBuffer = ByteBuffer::new();
     defer b.free();
+    // Sibling imports merge into one brace group: `import a::b;` +
+    // `import a::c;` -> `import a::{b, c};` at the first line's position.
+    let imp_merged: *HashMap<string> = HashMap::new();
+    let imp_skip: *HashMap<bool> = HashMap::new();
+    _plan_import_merge(stmts, imp_merged, imp_skip);
     let mut prev_kind: i32 = -1;
     for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
+        let ik: string = int_to_str(i);
+        if imp_skip.contains(ik) {
+            continue;
+        }
         // Blank line between top-level decls (but not before the first).
         if i > 0 && needs_blank_line(prev_kind, s.kind) {
             b.push_str("\n");
         }
-        b.push_str(fmt_stmt(&s, 0));
+        if imp_merged.contains(ik) {
+            b.push_str(imp_merged.get(ik));
+        } else {
+            b.push_str(fmt_stmt(&s, 0));
+        }
         prev_kind = s.kind;
     }
     return b.to_string();
+}
+
+// The `::`-joined module path of an import, with the optional `src/` prefix
+// stripped — the same normalization the single-import printer applies.
+fn _imp_module_of(raw: string) -> string {
+    let mut path: string = raw;
+    let pn: i32 = path.len();
+    if pn >= 4 {
+        let c0: i32 = path.at(0).to_int();
+        let c1: i32 = path.at(1).to_int();
+        let c2: i32 = path.at(2).to_int();
+        let c3: i32 = path.at(3).to_int();
+        if c0 == 115 && c1 == 114 && c2 == 99 && (c3 == 47 || c3 == 92) {
+            path = path.substring(4, pn);
+        }
+    }
+    let pn2: i32 = path.len();
+    if pn2 > 6 && path.substring(pn2 - 6, pn2).eq(".glide") {
+        path = path.substring(0, pn2 - 6);
+    }
+    let mut module: string = "";
+    for let i: i32 = 0; i < path.len(); i++ {
+        let c: i32 = path.at(i).to_int();
+        if c == 47 || c == 92 {
+            module = module.concat("::");
+        } else {
+            module = module.concat(path.substring(i, i + 1));
+        }
+    }
+    return module;
+}
+
+// Group same-parent imports. Only comment-free, non-wildcard imports with a
+// multi-segment path participate — a merge must never lose a comment, and
+// `import fs;` / `import a::*;` have no group form. pub and plain imports
+// never mix. Buckets with 2+ LINES merge at the first line's index; the rest
+// of the bucket is dropped.
+fn _plan_import_merge(stmts: *Vector<Stmt>, merged: *HashMap<string>, skip: *HashMap<bool>) {
+    let border: *Vector<string> = Vector::new();
+    let bnames: *HashMap<*Vector<string>> = HashMap::new();
+    let bidxs: *HashMap<*Vector<string>> = HashMap::new();
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind != ST_IMPORT || s.import_wildcard {
+            continue;
+        }
+        if s.leading_comments != null && !s.leading_comments.eq("") {
+            continue;
+        }
+        if s.trailing_comment != null && !s.trailing_comment.eq("") {
+            continue;
+        }
+        let module: string = _imp_module_of(s.import_path);
+        let mut parent: string = "";
+        let names: *Vector<string> = Vector::new();
+        if s.imported_items != null && s.imported_items.len() > 0 {
+            parent = module;
+            for let k: i32 = 0; k < s.imported_items.len(); k++ {
+                names.push(s.imported_items.get(k));
+            }
+        } else {
+            // trailing segment splits off as the group member
+            let mut last_cc: i32 = -1;
+            for let k: i32 = 0; k + 1 < module.len(); k++ {
+                if module.at(k).to_int() == 58 && module.at(k + 1).to_int() == 58 {
+                    last_cc = k;
+                }
+            }
+            if last_cc < 0 {
+                continue;
+            }
+            parent = module.substring(0, last_cc);
+            names.push(module.substring(last_cc + 2, module.len()));
+        }
+        let mut key: string = "n:".concat(parent);
+        if s.is_pub {
+            key = "p:".concat(parent);
+        }
+        if !bnames.contains(key) {
+            border.push(key);
+            let nv: *Vector<string> = Vector::new();
+            bnames.insert(key, nv);
+            let iv: *Vector<string> = Vector::new();
+            bidxs.insert(key, iv);
+        }
+        let bn: *Vector<string> = bnames.get(key);
+        for let k: i32 = 0; k < names.len(); k++ {
+            let nm: string = names.get(k);
+            let mut dup: bool = false;
+            for let d: i32 = 0; d < bn.len(); d++ {
+                if bn.get(d).eq(nm) {
+                    dup = true;
+                    break;
+                }
+            }
+            if !dup {
+                bn.push(nm);
+            }
+        }
+        bidxs.get(key).push(int_to_str(i));
+    }
+    for let i: i32 = 0; i < border.len(); i++ {
+        let key: string = border.get(i);
+        let idxs: *Vector<string> = bidxs.get(key);
+        if idxs.len() < 2 {
+            continue;
+        }
+        let names: *Vector<string> = bnames.get(key);
+        let parent: string = key.substring(2, key.len());
+        let mut kw: string = "import ";
+        if key.starts_with("p:") {
+            kw = "pub import ";
+        }
+        let mut line: string = kw.concat(parent).concat("::{");
+        for let k: i32 = 0; k < names.len(); k++ {
+            if k > 0 {
+                line = line.concat(", ");
+            }
+            line = line.concat(names.get(k));
+        }
+        line = line.concat("};\n");
+        merged.insert(idxs.get(0), line);
+        for let k: i32 = 1; k < idxs.len(); k++ {
+            skip.insert(idxs.get(k), true);
+        }
+    }
 }
 
 fn needs_blank_line(prev: i32, curr: i32) -> bool {

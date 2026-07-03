@@ -97,11 +97,24 @@ pub fn load_into_str(stmts: *Vector<Stmt>, src: string, origin: string, loaded: 
                     }
                 }
             }
+            // Brace group on a DIR-ONLY package: `import stdlib::net::{tcp, ip};`
+            // has no `net.glide`, but `net/` holds the children — peel them
+            // (each loads + registers as a module import).
+            if multi_seg && s.imported_items != null && !__glide_file_exists(resolved) {
+                let nocache1: *HashMap<*Vector<Stmt>> = null;
+                peel_child_module_items(stmts, &s, resolved, dir, unq, origin, loaded, pdiags, nocache1);
+                // Fully peeled on a dir-only package: peel repointed the stmt
+                // at its first child — follow it, or the loop tail would reset
+                // import_path to the nonexistent parent file.
+                if s.imported_items == null && __glide_file_exists(strip_quotes(s.import_path)) {
+                    resolved = strip_quotes(s.import_path);
+                }
+            }
             // Pure module import: bare path resolved directly to a file
             // and no items / wildcard requested.
             if multi_seg && s.imported_items != null && __glide_file_exists(resolved) {
                 let nocache0: *HashMap<*Vector<Stmt>> = null;
-                peel_child_module_items(stmts, &s, resolved, origin, loaded, pdiags, nocache0);
+                peel_child_module_items(stmts, &s, resolved, dir, unq, origin, loaded, pdiags, nocache0);
             }
             if multi_seg && s.imported_items == null && !s.import_wildcard && __glide_file_exists(resolved) {
                 s.import_is_module = true;
@@ -221,15 +234,24 @@ pub fn load_into_with_cache(stmts: *Vector<Stmt>, path: string, loaded: *HashMap
 // is removed from the item list so the parent-file symbol check doesn't flag
 // it. Items that are real symbols of `http.glide` stay selective as before —
 // the two kinds can mix in one brace group.
-fn peel_child_module_items(stmts: *Vector<Stmt>, s: *Stmt, resolved: string, origin: string, loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>, cache: *HashMap<*Vector<Stmt>>) {
-    if s.imported_items == null || !resolved.ends_with(".glide") {
+fn peel_child_module_items(stmts: *Vector<Stmt>, s: *Stmt, resolved: string, dir: string, unq: string, origin: string, loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>, cache: *HashMap<*Vector<Stmt>>) {
+    if s.imported_items == null {
         return;
     }
-    let pkg_dir: string = resolved.substring(0, resolved.len() - 6);
     let keep: *Vector<string> = Vector::new();
+    let mut first_child_file: string = "";
+    let mut first_child_name: string = "";
     for let i: i32 = 0; i < s.imported_items.len(); i++ {
         let item: string = s.imported_items.get(i);
-        let child_file: string = pkg_dir.concat("/").concat(item).concat(".glide");
+        // Resolve the child through the normal import search (importer-relative,
+        // then the roots), so dir-only packages (`stdlib/net/` with no
+        // `net.glide`) find their children the same way a hand-written
+        // `import stdlib::net::tcp;` would.
+        let mut base_mod: string = unq;
+        if base_mod.ends_with(".glide") {
+            base_mod = base_mod.substring(0, base_mod.len() - 6);
+        }
+        let child_file: string = resolve_import(dir, base_mod.concat("/").concat(item).concat(".glide"));
         if !__glide_file_exists(child_file) {
             keep.push(item);
             continue;
@@ -238,6 +260,10 @@ fn peel_child_module_items(stmts: *Vector<Stmt>, s: *Stmt, resolved: string, ori
             load_into_with_cache(stmts, child_file, loaded, pdiags, cache);
         } else {
             load_into(stmts, child_file, loaded, pdiags);
+        }
+        if first_child_file.eq("") {
+            first_child_file = child_file;
+            first_child_name = item;
         }
         let si: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
         ast_fill_defaults(si);
@@ -249,10 +275,23 @@ fn peel_child_module_items(stmts: *Vector<Stmt>, s: *Stmt, resolved: string, ori
         stmts.push(*si);
     }
     if keep.len() == 0 {
-        // Every braced name was a module: the import carries nothing itself.
+        // Every braced name was a module: the import stmt itself carries
+        // nothing. With a real parent file it becomes that module's import;
+        // on a dir-only package it stays inert (children were synthesized).
         s.imported_items = null;
-        s.import_is_module = true;
-        s.import_short = last_path_segment(strip_quotes(s.import_path));
+        if __glide_file_exists(resolved) {
+            s.import_is_module = true;
+            s.import_short = last_path_segment(strip_quotes(s.import_path));
+        } else {
+            // Dir-only package: no parent file to import. Repoint the stmt at
+            // the first child (a duplicate module import — harmless) so the
+            // unresolved-import check doesn't chase the nonexistent file.
+            if !first_child_file.eq("") {
+                s.import_path = first_child_file;
+                s.import_is_module = true;
+                s.import_short = first_child_name;
+            }
+        }
     } else {
         s.imported_items = keep;
     }
@@ -374,8 +413,14 @@ pub fn cached_resolve_and_push(stmts: *Vector<Stmt>, parsed: *Vector<Stmt>, orig
                     }
                 }
             }
+            if multi_seg && s.imported_items != null && !__glide_file_exists(resolved) {
+                peel_child_module_items(stmts, &s, resolved, dir, unq, origin, loaded, pdiags, cache);
+                if s.imported_items == null && __glide_file_exists(strip_quotes(s.import_path)) {
+                    resolved = strip_quotes(s.import_path);
+                }
+            }
             if multi_seg && s.imported_items != null && __glide_file_exists(resolved) {
-                peel_child_module_items(stmts, &s, resolved, origin, loaded, pdiags, cache);
+                peel_child_module_items(stmts, &s, resolved, dir, unq, origin, loaded, pdiags, cache);
             }
             if multi_seg && s.imported_items == null && !s.import_wildcard && __glide_file_exists(resolved) {
                 s.import_is_module = true;

@@ -25,3 +25,13 @@ fn test_grouped_import() -> i32 {
     assert!(ck != null);
     return 0;
 }
+
+// Dir-only package group: `stdlib/net/` has no `net.glide`, the braces load
+// the children directly.
+import stdlib::net::{ip};
+
+fn test_dir_only_group() -> i32 {
+    let a = ip::IpAddr::v4(10, 0, 0, 7);
+    assert_str_eq!(a.to_string(), "10.0.0.7");
+    return 0;
+}
