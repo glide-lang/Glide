@@ -1589,6 +1589,38 @@ case_feature("import hover shows module header",
         "HTTP/1.1 client" in (((r.get("result") or {}).get("contents", {}) or {}).get("value", "")),
         f"got: {(((r.get('result') or {}).get('contents', {}) or {}).get('value', '')[:80])!r}"))
 
+# An extra method in a trait impl (not a trait member) is an error (was an ICE
+# — the C vtable initializer named a nonexistent field).
+case_diagnostics("extra method in trait impl is flagged",
+    'struct A { x: i32 }\n'
+    'trait T2 {\n'
+    '    fn alpha(&self);\n'
+    '}\n'
+    'impl T2 for A {\n'
+    '    pub fn alpha(&self) {\n'
+    '    }\n'
+    '    fn extra(&self) {\n'
+    '    }\n'
+    '}\n'
+    'fn main() -> i32 { return 0; }',
+    expect_codes_present=["not-a-trait-member"])
+
+# Hover on a method DECL name beats a same-named free fn.
+case_feature("method decl hover beats free fn",
+    'struct A { x: i32 }\n'
+    'trait T2 { fn go(&self); }\n'
+    'fn go(n: i32) -> i32 { return n; }\n'
+    'impl T2 for A {\n'
+    '    pub fn go(&self) {\n'
+    '    }\n'
+    '}\n'
+    'fn main() -> i32 { return go(1); }',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/hover",
+     "params":{"position":{"line":4,"character":12}}},  # on the METHOD's `go`
+    lambda r: check("hover shows the method (&self), not the free fn",
+        "&self" in (((r.get("result") or {}).get("contents", {}) or {}).get("value", "")),
+        f"got: {(((r.get('result') or {}).get('contents', {}) or {}).get('value', '')[:70])!r}"))
+
 # Trait-impl body completion offers the trait's missing methods as stubs.
 case_completion_has("trait impl offers missing methods",
     'struct A { x: i32 }\n'

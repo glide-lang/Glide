@@ -2139,6 +2139,30 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
             continue;
         }
         t.impl_set.insert(s.impl_trait_name.concat("::").concat(tname), true);
+        // Every method in a trait impl must be a member of the trait (Rust
+        // E0407). An extra method also broke the C vtable initializer — the
+        // `.name = thunk` field doesn't exist on the trait's vt struct — and
+        // died in cc as an ICE.
+        let tdcl: *Stmt = find_top_decl(program, s.impl_trait_name);
+        if tdcl != null && tdcl.kind == ST_TRAIT && tdcl.impl_methods != null && s.impl_methods != null {
+            for let mi: i32 = 0; mi < s.impl_methods.len(); mi++ {
+                let im: Stmt = s.impl_methods.get(mi);
+                if im.kind != ST_FN || im.name == null {
+                    continue;
+                }
+                let mut member: bool = false;
+                for let ti: i32 = 0; ti < tdcl.impl_methods.len(); ti++ {
+                    let tm: Stmt = tdcl.impl_methods.get(ti);
+                    if tm.name != null && tm.name.eq(im.name) {
+                        member = true;
+                        break;
+                    }
+                }
+                if !member {
+                    t.err_code_range(im.name_line, im.name_col, im.name.len(), "not-a-trait-member", "method `".concat(im.name).concat("` is not a member of trait `").concat(s.impl_trait_name).concat("`; declare it there, or move it to a plain `impl ").concat(tname).concat(" { … }` block"));
+                }
+            }
+        }
         // Register `type Name = X;` decls under
         // `<Trait>::<TargetTypeName>::<Name>` so T::Item lookups resolve.
         if s.assoc_decls != null {

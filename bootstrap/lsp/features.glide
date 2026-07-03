@@ -26,6 +26,20 @@ pub fn fn_signature(s: *Stmt) -> string {
                 sig = sig.concat(", ");
             }
             let p: Param = s.fn_params.get(i);
+            // Receivers render Rust-style — the annotation carries only the
+            // borrow kind (the type is always the impl target).
+            if i == 0 && p.name != null && p.name.eq("self") {
+                if p.ty != null && p.ty.kind == TY_BORROW_MUT {
+                    sig = sig.concat("&mut self");
+                } else {
+                    if p.ty != null && p.ty.kind == TY_BORROW {
+                        sig = sig.concat("&self");
+                    } else {
+                        sig = sig.concat("self");
+                    }
+                }
+                continue;
+            }
             sig = sig.concat(p.name).concat(": ").concat(type_to_string_pretty(p.ty));
         }
     }
@@ -3092,7 +3106,15 @@ pub fn handle_hover(req: *JsonValue, state: *LspState) {
         }
     }
     if decl == null && content.eq("") {
-        decl = find_top_decl(doc.stmts, word);
+        // The cursor sitting ON a method's own declaration name must hover
+        // THAT method — not a same-named top-level fn (`fn a()` in an impl
+        // vs a free `fn a(…)` elsewhere in the file).
+        let mdecl: *Stmt = _impl_method_decl_at(doc.stmts, line0, uri_to_path(uri), word);
+        if mdecl != null {
+            decl = mdecl;
+        } else {
+            decl = find_top_decl(doc.stmts, word);
+        }
     }
     if decl != null && content.eq("") {
         if decl.kind == ST_FN {
@@ -5285,4 +5307,34 @@ fn _import_segment_file(text: string, line0: i32, col0: i32, word: string) -> st
         return resolved;
     }
     return "";
+}
+
+// The impl method whose DECLARATION name sits at (line0, word) in `path`,
+// or null. Used so hover on a method decl beats a same-named free fn.
+fn _impl_method_decl_at(stmts: *Vector<Stmt>, line0: i32, path: string, word: string) -> *Stmt {
+    if stmts == null {
+        return null;
+    }
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind != ST_IMPL || s.impl_methods == null {
+            continue;
+        }
+        for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+            let m: Stmt = s.impl_methods.get(j);
+            if m.kind != ST_FN || m.name == null || !m.name.eq(word) {
+                continue;
+            }
+            if m.name_line - 1 != line0 {
+                continue;
+            }
+            if !path.eq("") && m.origin != null && !m.origin.eq("") && !m.origin.eq(path) {
+                continue;
+            }
+            let p: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
+            *p = m;
+            return p;
+        }
+    }
+    return null;
 }
