@@ -1733,7 +1733,9 @@ pub fn emit_dyn_runtime(g: *CG, program: *Vector<Stmt>) {
             let mut self_expr: string = "*(".concat(type_name).concat("*)self_p");
             if m.fn_params != null && m.fn_params.len() > 0 {
                 let p0: Param = m.fn_params.get(0);
-                if p0.ty != null && p0.ty.kind == TY_POINTER {
+                // `&self` / `&mut self` borrows lower to a C pointer exactly
+                // like `*Self` — all three take the cast, not the deref.
+                if p0.ty != null && (p0.ty.kind == TY_POINTER || p0.ty.kind == TY_BORROW || p0.ty.kind == TY_BORROW_MUT) {
                     self_expr = "(".concat(type_name).concat("*)self_p");
                 }
             }

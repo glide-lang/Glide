@@ -1,0 +1,36 @@
+// `impl Trait` argument sugar: `fn a(ao: impl T)` desugars to a hidden
+// generic with the bound — static dispatch. Also covers &self receivers
+// through dyn (the vtable thunk must pass the pointer, not deref it).
+import stdlib::testing::*;
+
+struct Boxy { n: i32 }
+
+trait Sized2 {
+    fn size(&self) -> i32;
+}
+
+impl Sized2 for Boxy {
+    pub fn size(&self) -> i32 { return self.n; }
+}
+
+fn take_impl(x: impl Sized2) -> i32 {
+    return x.size();
+}
+
+fn take_dyn(x: *dyn Sized2) -> i32 {
+    return x.size();
+}
+
+fn test_impl_trait_arg() -> i32 {
+    let b: *Boxy = malloc(8) as *Boxy;
+    b.n = 9;
+    assert_eq!(take_impl(b), 9);
+    return 0;
+}
+
+fn test_dyn_borrow_receiver() -> i32 {
+    let b: *Boxy = malloc(8) as *Boxy;
+    b.n = 4;
+    assert_eq!(take_dyn(b as *dyn Sized2), 4);
+    return 0;
+}

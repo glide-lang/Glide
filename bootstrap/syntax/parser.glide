@@ -626,6 +626,26 @@ fn parse_fn(p: *Parser) -> *Stmt {
             continue;
         }
         p.expect_op(":");
+        // Rust-style `impl Trait` argument: `ao: impl Alelo2` desugars to a
+        // hidden generic — `fn a<__impl_ao: Alelo2>(ao: *__impl_ao)` — static
+        // dispatch, exactly as if the bound were written by hand. `+` chains
+        // bounds (`impl Read + Write`). fmt prints the sugar back.
+        if p.at_kw("impl") {
+            p.advance();
+            let mut bound: string = p.expect_ident();
+            while p.eat_op("+") {
+                bound = bound.concat("+").concat(p.expect_ident());
+            }
+            let gname: string = "__impl_".concat(pname);
+            tps.push(gname);
+            tps_bounds.push(bound);
+            let iprm: Param = Param { name: pname, ty: ty_pointer(ty_named(gname)), name_line: pn_line, name_col: pn_col };
+            params.push(iprm);
+            if !p.eat_op(",") {
+                break;
+            }
+            continue;
+        }
         let pty: *Type = parse_type(p);
         let prm: Param = Param { name: pname, ty: pty, name_line: pn_line, name_col: pn_col };
         params.push(prm);

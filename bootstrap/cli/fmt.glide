@@ -1156,13 +1156,43 @@ fn fmt_type_params(s: *Stmt) -> string {
         return "";
     }
     let mut out: string = "<";
+    let mut n: i32 = 0;
     for let i: i32 = 0; i < s.type_params.len(); i++ {
-        if i > 0 {
+        let tp: string = s.type_params.get(i);
+        // Synthesized `impl Trait` params render at their argument, not here.
+        if tp.starts_with("__impl_") {
+            continue;
+        }
+        if n > 0 {
             out = out.concat(", ");
         }
-        out = out.concat(s.type_params.get(i));
+        n = n + 1;
+        out = out.concat(tp);
+        // Keep the bound — `<T: Alelo2>` must not round-trip to `<T>`.
+        if s.type_param_bounds != null && i < s.type_param_bounds.len() {
+            let bd: string = s.type_param_bounds.get(i);
+            if bd != null && !bd.eq("") {
+                out = out.concat(": ").concat(_fmt_bound(bd));
+            }
+        }
+    }
+    if n == 0 {
+        return "";
     }
     return out.concat(">");
+}
+
+// `A+B` (storage form) -> `A + B` (source form).
+fn _fmt_bound(bd: string) -> string {
+    let mut out: string = "";
+    for let i: i32 = 0; i < bd.len(); i++ {
+        if bd.at(i).to_int() == 43 {
+            out = out.concat(" + ");
+        } else {
+            out = out.concat(bd.substring(i, i + 1));
+        }
+    }
+    return out;
 }
 
 // Emit the generic `@<name>(args)` attribute list attached to a declaration —
@@ -1217,6 +1247,23 @@ fn fmt_fn(s: *Stmt, depth: i32) -> string {
                 head = head.concat(", ");
             }
             let p: Param = s.fn_params.get(i);
+            // `impl Trait` sugar: the synthesized `*__impl_<name>` type prints
+            // back as the user wrote it.
+            let mut _imp_printed: bool = false;
+            if p.ty != null && p.ty.kind == TY_POINTER && p.ty.inner != null && p.ty.inner.kind == TY_NAMED && p.ty.inner.name != null && p.ty.inner.name.starts_with("__impl_") {
+                if s.type_params != null && s.type_param_bounds != null {
+                    for let bi: i32 = 0; bi < s.type_params.len(); bi++ {
+                        if s.type_params.get(bi).eq(p.ty.inner.name) && bi < s.type_param_bounds.len() {
+                            head = head.concat(p.name).concat(": impl ").concat(_fmt_bound(s.type_param_bounds.get(bi)));
+                            _imp_printed = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if _imp_printed {
+                continue;
+            }
             // The receiver renders Rust-style — `self`, `&self`, or
             // `&mut self`; the annotation carries no information beyond the
             // borrow kind (the type is always the impl target).
