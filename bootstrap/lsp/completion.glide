@@ -160,7 +160,7 @@ fn current_imports(text: string) -> *HashMap<ImportInfo> {
 //   * no existing import → insert `import module::{name};\n` at the
 //     fallback line. For Module items (is_module = true), insert the
 //     bare form `import module;` instead so `module::Foo` paths work.
-fn build_import_edit(name: string, module: string, existing: *ImportInfo, fallback_line: i32, is_module: bool) -> *JsonValue {
+fn build_import_edit(name: string, module: string, existing: *ImportInfo, fallback_line: i32, is_module: bool, imps: *HashMap<ImportInfo>) -> *JsonValue {
     if existing != null {
         if existing.kind == IMP_WILDCARD {
             return null;
@@ -185,6 +185,75 @@ fn build_import_edit(name: string, module: string, existing: *ImportInfo, fallba
             json_obj_set(edit, "range", range);
             json_obj_set(edit, "newText", json_string(", ".concat(name)));
             return edit;
+        }
+    }
+    // Module import with same-parent siblings already in the file: merge into
+    // a brace group instead of stacking another line — `import
+    // stdlib::http::client;` + accepting `cookies::…` rewrites the sibling to
+    // `import stdlib::http::{client, cookies};`; an existing group absorbs.
+    if is_module && imps != null {
+        let mut last_cc: i32 = -1;
+        for let k: i32 = 0; k + 1 < module.len(); k++ {
+            if module.at(k).to_int() == 58 && module.at(k + 1).to_int() == 58 {
+                last_cc = k;
+            }
+        }
+        if last_cc > 0 {
+            let parent: string = module.substring(0, last_cc);
+            let child: string = module.substring(last_cc + 2, module.len());
+            // (a) an existing `import parent::{…};` group absorbs the child.
+            if imps.contains(parent) {
+                let pi: ImportInfo = imps.get(parent);
+                if pi.kind == IMP_SELECTIVE && pi.close_pos >= 0 {
+                    if pi.items != null && pi.items.contains(child) {
+                        return null;
+                    }
+                    let gedit: *JsonValue = json_object();
+                    let grange: *JsonValue = json_object();
+                    let gstart: *JsonValue = json_object();
+                    let gend: *JsonValue = json_object();
+                    json_obj_set(gstart, "line", json_int(pi.line));
+                    json_obj_set(gstart, "character", json_int(pi.close_pos));
+                    json_obj_set(gend, "line", json_int(pi.line));
+                    json_obj_set(gend, "character", json_int(pi.close_pos));
+                    json_obj_set(grange, "start", gstart);
+                    json_obj_set(grange, "end", gend);
+                    json_obj_set(gedit, "range", grange);
+                    json_obj_set(gedit, "newText", json_string(", ".concat(child)));
+                    return gedit;
+                }
+            }
+            // (b) a bare sibling (`import parent::other;`) rewrites into the group.
+            let keys: *Vector<string> = imps.keys();
+            for let k: i32 = 0; k < keys.len(); k++ {
+                let km: string = keys.get(k);
+                if km.eq(module) || !km.starts_with(parent.concat("::")) {
+                    continue;
+                }
+                let sib_child: string = km.substring(parent.len() + 2, km.len());
+                if sib_child.contains("::") {
+                    continue; // deeper path, not a direct sibling
+                }
+                let si: ImportInfo = imps.get(km);
+                if si.kind != IMP_BARE {
+                    continue;
+                }
+                let redit: *JsonValue = json_object();
+                let rrange: *JsonValue = json_object();
+                let rstart: *JsonValue = json_object();
+                let rend: *JsonValue = json_object();
+                json_obj_set(rstart, "line", json_int(si.line));
+                json_obj_set(rstart, "character", json_int(0));
+                json_obj_set(rend, "line", json_int(si.line + 1));
+                json_obj_set(rend, "character", json_int(0));
+                json_obj_set(rrange, "start", rstart);
+                json_obj_set(rrange, "end", rend);
+                json_obj_set(redit, "range", rrange);
+                json_obj_set(redit, "newText", json_string("import ".concat(parent).concat("::{").concat(sib_child).concat(", ").concat(child).concat("};\n")));
+                keys.free();
+                return redit;
+            }
+            keys.free();
         }
     }
     // No existing import — fresh insertion.
@@ -853,7 +922,7 @@ fn _list_module_members_from(idx: *Vector<ImportableSym>, path: string, items: *
                 existing = malloc(sizeof(ImportInfo)) as *ImportInfo;
                 *existing = iv;
             }
-            medit = build_import_edit(label, sym.module, existing, insert_line, true);
+            medit = build_import_edit(label, sym.module, existing, insert_line, true, imps);
         }
         let item: *JsonValue = rich_completion_item(label, sym.label_extra, ci_kind_for_stmt_kind(sym.kind), sym.signature, sym.doc, sym.module, sym.snippet, sym.has_snippet, medit);
         json_arr_push(items, item);
@@ -1114,7 +1183,7 @@ fn _push_proc_index_items(idx: *Vector<ImportableSym>, doc: LspDoc, want_kind: i
             existing = malloc(sizeof(ImportInfo)) as *ImportInfo;
             *existing = info_val;
         }
-        let edit: *JsonValue = build_import_edit(sym.name, sym.module, existing, insert_line, false);
+        let edit: *JsonValue = build_import_edit(sym.name, sym.module, existing, insert_line, false, imps);
         let item: *JsonValue = rich_completion_item(sym.name, "", ci_kind, detail.concat(" ").concat(sym.name), sym.doc, sym.module, sym.name, false, edit);
         json_arr_push(items, item);
     }
@@ -4861,7 +4930,7 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
                     existing = malloc(sizeof(ImportInfo)) as *ImportInfo;
                     *existing = info_val;
                 }
-                decl_edit = build_import_edit(label, edit_mod, existing, insert_line2, false);
+                decl_edit = build_import_edit(label, edit_mod, existing, insert_line2, false, imps2);
             }
             let item: *JsonValue = rich_completion_item(label, label_extra, ci_kind_for(&s), sig, docc, module, snip, has_snip, decl_edit);
             json_arr_push(items, item);
@@ -5180,7 +5249,7 @@ fn _emit_index_items(idx: *Vector<ImportableSym>, imps: *HashMap<ImportInfo>, in
         let is_folder: bool = is_module && (sym.def_path == null || !sym.def_path.ends_with(".glide"));
         let mut edit: *JsonValue = null;
         if !is_folder {
-            edit = build_import_edit(sym.name, imp_module, existing, insert_line, is_module);
+            edit = build_import_edit(sym.name, imp_module, existing, insert_line, is_module, imps);
         }
         let item: *JsonValue = rich_completion_item(label, sym.label_extra, ci_kind_for_stmt_kind(sym.kind), sym.signature, sym.doc, imp_module, sym.snippet, sym.has_snippet, edit);
         json_arr_push(items, item);
