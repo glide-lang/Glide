@@ -922,7 +922,7 @@ def _semtok_types(body, want_tokens):
 
 print("\n[semantic-tokens] self is one consistent type")
 _st=_semtok_types("trait P {\n    fn a(&self) -> i32;\n    fn b(&self) -> i32 { return self.a(); }\n}", {"self"})
-check("every `self` is `keyword`", _st and all(t=="keyword" for _,t in _st), f"got {_st}")
+check("every `self` is `parameter`", _st and all(t=="parameter" for _,t in _st), f"got {_st}")
 
 # Positions after a multi-byte char convert byte->UTF-16 for the editor: the
 # `x` after "Olá" (á = 2 bytes, 1 UTF-16 unit) highlights at its UTF-16 column,

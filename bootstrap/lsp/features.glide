@@ -1863,10 +1863,11 @@ pub fn handle_semantic_tokens(req: *JsonValue, state: *LspState) {
             if t.kind == TOK_IDENT {
                 // `self` / `Self` get ONE token type regardless of position, so
                 // the receiver (`&self`), the value (`self.field`) and a bare
-                // `self` don't drift between the parameter and variable colours.
-                // `self` reads as a language keyword, `Self` as a type.
+                // `self` don't drift between colours. `self` IS the receiver
+                // parameter, so it reads as a parameter everywhere; `Self` is a
+                // type.
                 if t.lexeme.eq("self") {
-                    sem = SEMTOK_KEYWORD;
+                    sem = SEMTOK_PARAMETER;
                 } else {
                     if t.lexeme.eq("Self") {
                         sem = SEMTOK_TYPE;
