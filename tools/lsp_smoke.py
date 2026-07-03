@@ -898,6 +898,33 @@ case_feature("documentHighlight anchors a method use at the method name",
 
 # The module qualifier + its import line highlight together: cursor on the
 # module name in `import w3;` lights the import segment AND every `w3::` use.
+# A function-local name (self / param / local) highlights only within its own
+# fn — `n` in `a` must not light up `b`'s `n`.
+case_feature("documentHighlight scopes a param to its own function",
+    'fn a(n: i32) -> i32 { return n; }\n'
+    'fn b(n: i32) -> i32 { return n; }\n',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/documentHighlight",
+     "params":{"position":{"line":0,"character":5}}},  # `n` param in a
+    lambda r: check("only a's two `n` (line 0), not b's",
+        all(h["range"]["start"]["line"] == 0 for h in (r.get("result") or []))
+            and len(r.get("result") or []) == 2,
+        f"got {[h['range']['start'] for h in (r.get('result') or [])]}"))
+
+# `self` highlights within its method only, anchored at `self` (not `&self`).
+case_feature("documentHighlight scopes self to its method, anchored at self",
+    'trait P {\n'
+    '    fn ola(&self) -> i32;\n'
+    '    fn hi(&self) -> i32 {\n'
+    '        return self.ola();\n'
+    '    }\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/documentHighlight",
+     "params":{"position":{"line":3,"character":16}}},  # `self` in self.ola()
+    lambda r: check("self spans method `hi` only (lines 2,3), starts at self col",
+        sorted((h["range"]["start"]["line"], h["range"]["start"]["character"])
+               for h in (r.get("result") or [])) == [(2,11),(3,15)],
+        f"got {sorted((h['range']['start']['line'], h['range']['start']['character']) for h in (r.get('result') or []))}"))
+
 case_feature("documentHighlight links a module import with its qualifiers",
     'import w3;\n'
     'fn main() -> i32 {\n'

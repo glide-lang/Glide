@@ -585,10 +585,12 @@ fn parse_fn(p: *Parser) -> *Stmt {
         // `&mut self` -> `self: &mut Self`; the impl post-pass substitutes
         // the target type. Only the receiver gets this sugar.
         if p.at_op("&") {
-            let br_line: i32 = p.current.line;
-            let br_col: i32 = p.current.column;
             p.advance();
             let br_mut: bool = p.eat_kw("mut");
+            // Anchor the receiver at the `self` token (not the leading `&`), so
+            // highlight/rename cover `self`, not `&sel`.
+            let br_line: i32 = p.current.line;
+            let br_col: i32 = p.current.column;
             let br_name: string = p.expect_ident();
             if !br_name.eq("self") {
                 p.err("expected `self` after `&` in a parameter list (borrowed params are written `name: &T`)");

@@ -5713,13 +5713,29 @@ pub fn handle_references(req: *JsonValue, state: *LspState) {
         return;
     }
     let uses: *Vector<UseSite> = Vector::new();
-    if doc.stmts != null {
-        for let i: i32 = 0; i < doc.stmts.len(); i++ {
-            let s: Stmt = doc.stmts.get(i);
-            if !s.origin.eq("") && !s.origin.eq(path) {
-                continue;
+    // Function-scoped names (self / params / locals) only highlight within
+    // their own fn — `self` in one method must not light up another method's
+    // `self`, nor a `let n` leak across siblings. A top-level name (fn / type /
+    // module) still spans the whole file.
+    // Pass "" (not `path`): open-doc stmts often carry an empty origin, which
+    // fn_containing's path filter would skip — the collection loop below
+    // already scopes by path, and doc.stmts holds only this file's decls.
+    let mut encl: *Stmt = fn_containing(doc.stmts, line0, "");
+    if encl == null {
+        encl = _method_on_sig_line(doc.stmts, line0);
+    }
+    let scoped: bool = encl != null && (word.eq("self") || _fn_binds_word(encl, word));
+    if scoped {
+        collect_uses_in_stmt(encl, word, uses);
+    } else {
+        if doc.stmts != null {
+            for let i: i32 = 0; i < doc.stmts.len(); i++ {
+                let s: Stmt = doc.stmts.get(i);
+                if !s.origin.eq("") && !s.origin.eq(path) {
+                    continue;
+                }
+                collect_uses_in_stmt(&s, word, uses);
             }
-            collect_uses_in_stmt(&s, word, uses);
         }
     }
     let arr: *JsonValue = json_array();
@@ -5736,6 +5752,74 @@ pub fn handle_references(req: *JsonValue, state: *LspState) {
     lsp_send_response(id, arr);
 }
 
+// True if the fn/method `m` binds `word` as its receiver, a parameter, or a
+// local `let` — i.e. `word` is function-scoped and its highlight/rename must
+// not cross into a sibling fn that reuses the same name.
+// The fn/method whose signature line is `line0`, including a body-less
+// abstract trait method (`fn ola(&self);`) that fn_containing skips. Lets a
+// receiver `self` on such a signature scope to that method.
+fn _method_on_sig_line(stmts: *Vector<Stmt>, line0: i32) -> *Stmt {
+    if stmts == null {
+        return null;
+    }
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind == ST_FN && s.line - 1 == line0 {
+            let p: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+            *p = s;
+            return p;
+        }
+        if (s.kind == ST_IMPL || s.kind == ST_TRAIT) && s.impl_methods != null {
+            for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.kind == ST_FN && m.line - 1 == line0 {
+                    let mp: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+                    *mp = m;
+                    return mp;
+                }
+            }
+        }
+    }
+    return null;
+}
+
+fn _fn_binds_word(m: *Stmt, word: string) -> bool {
+    if m == null || word == null || word.eq("") {
+        return false;
+    }
+    if m.fn_params != null {
+        for let i: i32 = 0; i < m.fn_params.len(); i++ {
+            let p: Param = m.fn_params.get(i);
+            if p.name != null && p.name.eq(word) {
+                return true;
+            }
+        }
+    }
+    if m.fn_body != null {
+        return _body_declares_local(m.fn_body, word);
+    }
+    return false;
+}
+
+fn _body_declares_local(body: *Vector<Stmt>, word: string) -> bool {
+    if body == null {
+        return false;
+    }
+    for let i: i32 = 0; i < body.len(); i++ {
+        let s: Stmt = body.get(i);
+        if (s.kind == ST_LET || s.kind == ST_FOR) && s.name != null && s.name.eq(word) {
+            return true;
+        }
+        if _body_declares_local(s.then_body, word) {
+            return true;
+        }
+        if _body_declares_local(s.else_body, word) {
+            return true;
+        }
+    }
+    return false;
+}
+
 pub fn handle_document_highlight(req: *JsonValue, state: *LspState) {
     let (id, uri, line0, col0) = read_pos_params(req);
     if !state.docs.contains(uri) {
@@ -5750,13 +5834,24 @@ pub fn handle_document_highlight(req: *JsonValue, state: *LspState) {
         return;
     }
     let uses: *Vector<UseSite> = Vector::new();
-    if doc.stmts != null {
-        for let i: i32 = 0; i < doc.stmts.len(); i++ {
-            let s: Stmt = doc.stmts.get(i);
-            if !s.origin.eq("") && !s.origin.eq(path) {
-                continue;
+    // Function-scoped names (self / params / locals) only highlight within
+    // their own fn; a top-level name (fn / type / module) spans the file.
+    let mut encl: *Stmt = fn_containing(doc.stmts, line0, "");
+    if encl == null {
+        encl = _method_on_sig_line(doc.stmts, line0);
+    }
+    let scoped: bool = encl != null && (word.eq("self") || _fn_binds_word(encl, word));
+    if scoped {
+        collect_uses_in_stmt(encl, word, uses);
+    } else {
+        if doc.stmts != null {
+            for let i: i32 = 0; i < doc.stmts.len(); i++ {
+                let s: Stmt = doc.stmts.get(i);
+                if !s.origin.eq("") && !s.origin.eq(path) {
+                    continue;
+                }
+                collect_uses_in_stmt(&s, word, uses);
             }
-            collect_uses_in_stmt(&s, word, uses);
         }
     }
     let arr: *JsonValue = json_array();
