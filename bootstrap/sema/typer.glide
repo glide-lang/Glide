@@ -918,6 +918,9 @@ pub struct Typer {
     pub enums: *HashMap<string>,
     // "Enum::Variant" -> payload field count, for pattern-arity checking.
     pub enum_arities: *HashMap<i32>,
+    // "Enum::Variant#i" -> payload field type, so match-arm bindings get their
+    // real type (not a compatible-with-anything placeholder).
+    pub enum_payload_tys: *HashMap<Type>,
     pub error_count: i32,
     pub diagnostics: *Vector<DiagEntry>,
     // Related "why" locations, keyed by diagnostic index. See DiagRelated.
@@ -1425,6 +1428,8 @@ impl Typer {
         t.enums = en;
         let ena: *HashMap<i32> = HashMap::new();
         t.enum_arities = ena;
+        let enp: *HashMap<Type> = HashMap::new();
+        t.enum_payload_tys = enp;
         t.error_count = 0;
         let fh: *Vector<FnptrHint> = Vector::new();
         t.fnptr_hints = fh;
@@ -1966,6 +1971,9 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
                     let mut _ar: i32 = 0;
                     if ev.fields != null {
                         _ar = ev.fields.len();
+                        for let fk: i32 = 0; fk < ev.fields.len(); fk++ {
+                            t.enum_payload_tys.insert(s.name.concat("::").concat(ev.name).concat("#").concat(int_to_str(fk)), ev.fields.get(fk));
+                        }
                     }
                     t.enum_arities.insert(s.name.concat("::").concat(ev.name), _ar);
                 }
@@ -3077,6 +3085,36 @@ fn _consumed_apply(t: *Typer, keep: *HashMap<bool>) {
 // both reject a typo'd variant (which otherwise leaked `case Enum_Bogus` to
 // cc) and a non-exhaustive enum match (which otherwise fell through to an
 // uninitialized C switch result).
+// The real type of a match-arm payload binding, derived from the scrutinee:
+// `ok(v)` on `!T` binds T, `err(e)` binds string, `some(v)` on `?T` binds T,
+// and an enum variant binds its declared payload field. Falls back to the
+// `__unknown__` placeholder when the scrutinee can't be resolved.
+fn _typer_bind_ty(t: *Typer, scrut_ty: *Type, variant: string, k: i32) -> *Type {
+    if scrut_ty != null && variant != null {
+        if scrut_ty.kind == TY_RESULT || scrut_ty.kind == TY_OPT_RESULT {
+            if variant.eq("ok") && k == 0 && scrut_ty.inner != null {
+                return scrut_ty.inner;
+            }
+            if variant.eq("err") && k == 0 {
+                return ty_named("string");
+            }
+        }
+        if (scrut_ty.kind == TY_OPTION || scrut_ty.kind == TY_OPT_RESULT) && variant.eq("some") && k == 0 && scrut_ty.inner != null {
+            return scrut_ty.inner;
+        }
+        if scrut_ty.kind == TY_NAMED && scrut_ty.name != null {
+            let pkey: string = scrut_ty.name.concat("::").concat(variant).concat("#").concat(int_to_str(k));
+            if t.enum_payload_tys.contains(pkey) {
+                let pt: Type = t.enum_payload_tys.get(pkey);
+                let pp: *Type = __glide_palloc(sizeof(Type)) as *Type;
+                *pp = pt;
+                return pp;
+            }
+        }
+    }
+    return ty_named("__unknown__");
+}
+
 // True for the `void` type (an expression that yields nothing). Used to reject
 // binding / passing a value that doesn't exist.
 fn _ty_is_void(ty: *Type) -> bool {
@@ -3424,9 +3462,9 @@ fn check_stmt(t: *Typer, s: *Stmt) {
                 let a: MatchArm = s.arms.get(i);
                 let saved: i32 = enter_borrow_scope(t);
                 if a.bindings != null {
-                    let placeholder: *Type = ty_named("__unknown__");
                     for let k: i32 = 0; k < a.bindings.len(); k++ {
-                        t.scope.insert(a.bindings.get(k), *placeholder);
+                        let bty: *Type = _typer_bind_ty(t, scrut_ty, a.variant, k);
+                        t.scope.insert(a.bindings.get(k), *bty);
                     }
                 }
                 if a.body != null {
@@ -3869,14 +3907,14 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             for let i: i32 = 0; i < e.match_arms.len(); i++ {
                 let a: MatchArm = e.match_arms.get(i);
                 let saved: i32 = enter_borrow_scope(t);
-                // Bind payload names with `__unknown__` placeholders. Codegen
-                // emits them via `__typeof__` from the enum's payload field
-                // so the runtime type is correct; the typer just needs each
-                // name in scope to silence "unknown name" diags.
+                // Bind payload names with their REAL types (derived from the
+                // scrutinee), so an arm value like `ok(v) => v` carries the
+                // payload type into the match result — and misuse downstream
+                // (`stream.write(res)` on a `*File`) errs here, not in cc.
                 if a.bindings != null {
-                    let placeholder: *Type = ty_named("__unknown__");
                     for let k: i32 = 0; k < a.bindings.len(); k++ {
-                        t.scope.insert(a.bindings.get(k), *placeholder);
+                        let bty: *Type = _typer_bind_ty(t, scrut_ty, a.variant, k);
+                        t.scope.insert(a.bindings.get(k), *bty);
                     }
                 }
                 let mut arm_ty: *Type = ty_named("void");

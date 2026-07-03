@@ -253,6 +253,38 @@ case_diagnostics("enum ctor let feeds match exhaustiveness",
     '}',
     expect_codes_present=["match-not-exhaustive"])
 
+# Match bindings carry REAL types: passing the ok-payload (`*P`) where a
+# string is expected errs at the call, not as a cc ICE.
+case_diagnostics("match binding type flows to call args",
+    'struct P { x: i32 }\n'
+    'struct S { y: i32 }\n'
+    'impl S {\n'
+    '    pub fn put(self: *S, data: string) {}\n'
+    '}\n'
+    'fn get() -> !*P { return err("no"); }\n'
+    'fn main() -> i32 {\n'
+    '    let sv: *S = malloc(8) as *S;\n'
+    '    let res = match get() {\n'
+    '        ok(v) => v,\n'
+    '        err(e) => { return 1; }\n'
+    '    };\n'
+    '    sv.put(res);\n'
+    '    return 0;\n'
+    '}',
+    expect_codes_absent=["ice"])
+
+# ok yields T, err yields string -> incompatible arm types are caught now.
+case_diagnostics("arm mismatch via binding types",
+    'fn f() -> !i32 { return ok(1); }\n'
+    'fn main() -> i32 {\n'
+    '    let x = match f() {\n'
+    '        ok(v) => v,\n'
+    '        err(e) => e,\n'
+    '    };\n'
+    '    return 0;\n'
+    '}',
+    expect_codes_present=["match-arm-mismatch"])
+
 # A value arm next to a PLAIN void arm (no return) is an error.
 case_diagnostics("value arm + plain void arm is an error",
     'fn f() -> !i32 { return ok(1); }\n'
