@@ -1563,7 +1563,7 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
         build_visibility(t, stmts);
         t.enforce_visibility = true;
         check_program(t, stmts);
-        run_extra_analyses(t, stmts);
+        run_extra_analyses(t, stmts, text);
     }
     // Save the parsed stmts on the doc. The arena stays alive (in the
     // global g_palloc_active) until the next reanalysis, so this doc's
@@ -1827,7 +1827,7 @@ fn handle_did_close(req: *JsonValue, state: *LspState) {
 }
 
 // Bundle of all extra-pass analyses. Both LSP and `glide check` call this.
-pub fn run_extra_analyses(t: *Typer, stmts: *Vector<Stmt>) {
+pub fn run_extra_analyses(t: *Typer, stmts: *Vector<Stmt>, text: string) {
     analysis_unused_vars(t, stmts);
     analysis_unused_params(t, stmts);
     analysis_unused_fn(t, stmts);
@@ -1849,7 +1849,7 @@ pub fn run_extra_analyses(t: *Typer, stmts: *Vector<Stmt>) {
     analysis_null_deref(t, stmts);
     analysis_bad_free(t, stmts);
     // `string-eq-op` retired: `==` / `!=` on strings now compares bytes.
-    analysis_unused_import(t, stmts);
+    analysis_unused_import(t, stmts, text);
     analysis_arena_set_unbalanced(t, stmts);
     analysis_coro_blocking(t, stmts);
     analysis_unhandled_result(t, stmts);

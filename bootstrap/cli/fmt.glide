@@ -1510,6 +1510,61 @@ fn fmt_match(s: *Stmt, depth: i32) -> string {
 }
 
 // ---- Top level --------------------------------------------------------
+// fmt-time removal of unused imports. Only touches SELECTIVE imports (named
+// symbols) — a member whose leaf is referenced nowhere is dropped; if none
+// survive, the whole line is skipped. Module (`import a;`) and wildcard imports
+// are left untouched: a module brings every pub name bare, and fmt parses a
+// single file without the module's contents, so it can't tell those apart from
+// unused. Returns the set of statement indices to omit entirely; mutates
+// surviving imports in place to keep only their used members.
+fn _fmt_prune_unused_imports(stmts: *Vector<Stmt>) -> *HashMap<bool> {
+    let drop: *HashMap<bool> = HashMap::new();
+    let used: *HashMap<bool> = HashMap::new();
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind == ST_IMPORT {
+            continue;
+        }
+        _ui_collect_stmt(&s, used);
+    }
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind != ST_IMPORT || s.import_wildcard {
+            continue;
+        }
+        if s.imported_items == null || s.imported_items.len() == 0 {
+            continue;
+        }
+        let kept: *Vector<string> = Vector::new();
+        for let j: i32 = 0; j < s.imported_items.len(); j++ {
+            let item: string = s.imported_items.get(j);
+            let mut leaf: string = item;
+            let mut cc: i32 = -1;
+            for let k: i32 = 0; k + 1 < item.len(); k++ {
+                if item.at(k).to_int() == 58 && item.at(k + 1).to_int() == 58 {
+                    cc = k;
+                }
+            }
+            if cc >= 0 {
+                leaf = item.substring(cc + 2, item.len());
+            }
+            if used.contains(leaf) {
+                kept.push(item);
+            }
+        }
+        if kept.len() == 0 {
+            drop.insert(int_to_str(i), true);
+        } else {
+            if kept.len() < s.imported_items.len() {
+                let mut sm: Stmt = s;
+                sm.imported_items = kept;
+                stmts.set(i, sm);
+            }
+        }
+    }
+    return drop;
+}
+
 pub fn fmt_program(stmts: *Vector<Stmt>) -> string {
     // Build the whole file in one buffer (O(n)); the old `out = out.concat(...)`
     // fold re-copied the entire growing file on every statement (O(file^2)).
@@ -1517,6 +1572,9 @@ pub fn fmt_program(stmts: *Vector<Stmt>) -> string {
     defer b.free();
     // Sibling imports merge into one brace group: `import a::b;` +
     // `import a::c;` -> `import a::{b, c};` at the first line's position.
+    // Drop unused selective imports first, so the merge planner and printer
+    // only see the surviving ones.
+    let imp_drop: *HashMap<bool> = _fmt_prune_unused_imports(stmts);
     let imp_merged: *HashMap<string> = HashMap::new();
     let imp_skip: *HashMap<bool> = HashMap::new();
     _plan_import_merge(stmts, imp_merged, imp_skip);
@@ -1524,7 +1582,7 @@ pub fn fmt_program(stmts: *Vector<Stmt>) -> string {
     for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         let ik: string = int_to_str(i);
-        if imp_skip.contains(ik) {
+        if imp_skip.contains(ik) || imp_drop.contains(ik) {
             continue;
         }
         // Blank line between top-level decls (but not before the first).

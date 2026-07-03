@@ -1464,7 +1464,7 @@ def case_completion_project(label, files, open_rel, pos,
     shutil.rmtree(d, ignore_errors=True)
 
 def case_diagnostics_project(label, files, open_rel, present=None, absent=None,
-                            msg_at=None):
+                            msg_at=None, tag_for=None):
     """Open `open_rel` inside a real multi-file project (rootUri + glide.glide)
     and assert the diagnostic codes published for it. Proves the declaration-
     level `unused-*` lints are cross-file-safe: a `pub` symbol defined here but
@@ -1498,6 +1498,17 @@ def case_diagnostics_project(label, files, open_rel, present=None, absent=None,
         check(f"emits `{c}`", c in codes, f"got {sorted(codes)}")
     for c in (absent or []):
         check(f"does NOT emit `{c}`", c not in codes, f"got {sorted(codes)}")
+    if tag_for:
+        diags2 = []
+        for r in rs:
+            if r.get("method") == "textDocument/publishDiagnostics" \
+               and r["params"].get("uri") == open_uri:
+                diags2 = r["params"]["diagnostics"]
+        for code, want_tag in tag_for.items():
+            hit = next((dg for dg in diags2 if dg.get("code") == code), None)
+            got = hit and hit.get("tags")
+            check(f"`{code}` carries tag {want_tag}",
+                  got is not None and want_tag in got, f"got {got}")
     if msg_at:
         diags = []
         for r in rs:
@@ -1917,6 +1928,13 @@ case_diagnostics_project("unused module import is flagged",
      "main.glide": "import alelo;\nfn main() -> i32 { return 0; }\n"},
     "main.glide",
     present=["unused-import"])
+
+# The unused import is faded (DiagnosticTag.Unnecessary = 1).
+case_diagnostics_project("unused import is tagged Unnecessary",
+    {"alelo.glide": "pub fn helper() -> i32 { return 1; }\n",
+     "main.glide": "import alelo;\nfn main() -> i32 { return 0; }\n"},
+    "main.glide",
+    present=["unused-import"], tag_for={"unused-import": 1})
 
 # A module import used via a bare exported name (bring-all) is NOT flagged.
 case_diagnostics_project("module import used bare is not flagged",

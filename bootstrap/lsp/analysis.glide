@@ -2666,7 +2666,76 @@ fn _seq_is_string_expr(e: *Expr, tys: *HashMap<string>) -> bool {
 // file. Wildcard / re-export forms aren't checked (impossible without
 // dragging in module metadata). False-positive risk: a name might be
 // referenced via macro expansion that we don't track here.
-pub fn analysis_unused_import(t: *Typer, program: *Vector<Stmt>) {
+// The text of 0-indexed source line `ln0` (without the trailing newline).
+fn _src_line(source: string, ln0: i32) -> string {
+    if source == null {
+        return "";
+    }
+    let n: i32 = source.len();
+    let mut ln: i32 = 0;
+    let mut start: i32 = 0;
+    let mut i: i32 = 0;
+    while i < n {
+        if source.at(i).to_int() == 10 {
+            if ln == ln0 {
+                return source.substring(start, i);
+            }
+            ln = ln + 1;
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    if ln == ln0 {
+        return source.substring(start, n);
+    }
+    return "";
+}
+
+// Byte index of `needle` as a word in `hay` (bounded by non-identifier chars),
+// or -1. Skips `import ` prefix noise by taking the first standalone match.
+fn _word_index(hay: string, needle: string) -> i32 {
+    if needle.eq("") {
+        return -1;
+    }
+    let hn: i32 = hay.len();
+    let nn: i32 = needle.len();
+    for let i: i32 = 0; i + nn <= hn; i++ {
+        if hay.substring(i, i + nn).eq(needle) {
+            let mut ok_before: bool = i == 0;
+            if !ok_before {
+                let cb: i32 = hay.at(i - 1).to_int();
+                ok_before = !(cb >= 65 && cb <= 90 || cb >= 97 && cb <= 122 || cb >= 48 && cb <= 57 || cb == 95);
+            }
+            let mut ok_after: bool = i + nn == hn;
+            if !ok_after {
+                let ca: i32 = hay.at(i + nn).to_int();
+                ok_after = !(ca >= 65 && ca <= 90 || ca >= 97 && ca <= 122 || ca >= 48 && ca <= 57 || ca == 95);
+            }
+            if ok_before && ok_after {
+                return i;
+            }
+        }
+    }
+    return -1;
+}
+
+// Fade the whole import statement on its line (the loader keeps `s.line`
+// 1-indexed). Range runs from the statement column to the last non-space char.
+fn _warn_import_whole(t: *Typer, s: *Stmt, source: string, code: string, msg: string) {
+    let line_txt: string = _src_line(source, s.line - 1);
+    let start0: i32 = s.column - 1;
+    let mut end0: i32 = line_txt.len();
+    while end0 > start0 && (line_txt.at(end0 - 1).to_int() == 32 || line_txt.at(end0 - 1).to_int() == 9 || line_txt.at(end0 - 1).to_int() == 13) {
+        end0 = end0 - 1;
+    }
+    let mut span: i32 = end0 - start0;
+    if span < 1 {
+        span = 6;
+    }
+    t.warn_unused_range(s.line, s.column, span, code, msg);
+}
+
+pub fn analysis_unused_import(t: *Typer, program: *Vector<Stmt>, source: string) {
     // Collect all identifiers referenced anywhere in the file. One
     // pass; we don't separate scopes because imports are top-level.
     let used: *HashMap<bool> = HashMap::new();
@@ -2726,7 +2795,7 @@ pub fn analysis_unused_import(t: *Typer, program: *Vector<Stmt>) {
                 }
             }
             if !mod_used {
-                t.warn_range(s.line, s.column, 6, "unused-import", "import of `".concat(short).concat("` is never used in this file — remove it"));
+                _warn_import_whole(t, &s, source, "unused-import", "import of `".concat(short).concat("` is never used in this file — remove it"));
             }
             continue;
         }
@@ -2754,30 +2823,47 @@ pub fn analysis_unused_import(t: *Typer, program: *Vector<Stmt>) {
         if unused.len() == 0 {
             continue;
         }
-        // Human-readable list of the unused names.
-        let mut names: string = "";
-        for let j: i32 = 0; j < unused.len(); j++ {
-            if j > 0 {
-                names = names.concat(", ");
-            }
-            names = names.concat("`").concat(unused.get(j)).concat("`");
-        }
         let all: bool = unused.len() == s.imported_items.len();
-        let mut msg: string = "";
         if all {
+            // Nothing imported here is used — fade the whole statement.
+            let mut names: string = "";
+            for let j: i32 = 0; j < unused.len(); j++ {
+                if j > 0 {
+                    names = names.concat(", ");
+                }
+                names = names.concat("`").concat(unused.get(j)).concat("`");
+            }
+            let mut msg: string = "";
             if s.imported_items.len() == 1 {
                 msg = "import of ".concat(names).concat(" is never used in this file — remove it");
             } else {
                 msg = "none of the names imported here (".concat(names).concat(") are used in this file — remove this import");
             }
+            _warn_import_whole(t, &s, source, "unused-import", msg);
         } else {
-            if unused.len() == 1 {
-                msg = names.concat(" is imported but never used — drop it from the group");
-            } else {
-                msg = names.concat(" are imported but never used — drop them from the group");
+            // Partial: fade only the unused member(s) at their own position.
+            let line_txt: string = _src_line(source, s.line - 1);
+            for let j: i32 = 0; j < unused.len(); j++ {
+                let item: string = unused.get(j);
+                let mut leaf: string = item;
+                let mut cc: i32 = -1;
+                for let k: i32 = 0; k + 1 < item.len(); k++ {
+                    if item.at(k).to_int() == 58 && item.at(k + 1).to_int() == 58 {
+                        cc = k;
+                    }
+                }
+                if cc >= 0 {
+                    leaf = item.substring(cc + 2, item.len());
+                }
+                let at: i32 = _word_index(line_txt, leaf);
+                let msg: string = "`".concat(leaf).concat("` is imported but never used — remove it from the group");
+                if at >= 0 {
+                    t.warn_unused_range(s.line, at + 1, leaf.len(), "unused-import", msg);
+                } else {
+                    t.warn_unused_range(s.line, s.column, 6, "unused-import", msg);
+                }
             }
         }
-        t.warn_range(s.line, s.column, 6, "unused-import", msg);
     }
     used.free();
 }

@@ -1841,7 +1841,7 @@ fn _lint_one_file(src_path: string, want_all: bool, json: bool) -> LintCounts {
     build_visibility(t, stmts);
     t.enforce_visibility = true;
     check_program(t, stmts);
-    run_extra_analyses(t, stmts);
+    run_extra_analyses(t, stmts, "");
     let src_text: string = read_file(src_path);
     let mut last_path: string = "";
     let mut last_snip: string = src_text;
@@ -1927,7 +1927,7 @@ fn _fix_one_file(src_path: string) -> i32 {
     build_visibility(t, stmts);
     t.enforce_visibility = true;
     check_program(t, stmts);
-    run_extra_analyses(t, stmts);
+    run_extra_analyses(t, stmts, "");
     // Two channels of fixes:
     //   1. Diagnostics that carry an explicit fix_replacement (set by
     //      `warn_with_fix`) — apply the replacement over its range.
@@ -2849,7 +2849,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     build_visibility(t, stmts);
     t.enforce_visibility = true;
     check_program(t, stmts);
-    run_extra_analyses(t, stmts);
+    run_extra_analyses(t, stmts, "");
     let src_text: string = read_file(src_path);
     let mut errors: i32 = 0;
     for let i: i32 = 0; i < t.diagnostics.len(); i++ {
@@ -4913,7 +4913,7 @@ fn main() -> i32 {
             // while imported impls stay demoted to warnings.
             t.user_origin = src_path;
             check_program(t, stmts);
-            run_extra_analyses(t, stmts);
+            run_extra_analyses(t, stmts, "");
         }
         let src_text: string = read_file(src_path);
         let mut user_errors: i32 = 0;
