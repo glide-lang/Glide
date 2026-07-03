@@ -1923,10 +1923,11 @@ fn parse_match(p: *Parser) -> *Stmt {
 }
 
 // Expression-position `match`. Each arm body is either:
-//   - a single expression (e.g. `A => 1`), which becomes the arm's value;
-//   - a block (e.g. `B => { let t = ...; return t * 2; }`) where the
-//     trailing `return val;` is the arm's value.
-// The codegen lowers the whole match to a GCC stmt-expression.
+//   - a single expression (e.g. `A => 1`), which is the arm's VALUE;
+//   - a block, whose trailing expression statement (if any) is the value.
+// A user-written `return` inside an arm exits the ENCLOSING FUNCTION (like
+// Rust); it never yields the arm. The codegen lowers the whole match to a
+// GCC stmt-expression.
 fn parse_match_expr(p: *Parser) -> *Expr {
     let line: i32 = p.current.line;
     let col: i32 = p.current.column;
@@ -2007,8 +2008,13 @@ fn parse_match_expr(p: *Parser) -> *Expr {
                 body.push(blk.get(i));
             }
         } else {
+            // Bare `=> expr` arm: the expression is the arm's VALUE. It rides
+            // in a synthesized return marked `is_arm_yield` so a user-written
+            // `return` (which exits the enclosing fn, like Rust) stays distinct.
             let e: *Expr = parse_expr(p, 0);
-            body.push(*stmt_return(e, line, col));
+            let yr: *Stmt = stmt_return(e, line, col);
+            yr.is_arm_yield = true;
+            body.push(*yr);
         }
         let arm: MatchArm = MatchArm { variant: variant, bindings: bindings, body: body, lead: arm_lead, trail: "", lit: lit };
         p.eat_op(",");

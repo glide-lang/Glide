@@ -202,6 +202,31 @@ case_diagnostics("binding a value match is fine",
     '}',
     expect_codes_absent=["void-binding"])
 
+# Rust match semantics: `ok(v) => v` yields; a user `return` exits the fn.
+case_diagnostics("rust-style match: yield + fn return",
+    'fn f() -> !i32 { return ok(1); }\n'
+    'fn g() -> !i32 {\n'
+    '    let x = match f() {\n'
+    '        ok(v) => v,\n'
+    '        err(e) => { return err(e); }\n'
+    '    };\n'
+    '    return ok(x + 1);\n'
+    '}\n'
+    'fn main() -> i32 { let r = g(); return 0; }',
+    expect_codes_absent=["void-binding","match-arm-mismatch"])
+
+# A value arm next to a PLAIN void arm (no return) is an error.
+case_diagnostics("value arm + plain void arm is an error",
+    'fn f() -> !i32 { return ok(1); }\n'
+    'fn main() -> i32 {\n'
+    '    let x = match f() {\n'
+    '        ok(v) => v,\n'
+    '        err(e) => {}\n'
+    '    };\n'
+    '    return 0;\n'
+    '}',
+    expect_codes_present=["match-arm-mismatch"])
+
 case_diagnostics("for-in over a scalar (bare int var)",
     'fn main() -> i32 {\n    let n: i32 = 5;\n    for i in n { println!(i); }\n    return 0;\n}',
     expect_codes_present=["for-in-not-iterable"])

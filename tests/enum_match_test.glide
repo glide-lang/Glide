@@ -123,9 +123,9 @@ fn test_payload_string_binding() -> i32 {
 fn test_match_as_expression() -> i32 {
     let s: Shape = Shape::Rect(5, 6);
     let n: i32 = match s {
-        Circle(r) => { return r; }
-        Rect(w, h) => { return w + h; }
-        Dot => { return 0; }
+        Circle(r) => r,
+        Rect(w, h) => w + h,
+        Dot => 0,
     };
     assert_eq!(n, 11);
     return 0;
@@ -134,8 +134,8 @@ fn test_match_as_expression() -> i32 {
 fn test_match_expr_wildcard() -> i32 {
     let d: Dir = Dir::West;
     let label: string = match d {
-        North => { return "n"; }
-        _ => { return "other"; }
+        North => "n",
+        _ => "other",
     };
     assert_str_eq!(label, "other");
     return 0;

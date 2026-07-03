@@ -2487,7 +2487,9 @@ pub fn arm_value_expr(a: *MatchArm) -> *Expr {
         return null;
     }
     let last: Stmt = a.body.get(a.body.len() - 1);
-    if last.kind == ST_RETURN {
+    // A synthesized yield (`=> expr`) or a trailing expression statement is the
+    // arm's value. A USER-written `return` is not — it exits the enclosing fn.
+    if last.kind == ST_RETURN && last.is_arm_yield {
         return last.expr_value;
     }
     if last.kind == ST_EXPR {
@@ -2497,8 +2499,18 @@ pub fn arm_value_expr(a: *MatchArm) -> *Expr {
 }
 
 fn emit_match_arm_value(g: *CG, a: *MatchArm) {
-    if a.body == null {
-        print!("__r = 0;");
+    if a.body == null || a.body.len() == 0 {
+        return;
+    }
+    let v: *Expr = arm_value_expr(a);
+    if v == null {
+        // No value: the arm only runs statements. A user-written `return`
+        // in here is a REAL return — it exits the enclosing function, so
+        // `__r` is never read on this path.
+        for let k: i32 = 0; k < a.body.len(); k++ {
+            let b: Stmt = a.body.get(k);
+            emit_stmt(g, &b, 0);
+        }
         return;
     }
     let last_idx: i32 = a.body.len() - 1;
@@ -2506,13 +2518,8 @@ fn emit_match_arm_value(g: *CG, a: *MatchArm) {
         let b: Stmt = a.body.get(k);
         emit_stmt(g, &b, 0);
     }
-    let v: *Expr = arm_value_expr(a);
     print!("__r = (");
-    if v != null {
-        emit_expr(g, v);
-    } else {
-        print!("0");
-    }
+    emit_expr(g, v);
     print!(");");
 }
 
@@ -2526,7 +2533,17 @@ fn emit_arm_typeof_probe(g: *CG, arms: *Vector<MatchArm>) {
         print!("(int)0");
         return;
     }
-    let a: MatchArm = arms.get(0);
+    // Probe the first arm that actually yields a value; an arm that only runs
+    // statements (or returns from the fn) says nothing about the match type.
+    let mut pidx: i32 = 0;
+    for let pi: i32 = 0; pi < arms.len(); pi++ {
+        let pa: MatchArm = arms.get(pi);
+        if arm_value_expr(&pa) != null {
+            pidx = pi;
+            break;
+        }
+    }
+    let a: MatchArm = arms.get(pidx);
     print!("({ ");
     if a.bindings != null && a.bindings.len() > 0 {
         if a.bindings.len() == 1 {
@@ -2871,9 +2888,22 @@ fn _emit_match_opt_res_expr(g: *CG, e: *Expr, scrut_ty: *Type) -> bool {
     print!("({ ", cty, " __m = ");
     emit_expr(g, e.lhs);
     print!("; ");
-    // Result type probe: prefer the truthy arm (it carries the .val payload).
+    // Result type probe: prefer the truthy arm (it carries the .val payload),
+    // but skip an arm with no value (it only runs stmts / returns from the fn).
     let mut pi: i32 = ti;
     let mut probe_truthy: bool = true;
+    let mut _ti_has_v: bool = false;
+    if ti >= 0 {
+        let _ta: MatchArm = e.match_arms.get(ti);
+        _ti_has_v = arm_value_expr(&_ta) != null;
+    }
+    if !_ti_has_v && fi >= 0 {
+        let _fa: MatchArm = e.match_arms.get(fi);
+        if arm_value_expr(&_fa) != null {
+            pi = fi;
+            probe_truthy = false;
+        }
+    }
     if pi < 0 {
         pi = fi;
         probe_truthy = false;

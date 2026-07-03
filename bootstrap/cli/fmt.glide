@@ -423,14 +423,23 @@ fn fmt_match_expr_ml(e: *Expr, depth: i32) -> string {
                 }
                 out = out.concat(")");
             }
-            out = out.concat(" => {\n");
-            if a.body != null {
-                for let j: i32 = 0; j < a.body.len(); j++ {
-                    let b: Stmt = a.body.get(j);
-                    out = out.concat(fmt_stmt(&b, depth + 2));
+            // Bare value arm (`=> v`): render the expression, no braces. An
+            // empty body collapses to `{}`. Anything else gets the block form.
+            if _arm_is_bare_yield(&a) {
+                let yv: Stmt = a.body.get(0);
+                out = out.concat(" => ").concat(fmt_expr(yv.expr_value)).concat(",");
+            } else {
+                if a.body == null || a.body.len() == 0 {
+                    out = out.concat(" => {}");
+                } else {
+                    out = out.concat(" => {\n");
+                    for let j: i32 = 0; j < a.body.len(); j++ {
+                        let b: Stmt = a.body.get(j);
+                        out = out.concat(fmt_stmt(&b, depth + 2));
+                    }
+                    out = out.concat(inner).concat("}");
                 }
             }
-            out = out.concat(inner).concat("}");
             if a.trail != null && !a.trail.eq("") {
                 out = out.concat(" // ").concat(a.trail);
             }
@@ -438,6 +447,15 @@ fn fmt_match_expr_ml(e: *Expr, depth: i32) -> string {
         }
     }
     return out.concat(pad).concat("}");
+}
+
+// True for a bare `=> expr` arm: exactly one synthesized yield-return.
+fn _arm_is_bare_yield(a: *MatchArm) -> bool {
+    if a.body == null || a.body.len() != 1 {
+        return false;
+    }
+    let only: Stmt = a.body.get(0);
+    return only.kind == ST_RETURN && only.is_arm_yield && only.expr_value != null;
 }
 
 // Render a statement's value/condition. Falls back to the inline `fmt_expr` for
@@ -657,14 +675,21 @@ fn fmt_expr_prec(e: *Expr, min_bp: i32) -> string {
                     }
                     out = out.concat(")");
                 }
-                out = out.concat(" => { ");
-                if a.body != null {
-                    for let j: i32 = 0; j < a.body.len(); j++ {
-                        let b: Stmt = a.body.get(j);
-                        out = out.concat(fmt_stmt_inline(&b)).concat(" ");
+                if _arm_is_bare_yield(&a) {
+                    let yv: Stmt = a.body.get(0);
+                    out = out.concat(" => ").concat(fmt_expr(yv.expr_value)).concat(", ");
+                } else {
+                    if a.body == null || a.body.len() == 0 {
+                        out = out.concat(" => {} ");
+                    } else {
+                        out = out.concat(" => { ");
+                        for let j: i32 = 0; j < a.body.len(); j++ {
+                            let b: Stmt = a.body.get(j);
+                            out = out.concat(fmt_stmt_inline(&b)).concat(" ");
+                        }
+                        out = out.concat("} ");
                     }
                 }
-                out = out.concat("} ");
             }
         }
         return out.concat("}");
@@ -1410,14 +1435,16 @@ fn fmt_match(s: *Stmt, depth: i32) -> string {
                 }
                 out = out.concat(")");
             }
-            out = out.concat(" => {\n");
-            if a.body != null {
+            if a.body == null || a.body.len() == 0 {
+                out = out.concat(" => {}");
+            } else {
+                out = out.concat(" => {\n");
                 for let j: i32 = 0; j < a.body.len(); j++ {
                     let b: Stmt = a.body.get(j);
                     out = out.concat(fmt_stmt(&b, depth + 2));
                 }
+                out = out.concat(inner).concat("}");
             }
-            out = out.concat(inner).concat("}");
             if a.trail != null && !a.trail.eq("") {
                 out = out.concat(" // ").concat(a.trail);
             }

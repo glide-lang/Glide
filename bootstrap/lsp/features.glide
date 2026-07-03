@@ -1214,7 +1214,7 @@ fn find_local_let_in_body(body: *Vector<Stmt>, name: string) -> *Stmt {
 // Render a hover string for a local `let`. Prefers the explicit annotation;
 // otherwise infers from the initializer (literals, or `Generic::new()` plus
 // a constraint from later usage like `var.push(x)` to resolve T).
-fn render_hover_for_let(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt) -> string {
+fn render_hover_for_let(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt, hpath: string) -> string {
     let mut header: string = "let ";
     if s.is_mut {
         header = header.concat("mut ");
@@ -1290,6 +1290,16 @@ fn render_hover_for_let(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt) -> string {
             let it: *Type = lsp_infer_expr(stmts, host, s.let_value);
             if it != null {
                 header = header.concat(": ").concat(type_to_string_pretty(it));
+                inferred = true;
+            }
+        }
+        // Match-expression initializer (`let res = match r { ok(v) => v, … }`):
+        // the AST-walking resolver unifies the yield arms (and resolves payload
+        // bindings through the scrutinee), which lsp_infer_expr doesn't.
+        if !inferred && s.let_value != null && s.let_value.kind == EX_MATCH {
+            let mt: *Type = _expr_type_node(s.let_value, stmts, s.line - 1, hpath, 0);
+            if mt != null {
+                header = header.concat(": ").concat(type_to_string_pretty(mt));
                 inferred = true;
             }
         }
@@ -3076,7 +3086,7 @@ pub fn handle_hover(req: *JsonValue, state: *LspState) {
             if content.eq("") {
                 let lst: *Stmt = find_local_let_in_body(host.fn_body, word);
                 if lst != null {
-                    content = render_hover_for_let(doc.stmts, host, lst);
+                    content = render_hover_for_let(doc.stmts, host, lst, uri_to_path(uri));
                 }
             }
             // Not a `let` or a param — a match-arm binding (`f` in `ok(f) =>`)

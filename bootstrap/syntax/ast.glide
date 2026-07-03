@@ -79,7 +79,7 @@ pub const EX_FNEXPR: i32 = 21; // anonymous fn expression (no capture)
 pub const EX_MACRO_VAR: i32 = 22; // `$x` placeholder inside a macro body (str_val = "x")
 pub const EX_IF: i32 = 23; // `if cond { then } else { else }` — single-expr branches; lhs=cond, rhs=then, operand=else
 pub const EX_BLOCK: i32 = 24; // `{ stmts; return val; }` as expression. block_stmts holds stmts (without the trailing return), operand holds the yielded value.
-pub const EX_MATCH: i32 = 25; // `match e { ... }` as expression. lhs=scrutinee, match_arms=arms (arm body terminates in `return val;`).
+pub const EX_MATCH: i32 = 25; // `match e { ... }` as expression. lhs=scrutinee, match_arms=arms. A bare `=> expr` arm yields its value (synthesized return marked is_arm_yield); a user-written `return` exits the enclosing fn.
 pub const EX_TUPLE: i32 = 26; // `(a, b, ...)` tuple literal. element exprs in `args`. zero args = unit `()`.
 // Binary op codes (subset; extend as needed)
 pub const OP_ADD: i32 = 1;
@@ -281,6 +281,7 @@ pub struct Stmt {
     pub name_len: i32,
     pub is_pub: bool,
     pub is_extern: bool, // `extern fn ...;` — kept so fmt round-trips the keyword
+    pub is_arm_yield: bool, // synthesized `return` carrying a bare match-arm value (`=> expr`); a user-written `return` (false) exits the enclosing fn
     pub origin: string, // file path; set by load_into_str on top-level stmts
     pub doc_comment: string, // contiguous `//` block above the decl (LSP hover)
     pub leading_comments: string, // all comments above the decl, blanks kept (fmt)

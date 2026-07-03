@@ -1779,6 +1779,29 @@ pub fn _expr_type_node(e: *Expr, root: *Vector<Stmt>, line0: i32, path: string, 
             return _method_ret_subst(root, recv, e.lhs.field);
         }
     }
+    if e.kind == EX_MATCH && e.match_arms != null {
+        // The match-expression's type: the first arm that yields a value (a
+        // bare `=> v`, or a trailing expression statement). Payload bindings
+        // resolve through _match_var_node, so `ok(v) => v` types as the
+        // scrutinee's inner.
+        for let mi: i32 = 0; mi < e.match_arms.len(); mi++ {
+            let ma: MatchArm = e.match_arms.get(mi);
+            if ma.body == null || ma.body.len() == 0 {
+                continue;
+            }
+            let mlast: Stmt = ma.body.get(ma.body.len() - 1);
+            if mlast.kind == ST_RETURN && !mlast.is_arm_yield {
+                continue; // exits the fn; says nothing about the match type
+            }
+            if mlast.expr_value != null {
+                let mt: *Type = _expr_type_node(mlast.expr_value, root, line0, path, depth + 1);
+                if mt != null {
+                    return mt;
+                }
+            }
+        }
+        return null;
+    }
     if e.kind == EX_PATH && e.str_val != null {
         // `Enum::Variant` nullary constructor (no call) → the enum type, so an
         // unannotated `let c = Color::Red` resolves to Color.

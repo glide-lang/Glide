@@ -2269,8 +2269,33 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
     }
     if e.kind == EX_MATCH {
         if e.match_arms != null && e.match_arms.len() > 0 {
-            let first: MatchArm = e.match_arms.get(0);
-            return arm_value_type(g, &first);
+            // Use the first VALUE-yielding arm (an arm that only returns from
+            // the fn says nothing about the match type). When its value is
+            // exactly the payload binding (`ok(v) => v`), derive the type from
+            // the scrutinee instead — the binding is not in the CG scope.
+            let mscrut: *Type = infer_for_codegen(g, e.lhs);
+            for let mi: i32 = 0; mi < e.match_arms.len(); mi++ {
+                let ma: MatchArm = e.match_arms.get(mi);
+                let mv: *Expr = arm_value_expr(&ma);
+                if mv == null {
+                    continue;
+                }
+                if mv.kind == EX_IDENT && ma.bindings != null && ma.bindings.len() == 1 && ma.bindings.get(0).eq(mv.str_val) && mscrut != null {
+                    if (mscrut.kind == TY_RESULT || mscrut.kind == TY_OPT_RESULT) && ma.variant.eq("ok") {
+                        return mscrut.inner;
+                    }
+                    if (mscrut.kind == TY_RESULT || mscrut.kind == TY_OPT_RESULT) && ma.variant.eq("err") {
+                        return ty_named("string");
+                    }
+                    if mscrut.kind == TY_OPTION && ma.variant.eq("some") {
+                        return mscrut.inner;
+                    }
+                }
+                let mt: *Type = arm_value_type(g, &ma);
+                if mt != null {
+                    return mt;
+                }
+            }
         }
         return null;
     }

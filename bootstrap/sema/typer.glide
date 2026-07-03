@@ -3797,6 +3797,8 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
     if e.kind == EX_MATCH {
         let scrut_ty: *Type = infer_expr(t, e.lhs);
         let mut result_ty: *Type = null;
+        let mut saw_value_arm: bool = false;
+        let mut saw_void_arm: bool = false;
         if e.match_arms != null {
             for let i: i32 = 0; i < e.match_arms.len(); i++ {
                 let a: MatchArm = e.match_arms.get(i);
@@ -3812,6 +3814,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                     }
                 }
                 let mut arm_ty: *Type = ty_named("void");
+                let mut arm_diverges: bool = false;
                 if a.body != null && a.body.len() > 0 {
                     let last_idx: i32 = a.body.len() - 1;
                     for let k: i32 = 0; k < last_idx; k++ {
@@ -3819,26 +3822,43 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                         check_stmt(t, &b);
                     }
                     let last: Stmt = a.body.get(last_idx);
-                    if last.expr_value != null {
-                        // The arm's value expression (a bare `=> v` lowers to a
-                        // value-carrying terminator). Infer it as the arm type.
-                        arm_ty = infer_expr(t, last.expr_value);
-                    } else {
-                        // A non-value trailing statement (a `{}` block, an `if`,
-                        // a bare `return;`): the arm produces nothing.
+                    if last.kind == ST_RETURN && !last.is_arm_yield {
+                        // A USER-written `return` exits the enclosing function
+                        // (Rust semantics). It type-checks against the fn's
+                        // return type and the arm constrains nothing.
                         check_stmt(t, &last);
-                        arm_ty = ty_named("void");
+                        arm_diverges = true;
+                    } else {
+                        if last.expr_value != null {
+                            // A bare `=> v` yield, or a trailing expression
+                            // statement in a block: the arm's value.
+                            arm_ty = infer_expr(t, last.expr_value);
+                        } else {
+                            // A non-value trailing statement (`{}`, an `if`, …):
+                            // the arm produces nothing.
+                            check_stmt(t, &last);
+                        }
                     }
                 }
                 // Unify: every value-producing arm must agree on a type, so a
                 // `match` used as a value can't mix `i32` and `string` (which
-                // ICE'd in cc). Void arms don't constrain the result.
-                if !_ty_is_void(arm_ty) {
-                    if result_ty == null || _ty_is_void(result_ty) {
-                        result_ty = arm_ty;
+                // ICE'd in cc). A diverging arm (user `return`) constrains
+                // nothing — like Rust's `!`. A PLAIN void arm alongside a
+                // value arm is an error: that arm would leave the match's
+                // value undefined at runtime.
+                if arm_diverges {
+                    // nothing to unify
+                } else {
+                    if _ty_is_void(arm_ty) {
+                        saw_void_arm = true;
                     } else {
-                        if !types_compat(result_ty, arm_ty) {
-                            t.err_code_range(e.line, e.column, 5, "match-arm-mismatch", "match arms have incompatible types: `".concat(type_to_string(result_ty)).concat("` vs `").concat(type_to_string(arm_ty)).concat("`"));
+                        saw_value_arm = true;
+                        if result_ty == null || _ty_is_void(result_ty) {
+                            result_ty = arm_ty;
+                        } else {
+                            if !types_compat(result_ty, arm_ty) {
+                                t.err_code_range(e.line, e.column, 5, "match-arm-mismatch", "match arms have incompatible types: `".concat(type_to_string(result_ty)).concat("` vs `").concat(type_to_string(arm_ty)).concat("`"));
+                            }
                         }
                     }
                 }
@@ -3850,6 +3870,12 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         // silently produced an uninitialized C switch result. e.line/e.column
         // anchor the diagnostic at the `match`.
         _check_match_coverage(t, scrut_ty, e.match_arms, e.line, e.column);
+        // Mixed arms: one yields a value, another is a plain `{}` (and doesn't
+        // return from the fn) — taking the void arm would leave the match's
+        // value undefined.
+        if saw_value_arm && saw_void_arm {
+            t.err_code_range(e.line, e.column, 5, "match-arm-mismatch", "match arms have incompatible types: `".concat(type_to_string(result_ty)).concat("` vs nothing — every arm must yield a value or return"));
+        }
         // A match whose arms all yield nothing IS a void value — return that (not
         // null), so binding it (`let x = match …{ …=>{} }`) or passing it to a
         // typed slot trips the void-in-value checks instead of miscompiling.
