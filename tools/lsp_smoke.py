@@ -1683,6 +1683,27 @@ case_diagnostics("real duplicate import still flagged",
     'fn main() -> i32 { let _e = fs::exists("/"); return 0; }',
     expect_codes_present=["redundant-import"])
 
+# An IMPORTED qualifier pins to its module: `client::` with
+# `import stdlib::http::client;` must not leak same-leaf modules
+# (stdlib::net::tls12::client used to dump its TLS symbols here).
+case_completion_absent("imported qualifier does not leak same-leaf modules",
+    'import stdlib::http::client;\n'
+    'fn main() -> i32 {\n'
+    '    client::\n'
+    '    return 0;\n'
+    '}',
+    {"line":2,"character":12},
+    ["Tls12Conn","tls12_connect","TlsConn"])
+
+case_completion_has("imported qualifier lists its own module",
+    'import stdlib::http::client;\n'
+    'fn main() -> i32 {\n'
+    '    client::\n'
+    '    return 0;\n'
+    '}',
+    {"line":2,"character":12},
+    ["HttpClient","http_get"])
+
 # fmt merges sibling imports into one brace group.
 case_feature("formatting merges sibling imports",
     'import stdlib::http::client;\n'

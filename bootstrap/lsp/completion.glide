@@ -4442,9 +4442,18 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
     // Single-segment `stdlib::` lists the submodules instead.
     let mod_path: string = module_path_before(doc.text, line0, col0);
     if !mod_path.eq("") && state.stdlib_index != null {
+        // Pin the qualifier to the module THIS FILE imported before any leaf
+        // matching: `client::` with `import stdlib::http::client;` must list
+        // that module only — every module whose LAST segment happens to be
+        // `client` (stdlib::net::tls12::client…) leaked its symbols here.
+        let mp_res: string = _resolve_qualifier_module(doc.stmts, uri_to_path(uri), mod_path);
+        let mut mp_eff: string = mod_path;
+        if !mp_res.eq("") {
+            mp_eff = mp_res;
+        }
         let mp_imps: *HashMap<ImportInfo> = current_imports(doc.text);
         let mp_ins: i32 = find_import_insertion_pos(doc.text);
-        list_module_members(state, mod_path, items, seen, mp_imps, mp_ins);
+        list_module_members(state, mp_eff, items, seen, mp_imps, mp_ins);
         seen.free();
         lsp_send_response(id, items);
         return;
@@ -6539,4 +6548,33 @@ fn _trait_method_sig(m: *Stmt) -> string {
         sig = sig.concat(" -> ").concat(type_to_string_pretty(r));
     }
     return sig;
+}
+
+// The FULL module path of an imported module whose short name (or `::`-anchored
+// suffix) is `qual` in `path`'s imports — "" when no import pins it (then the
+// caller falls back to index-wide matching, which attaches auto-import edits).
+fn _resolve_qualifier_module(stmts: *Vector<Stmt>, path: string, qual: string) -> string {
+    if stmts == null || qual == null || qual.eq("") {
+        return "";
+    }
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind != ST_IMPORT || !s.import_is_module || s.import_short == null || s.import_path == null {
+            continue;
+        }
+        if s.origin == null || !s.origin.eq(path) {
+            continue;
+        }
+        let full: string = module_path_from_path(s.import_path);
+        if full.eq("") {
+            continue;
+        }
+        if s.import_short.eq(qual) {
+            return full;
+        }
+        if qual.contains("::") && (full.eq(qual) || full.ends_with("::".concat(qual))) {
+            return full;
+        }
+    }
+    return "";
 }
