@@ -2688,12 +2688,46 @@ pub fn analysis_unused_import(t: *Typer, program: *Vector<Stmt>) {
         if s.import_wildcard {
             continue;
         }
-        if s.imported_items == null || s.imported_items.len() == 0 {
-            continue;
-        }
         // Skip synthesized imports (the loader splits `a::{b::{C}}` into
         // line-0 helper imports); the user-written line carries the diagnostic.
         if s.line < 1 {
+            continue;
+        }
+        // Plain module import (`import a::b::mod;`, no selective items). It's
+        // used when the `mod::` qualifier appears OR any name the module
+        // exports is referenced bare (module imports bring every pub name).
+        if s.imported_items == null || s.imported_items.len() == 0 {
+            // A plain module import (`import alelo;` / `import a::b::mod;`) — no
+            // selective items, no wildcard. Used when the `mod::` qualifier
+            // appears OR any name the module exports is referenced bare (module
+            // imports bring every pub name into scope). The short name comes
+            // from the resolved path, since single-segment imports don't set
+            // import_short/import_is_module.
+            if s.import_wildcard || s.import_path == null || s.import_path.eq("") {
+                continue;
+            }
+            let short: string = drop_glide_ext(last_path_segment(s.import_path));
+            if short.eq("") {
+                continue;
+            }
+            t.current_origin = s.origin;
+            if used.contains(short) {
+                continue;
+            }
+            let mut mod_used: bool = false;
+            for let k: i32 = 0; k < program.len(); k++ {
+                let d: Stmt = program.get(k);
+                if d.origin == null || !d.origin.eq(s.import_path) {
+                    continue;
+                }
+                if d.name != null && !d.name.eq("") && used.contains(d.name) {
+                    mod_used = true;
+                    break;
+                }
+            }
+            if !mod_used {
+                t.warn_range(s.line, s.column, 6, "unused-import", "import of `".concat(short).concat("` is never used in this file — remove it"));
+            }
             continue;
         }
         t.current_origin = s.origin;

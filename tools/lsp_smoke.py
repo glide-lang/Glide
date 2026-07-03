@@ -1910,6 +1910,21 @@ case_diagnostics_project("duplicate struct shows only the error",
     "main.glide",
     present=["duplicate-definition"], absent=["unused-struct"])
 
+# A plain module import that is never used (neither `mod::` nor a bare name it
+# exports) is flagged.
+case_diagnostics_project("unused module import is flagged",
+    {"alelo.glide": "pub struct Penis {}\npub fn helper() -> i32 { return 1; }\n",
+     "main.glide": "import alelo;\nfn main() -> i32 { return 0; }\n"},
+    "main.glide",
+    present=["unused-import"])
+
+# A module import used via a bare exported name (bring-all) is NOT flagged.
+case_diagnostics_project("module import used bare is not flagged",
+    {"alelo.glide": "pub struct Penis {}\n",
+     "main.glide": "import alelo;\nfn main() -> i32 { let p = Penis {}; return 0; }\n"},
+    "main.glide",
+    absent=["unused-import"])
+
 # unused-import names the specific unused member, not just the first.
 case_diagnostics_project("unused import names the unused member",
     {"m.glide": "pub struct Foo {}\npub struct Bar {}\n",
