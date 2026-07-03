@@ -169,6 +169,16 @@ case_diagnostics("duplicate definitions are flagged",
     'fn main() -> i32 { return handle(); }',
     expect_codes_present=["duplicate-definition"])
 
+# fn / struct / enum / trait share one namespace per file: a `fn Alelo` next
+# to a `struct Alelo` (whose C typedef its symbol collides with — was an ICE)
+# and a `trait Alelo` are all duplicate-definition errors.
+case_diagnostics("cross-kind name collision is flagged",
+    'struct Alelo { x: i32 }\n'
+    'trait Alelo { fn go(&self); }\n'
+    'fn Alelo() -> i32 { return 1; }\n'
+    'fn main() -> i32 { return 0; }',
+    expect_codes_present=["duplicate-definition"])
+
 # Unique definitions stay clean.
 case_diagnostics("unique definitions have no duplicate error",
     'fn handle() -> i32 { return 0; }\n'

@@ -1913,29 +1913,42 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
     t.method_names.insert("Arena::used", true);
     t.method_names.insert("Arena::reset", true);
     t.method_names.insert("Arena::free", true);
-    // Same-file duplicate top-level definitions (two `fn handle`, two `enum
-    // Provider`, a `struct X` next to an `enum X`, …) used to last-wins in the
-    // registries, surfacing only as confusing downstream symptoms (a wrong
-    // arg count at some call site). Track each name's defining file and error
-    // at the SECOND definition. Same names across DIFFERENT files stay legal.
-    let dup_fns: *HashMap<string> = HashMap::new();
-    let dup_types: *HashMap<string> = HashMap::new();
+    // Same-file duplicate top-level definitions. Functions, structs, enums
+    // and traits share ONE namespace here: `struct Alelo` + `enum Alelo` (or
+    // `trait Alelo`, or `fn Alelo` — whose C lowering collides with the
+    // struct's typedef and died as an ICE) silently last-wins'd in the
+    // registries, surfacing only as confusing downstream symptoms. Track each
+    // name's defining file + kind and error at the SECOND definition. Same
+    // names across DIFFERENT files stay legal.
+    let dup_names: *HashMap<string> = HashMap::new();
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         // `extern fn` is a DECLARATION (redeclaring one is harmless, as in C —
         // and the loader injects some runtime externs more than once), so only
         // definitions participate in the duplicate check.
-        if s.name != null && s.origin != null && (s.kind == ST_FN && !s.is_extern || s.kind == ST_STRUCT || s.kind == ST_ENUM) {
-            let mut dupmap: *HashMap<string> = dup_types;
-            let mut what: string = "type";
+        if s.name != null && s.origin != null && (s.kind == ST_FN && !s.is_extern || s.kind == ST_STRUCT || s.kind == ST_ENUM || s.kind == ST_TRAIT) {
+            let mut what: string = "struct";
             if s.kind == ST_FN {
-                dupmap = dup_fns;
                 what = "function";
             }
-            if dupmap.contains(s.name) && dupmap.get(s.name).eq(s.origin) {
-                t.err_code_range(s.name_line, s.name_col, s.name.len(), "duplicate-definition", "the ".concat(what).concat(" `").concat(s.name).concat("` is defined more than once in this file"));
+            if s.kind == ST_ENUM {
+                what = "enum";
+            }
+            if s.kind == ST_TRAIT {
+                what = "trait";
+            }
+            if dup_names.contains(s.name) {
+                let prev: string = dup_names.get(s.name);
+                if prev.starts_with(s.origin.concat("#")) {
+                    let prev_kind: string = prev.substring(s.origin.len() + 1, prev.len());
+                    let mut msg: string = "the ".concat(what).concat(" `").concat(s.name).concat("` is defined more than once in this file");
+                    if !prev_kind.eq(what) {
+                        msg = "`".concat(s.name).concat("` is already defined in this file as a ").concat(prev_kind).concat("; a ").concat(what).concat(" cannot share the name");
+                    }
+                    t.err_code_range(s.name_line, s.name_col, s.name.len(), "duplicate-definition", msg);
+                }
             } else {
-                dupmap.insert(s.name, s.origin);
+                dup_names.insert(s.name, s.origin.concat("#").concat(what));
             }
         }
         if s.kind == ST_CONST {
