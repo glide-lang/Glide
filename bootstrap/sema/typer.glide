@@ -901,6 +901,9 @@ pub struct Typer {
     // access is happening inside the struct's own file (always allowed)
     // or from another file (then `field_pub` enforces).
     pub struct_origin: *HashMap<string>,
+    // Names flagged as duplicate definitions — the unused-* lints skip them so
+    // a conflict shows only the error, not a redundant "never used" warning.
+    pub dup_flagged: *HashMap<bool>,
     // Whether visibility enforcement is active for this run. Off by default
     // so existing files that haven't been migrated keep compiling; the
     // compiler entry point flips it on when the user-facing build runs.
@@ -1429,6 +1432,8 @@ impl Typer {
         t.struct_has_private = shp;
         let so: *HashMap<string> = HashMap::new();
         t.struct_origin = so;
+        let df: *HashMap<bool> = HashMap::new();
+        t.dup_flagged = df;
         t.enforce_visibility = false;
         let is: *HashMap<bool> = HashMap::new();
         t.impl_set = is;
@@ -1703,6 +1708,7 @@ impl Typer {
         self.module_full_paths.free();
         self.field_pub.free();
         self.struct_origin.free();
+        self.dup_flagged.free();
         self.impl_set.free();
         self.enums.free();
         __glide_pfree(self as *void);
@@ -1952,6 +1958,8 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
                         msg = "`".concat(s.name).concat("` is already defined in this file as a ").concat(prev_kind).concat("; a ").concat(what).concat(" cannot share the name");
                     }
                     t.err_code_range(s.name_line, s.name_col, s.name.len(), "duplicate-definition", msg);
+                    // Suppress the unused-* lint for the whole conflicting set.
+                    t.dup_flagged.insert(s.name, true);
                 }
             } else {
                 dup_names.insert(s.name, s.origin.concat("#").concat(what));

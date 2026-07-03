@@ -874,6 +874,9 @@ pub fn analysis_unused_fn(t: *Typer, program: *Vector<Stmt>) {
         if called.contains(s.name) {
             continue;
         }
+        if t.dup_flagged.contains(s.name) {
+            continue;
+        }
         t.current_origin = s.origin;
         t.warn_unused_range(s.name_line, s.name_col, s.name_len, "unused-fn", "function `".concat(s.name).concat("` is never called"));
     }
@@ -2688,19 +2691,59 @@ pub fn analysis_unused_import(t: *Typer, program: *Vector<Stmt>) {
         if s.imported_items == null || s.imported_items.len() == 0 {
             continue;
         }
+        // Skip synthesized imports (the loader splits `a::{b::{C}}` into
+        // line-0 helper imports); the user-written line carries the diagnostic.
+        if s.line < 1 {
+            continue;
+        }
         t.current_origin = s.origin;
-        let mut any_used: bool = false;
+        // Per-item: a name counts as used when its LEAF (`cookies::CookieJar`
+        // -> `CookieJar`) appears anywhere — `_ui_collect_expr` records both the
+        // qualifier and the field of a path, so bare and qualified uses match.
+        let unused: *Vector<string> = Vector::new();
         for let j: i32 = 0; j < s.imported_items.len(); j++ {
-            let n: string = s.imported_items.get(j);
-            if used.contains(n) {
-                any_used = true;
-                break;
+            let item: string = s.imported_items.get(j);
+            let mut leaf: string = item;
+            let mut cc: i32 = -1;
+            for let k: i32 = 0; k + 1 < item.len(); k++ {
+                if item.at(k).to_int() == 58 && item.at(k + 1).to_int() == 58 {
+                    cc = k;
+                }
+            }
+            if cc >= 0 {
+                leaf = item.substring(cc + 2, item.len());
+            }
+            if !used.contains(leaf) {
+                unused.push(item);
             }
         }
-        if !any_used {
-            let first: string = s.imported_items.get(0);
-            t.warn_range(s.line, s.column, 6, "unused-import", "import of `".concat(first).concat("` is never referenced in this file — remove it"));
+        if unused.len() == 0 {
+            continue;
         }
+        // Human-readable list of the unused names.
+        let mut names: string = "";
+        for let j: i32 = 0; j < unused.len(); j++ {
+            if j > 0 {
+                names = names.concat(", ");
+            }
+            names = names.concat("`").concat(unused.get(j)).concat("`");
+        }
+        let all: bool = unused.len() == s.imported_items.len();
+        let mut msg: string = "";
+        if all {
+            if s.imported_items.len() == 1 {
+                msg = "import of ".concat(names).concat(" is never used in this file — remove it");
+            } else {
+                msg = "none of the names imported here (".concat(names).concat(") are used in this file — remove this import");
+            }
+        } else {
+            if unused.len() == 1 {
+                msg = names.concat(" is imported but never used — drop it from the group");
+            } else {
+                msg = names.concat(" are imported but never used — drop them from the group");
+            }
+        }
+        t.warn_range(s.line, s.column, 6, "unused-import", msg);
     }
     used.free();
 }
@@ -2738,6 +2781,9 @@ pub fn analysis_unused_struct_enum(t: *Typer, program: *Vector<Stmt>) {
             continue;
         }
         if s.name == null || s.name.len() == 0 {
+            continue;
+        }
+        if t.dup_flagged.contains(s.name) {
             continue;
         }
         if _has_allow(&s, "unused-struct") {

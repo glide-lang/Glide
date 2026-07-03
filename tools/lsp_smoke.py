@@ -1901,6 +1901,22 @@ case_diagnostics_project("unknown qualified struct underlines the name",
     "main.glide",
     msg_at={"unknown struct `Penis`": 19})
 
+# A duplicate definition shows only the error, not a redundant unused warning.
+case_diagnostics_project("duplicate struct shows only the error",
+    {"main.glide":
+        "struct Dup { a: i32 }\n"
+        "struct Dup { b: i32 }\n"
+        "fn main() -> i32 { return 0; }\n"},
+    "main.glide",
+    present=["duplicate-definition"], absent=["unused-struct"])
+
+# unused-import names the specific unused member, not just the first.
+case_diagnostics_project("unused import names the unused member",
+    {"m.glide": "pub struct Foo {}\npub struct Bar {}\n",
+     "main.glide": "import m::{Foo, Bar};\nfn main() -> i32 { let a = Foo {}; return 0; }\n"},
+    "main.glide",
+    present=["unused-import"], absent=["unused-struct"])
+
 # A trait DEFAULT method with a non-void return and no return statement is a
 # missing-return error, same as a free fn.
 case_diagnostics("trait default method must return on every path",
