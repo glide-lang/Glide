@@ -5425,6 +5425,11 @@ fn collect_uses_in_expr(e: *Expr, name: string, out: *Vector<UseSite>) {
             out.push(u);
         }
     }
+    // `println!(...)` / user macro invocation — the macro name (str_val).
+    if has_pos && e.kind == EX_MACRO && e.str_val != null && e.str_val.eq(name) {
+        let u: UseSite = UseSite { line: e.line, col: e.column };
+        out.push(u);
+    }
     // `recv.field` / `recv.method(...)` — member name itself. Anchor at the
     // FIELD, not the receiver: `e.line/e.column` sit on `recv`, so a range of
     // `name.len()` there would cover `recv.fiel…` shifted left. The parser

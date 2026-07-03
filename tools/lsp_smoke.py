@@ -900,6 +900,20 @@ case_feature("documentHighlight anchors a method use at the method name",
 # module name in `import w3;` lights the import segment AND every `w3::` use.
 # A function-local name (self / param / local) highlights only within its own
 # fn — `n` in `a` must not light up `b`'s `n`.
+# Macro invocations highlight: `println!` at two call sites lights both.
+case_feature("documentHighlight covers macro invocations",
+    'fn main() -> i32 {\n'
+    '    println!("a");\n'
+    '    println!("b");\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/documentHighlight",
+     "params":{"position":{"line":1,"character":6}}},  # on `println`
+    lambda r: check("both `println` calls highlight at col 4",
+        sorted((h["range"]["start"]["line"], h["range"]["start"]["character"])
+               for h in (r.get("result") or [])) == [(1,4),(2,4)],
+        f"got {sorted((h['range']['start']['line'], h['range']['start']['character']) for h in (r.get('result') or []))}"))
+
 case_feature("documentHighlight scopes a param to its own function",
     'fn a(n: i32) -> i32 { return n; }\n'
     'fn b(n: i32) -> i32 { return n; }\n',
