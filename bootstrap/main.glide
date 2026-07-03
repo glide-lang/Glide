@@ -4868,6 +4868,18 @@ fn main() -> i32 {
         let p: *Parser = Parser::new(lex);
         p.fmt_mode = true;
         let parsed: *Vector<Stmt> = parse_program(p);
+        // A file that doesn't parse must NOT be formatted: the formatter would
+        // print the error-recovered AST, materializing invented tokens (e.g. a
+        // bodyless `fn prov(p: P)` becomes `fn prov(p: P) -> __error__ {}`).
+        // Report the errors and leave the source untouched.
+        if p.diags != null && p.diags.len() > 0 {
+            for let di: i32 = 0; di < p.diags.len(); di++ {
+                let pd: ParseDiag = p.diags.get(di);
+                eprintln(src_path.concat(":").concat(format!("{}", pd.line)).concat(":").concat(format!("{}", pd.col)).concat(": ").concat(pd.msg));
+            }
+            eprintln("not formatted: fix the parse errors first");
+            return 1;
+        }
         let formatted: string = fmt_program(parsed);
         if write_in_place {
             if !write_file(src_path, formatted) {

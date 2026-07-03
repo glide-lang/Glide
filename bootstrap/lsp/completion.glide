@@ -5731,6 +5731,13 @@ pub fn handle_formatting(req: *JsonValue, state: *LspState) {
     let p: *Parser = Parser::new(lex);
     p.fmt_mode = true;
     let parsed: *Vector<Stmt> = parse_program(p);
+    // Never format a document that doesn't parse: the error-recovered AST
+    // materializes invented tokens (`-> __error__ {}`), and a format-on-save
+    // would splice them into the user's file. No edits is the correct answer.
+    if p.diags != null && p.diags.len() > 0 {
+        lsp_send_response(id, json_array());
+        return;
+    }
     let formatted: string = fmt_program(parsed);
     // Return a single TextEdit replacing the whole document.
     let lines: i32 = count_lines(doc.text) + 2;

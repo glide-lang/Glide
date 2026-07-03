@@ -1443,6 +1443,18 @@ case_completion_has("match binding gets member completion",
     {"line":5,"character":14},
     ["x","y"])
 
+# Formatting a document with parse errors must be a NO-OP (no edits): the
+# error-recovered AST materializes invented tokens (`-> __error__ {}`), and a
+# format-on-save would splice them into the user's file.
+case_feature("formatting refuses a file with parse errors",
+    'struct Provider { x: i32 }\n'
+    '\n'
+    'fn prov(p: Provider)\n',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/formatting",
+     "params":{"options":{"tabSize":4,"insertSpaces":True}}},
+    lambda r: check("no edits returned", (r.get("result") or []) == [],
+                    f"got: {r.get('result')!r}"))
+
 # Hover on a match-arm binding shows its derived type.
 case_feature("hover on a match binding shows its type",
     'struct P { x: i32 }\n'

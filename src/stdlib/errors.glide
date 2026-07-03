@@ -206,7 +206,7 @@ impl Error {
     ///
     /// ```glide
     /// let e = Error::of(r.err);
-    /// match e.kind() { NotFound => { ... } _ => { eprintln!(e.message()); } }
+    /// match e.kind() { NotFound => { ... } _ => { eprintln(e.message()); } }
     /// ```
     pub fn of(msg: string) -> *Error {
         let e: *Error = malloc(sizeof(Error)) as *Error;
