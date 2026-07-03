@@ -1008,6 +1008,22 @@ fn _arg_span(a: *Expr) -> i32 {
     if a.kind == EX_STRING && a.str_val != null {
         return a.str_val.len() + 2; // include the surrounding quotes
     }
+    if a.kind == EX_INT {
+        // Digits of the literal, so `if 42 {` underlines the whole `42`.
+        return format!("{}", a.int_val).len();
+    }
+    if a.kind == EX_FLOAT && a.float_val != null {
+        return a.float_val.len();
+    }
+    if a.kind == EX_BOOL {
+        if a.bool_val {
+            return 4; // true
+        }
+        return 5; // false
+    }
+    if a.kind == EX_NULL {
+        return 4; // null
+    }
     return 1;
 }
 
@@ -3086,12 +3102,12 @@ fn _check_match_coverage(t: *Typer, scrut_ty: *Type, arms: *Vector<MatchArm>, li
         if a.lit != null {
             has_literal = true;
             if is_enum || is_opt || is_res {
-                t.err_code(line, col, "invalid-pattern", "literal pattern `".concat(a.variant).concat("` cannot match a `").concat(type_to_string(scrut_ty)).concat("` scrutinee"));
+                t.err_code_range(line, col, 5, "invalid-pattern", "literal pattern `".concat(a.variant).concat("` cannot match a `").concat(type_to_string(scrut_ty)).concat("` scrutinee"));
                 continue;
             }
             let lt: *Type = infer_expr(t, a.lit);
             if scrut_ty != null && !types_compat(scrut_ty, lt) {
-                t.err_code(line, col, "pattern-type-mismatch", "literal pattern `".concat(a.variant).concat("` has type `").concat(type_to_string(lt)).concat("`, but the match scrutinee is `").concat(type_to_string(scrut_ty)).concat("`"));
+                t.err_code_range(line, col, 5, "pattern-type-mismatch", "literal pattern `".concat(a.variant).concat("` has type `").concat(type_to_string(lt)).concat("`, but the match scrutinee is `").concat(type_to_string(scrut_ty)).concat("`"));
             }
             continue;
         }
@@ -3105,17 +3121,17 @@ fn _check_match_coverage(t: *Typer, scrut_ty: *Type, arms: *Vector<MatchArm>, li
                 }
             }
             if !found {
-                t.err_code(line, col, "unknown-variant", "`".concat(a.variant).concat("` is not a variant of `").concat(scrut_ty.name).concat("`"));
+                t.err_code_range(line, col, 5, "unknown-variant", "`".concat(a.variant).concat("` is not a variant of `").concat(scrut_ty.name).concat("`"));
             }
         } else {
             if is_opt {
                 if !a.variant.eq("some") && !a.variant.eq("none") {
-                    t.err_code(line, col, "unknown-variant", "`".concat(a.variant).concat("` is not a variant of an Option; use `some` / `none`"));
+                    t.err_code_range(line, col, 5, "unknown-variant", "`".concat(a.variant).concat("` is not a variant of an Option; use `some` / `none`"));
                 }
             } else {
                 if is_res {
                     if !a.variant.eq("ok") && !a.variant.eq("err") {
-                        t.err_code(line, col, "unknown-variant", "`".concat(a.variant).concat("` is not a variant of a Result; use `ok` / `err`"));
+                        t.err_code_range(line, col, 5, "unknown-variant", "`".concat(a.variant).concat("` is not a variant of a Result; use `ok` / `err`"));
                     }
                 }
             }
@@ -3124,7 +3140,7 @@ fn _check_match_coverage(t: *Typer, scrut_ty: *Type, arms: *Vector<MatchArm>, li
     // Literal arms can never cover a whole value domain, so they demand a
     // catch-all sibling.
     if has_literal && !has_wildcard {
-        t.err_code(line, col, "match-not-exhaustive", "match with literal patterns is not exhaustive; add a `_ =>` arm");
+        t.err_code_range(line, col, 5, "match-not-exhaustive", "match with literal patterns is not exhaustive; add a `_ =>` arm");
     }
     if !has_wildcard && is_enum && parts != null {
         let mut missing: string = "";
@@ -3244,7 +3260,7 @@ fn check_stmt(t: *Typer, s: *Stmt) {
         if s.cond != null {
             let ct: *Type = infer_expr(t, s.cond);
             if ct != null && !is_unknown_type(ct) && !is_bool_type(ct) {
-                t.err(s.line, s.column, "if condition must be bool");
+                t.err_code_range(s.cond.line, s.cond.column, _arg_span(s.cond), "cond-not-bool", "if condition must be bool");
             }
         }
         // `then` and `else` are mutually exclusive paths: a free inside one
@@ -3293,7 +3309,7 @@ fn check_stmt(t: *Typer, s: *Stmt) {
                     binder_ty = inner;
                 } else {
                     if !types_compat(binder_ty, inner) {
-                        t.err(s.line, s.column, "while-let binder type mismatch: expected ".concat(type_to_string(binder_ty)).concat(", chan yields ").concat(type_to_string(inner)));
+                        t.err_code_range(s.let_value.line, s.let_value.column, _arg_span(s.let_value), "while-let-mismatch", "while-let binder type mismatch: expected ".concat(type_to_string(binder_ty)).concat(", chan yields ").concat(type_to_string(inner)));
                     }
                 }
             } else {
@@ -3314,7 +3330,7 @@ fn check_stmt(t: *Typer, s: *Stmt) {
         if s.cond != null {
             let ct: *Type = infer_expr(t, s.cond);
             if ct != null && !is_unknown_type(ct) && !is_bool_type(ct) {
-                t.err(s.line, s.column, "while condition must be bool");
+                t.err_code_range(s.cond.line, s.cond.column, _arg_span(s.cond), "cond-not-bool", "while condition must be bool");
             }
         }
         if s.then_body != null {
@@ -3423,7 +3439,7 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
         }
         let stripped: *Type = strip_ptr(vt);
         if stripped != null && stripped.kind != TY_TUPLE {
-            t.err_code(s.line, s.column, "tuple-destructure", "cannot destructure non-tuple value of type `".concat(type_to_string(vt)).concat("`"));
+            t.err_code_range(s.let_value.line, s.let_value.column, _arg_span(s.let_value), "tuple-destructure", "cannot destructure non-tuple value of type `".concat(type_to_string(vt)).concat("`"));
         }
         for let i: i32 = 0; i < s.let_names.len(); i++ {
             let nm: string = s.let_names.get(i);
@@ -3447,13 +3463,13 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
     // initializer.
     if s.let_ty != null && (s.let_ty.kind == TY_BORROW || s.let_ty.kind == TY_BORROW_MUT) {
         if s.let_value != null && s.let_value.kind == EX_NULL {
-            t.err_code(s.line, s.column, "null-borrow", "borrow `".concat(type_to_string(s.let_ty)).concat("` cannot be null"));
+            t.err_code_range(s.let_value.line, s.let_value.column, _arg_span(s.let_value), "null-borrow", "borrow `".concat(type_to_string(s.let_ty)).concat("` cannot be null"));
         }
     }
     // Null safety: auto-drop owned (`let v* = expr`) cannot be initialized
     // with null — auto-free would call free(null) or hit a method on null.
     if s.kind == ST_LET && s.is_auto_owned && s.let_value != null && s.let_value.kind == EX_NULL {
-        t.err_code(s.line, s.column, "null-auto-drop", "auto-drop binding `".concat(s.name).concat("` cannot be initialized with null"));
+        t.err_code_range(s.let_value.line, s.let_value.column, _arg_span(s.let_value), "null-auto-drop", "auto-drop binding `".concat(s.name).concat("` cannot be initialized with null"));
     }
     // `let b = a` where a is owned is a MOVE (a is consumed below; the codegen
     // re-targets the auto-drop from a to b), not an error.
@@ -3932,9 +3948,9 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         // Type lookup continues so downstream diagnostics still resolve.
         if t.consumed_locals.contains(e.str_val) && t.consumed_locals.get(e.str_val) {
             if t.moved_out.contains(e.str_val) && t.moved_out.get(e.str_val) {
-                t.err_code(e.line, e.column, "use-after-move", "value `".concat(e.str_val).concat("` was moved earlier in this function; its ownership now belongs to the target"));
+                t.err_code_range(e.line, e.column, e.str_val.len(), "use-after-move", "value `".concat(e.str_val).concat("` was moved earlier in this function; its ownership now belongs to the target"));
             } else {
-                t.err_code(e.line, e.column, "use-after-free", "value `".concat(e.str_val).concat("` was freed earlier in this function; subsequent reads touch reclaimed memory"));
+                t.err_code_range(e.line, e.column, e.str_val.len(), "use-after-free", "value `".concat(e.str_val).concat("` was freed earlier in this function; subsequent reads touch reclaimed memory"));
             }
         }
         // Locals + parameters always win; visibility check skipped for them.
@@ -3948,7 +3964,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         // they remain visible inside fn bodies whose local scope is fresh.
         if t.module_scope.contains(e.str_val) {
             if !t.is_visible(e.str_val) {
-                t.err(e.line, e.column, "name `".concat(e.str_val).concat("` is not in scope; add an `import` for it"));
+                t.err_code_range(e.line, e.column, e.str_val.len(), "unknown-name", "name `".concat(e.str_val).concat("` is not in scope; add an `import` for it"));
                 return null;
             }
             let ty: Type = t.module_scope.get(e.str_val);
@@ -3965,7 +3981,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         // smashes the receiver pointer chain).
         if t.fns.contains(e.str_val) {
             if !t.is_visible(e.str_val) {
-                t.err(e.line, e.column, "name `".concat(e.str_val).concat("` is not in scope; add an `import` for it"));
+                t.err_code_range(e.line, e.column, e.str_val.len(), "unknown-name", "name `".concat(e.str_val).concat("` is not in scope; add an `import` for it"));
                 return null;
             }
             let sig: FnSig = t.fns.get(e.str_val);
@@ -4014,7 +4030,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             if op == OP_LT || op == OP_LE || op == OP_GT || op == OP_GE {
                 let ls: *Type = strip_ptr(lt);
                 if ls != null && ls.kind == TY_NAMED && t.structs.contains(ls.name) && !t.fns.contains(ls.name.concat("_cmp")) {
-                    t.err_code(e.line, e.column, "no-operator", "no `".concat(_op_symbol(op)).concat("` operator for `").concat(ls.name).concat("`; implement `fn cmp(self: *").concat(ls.name).concat(", other: *").concat(ls.name).concat(") -> i32`"));
+                    t.err_code_range(e.line, e.column, _op_symbol(op).len(), "no-operator", "no `".concat(_op_symbol(op)).concat("` operator for `").concat(ls.name).concat("`; implement `fn cmp(self: *").concat(ls.name).concat(", other: *").concat(ls.name).concat(") -> i32`"));
                 }
             }
             // Operands must be comparable. Without this, `5 == "x"` compiled to a
@@ -4058,7 +4074,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 if t.fns.contains(mkey) {
                     return t.fns.get(mkey).ret_type;
                 }
-                t.err_code(e.line, e.column, "no-operator", "no `".concat(_op_symbol(op)).concat("` operator for `").concat(ls.name).concat("`; implement `fn ").concat(am).concat("(self: *").concat(ls.name).concat(", other: *").concat(ls.name).concat(") -> ").concat(ls.name).concat("`"));
+                t.err_code_range(e.line, e.column, _op_symbol(op).len(), "no-operator", "no `".concat(_op_symbol(op)).concat("` operator for `").concat(ls.name).concat("`; implement `fn ").concat(am).concat("(self: *").concat(ls.name).concat(", other: *").concat(ls.name).concat(") -> ").concat(ls.name).concat("`"));
                 return lt;
             }
             if op == OP_ADD && lt != null && lt.kind == TY_NAMED && lt.name.eq("string") {
@@ -4066,7 +4082,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             }
         }
         if !types_compat(lt, rt) {
-            t.err(e.line, e.column, "binary op type mismatch: ".concat(type_to_string(lt)).concat(" vs ").concat(type_to_string(rt)));
+            t.err_code_range(e.line, e.column, _op_symbol(e.op_code).len(), "binop-type-mismatch", "binary op type mismatch: ".concat(type_to_string(lt)).concat(" vs ").concat(type_to_string(rt)));
         }
         // Numeric width promotion: if either operand is the wider of a
         // compatible pair (`i64` paired with `int`, `f64` paired with
@@ -4172,7 +4188,13 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             t.moved_out.insert(e.rhs.str_val, true);
         }
         if !types_compat(lt, rt) {
-            t.err(e.line, e.column, "assignment type mismatch: ".concat(type_to_string(lt)).concat(" = ").concat(type_to_string(rt)));
+            let mut _as_l: i32 = e.line;
+            let mut _as_c: i32 = e.column;
+            if e.rhs != null {
+                _as_l = e.rhs.line;
+                _as_c = e.rhs.column;
+            }
+            t.err_code_range(_as_l, _as_c, _arg_span(e.rhs), "assign-type-mismatch", "assignment type mismatch: ".concat(type_to_string(lt)).concat(" = ").concat(type_to_string(rt)));
         }
         return lt;
     }
@@ -4211,7 +4233,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                         let a: Expr = e.args.get(0);
                         let at: *Type = infer_expr(t, &a);
                         if !types_compat(inner, at) {
-                            t.err(a.line, a.column, "chan.send arg type mismatch: expected ".concat(type_to_string(inner)).concat(", got ").concat(type_to_string(at)));
+                            t.err_code_range(a.line, a.column, _arg_span(&a), "chan-arg-mismatch", "chan.send arg type mismatch: expected ".concat(type_to_string(inner)).concat(", got ").concat(type_to_string(at)));
                         }
                     }
                     return ty_named("void");
@@ -4475,7 +4497,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 let at: *Type = infer_expr(t, &a);
                 let want: *Type = ty_named("i32");
                 if !types_compat(want, at) {
-                    t.err(a.line, a.column, "make_chan capacity must be int, got ".concat(type_to_string(at)));
+                    t.err_code_range(a.line, a.column, _arg_span(&a), "chan-arg-mismatch", "make_chan capacity must be int, got ".concat(type_to_string(at)));
                 }
             }
             return null;
@@ -4802,7 +4824,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         let is_known_method: bool = t.fns.contains(pname);
         let is_type_param: bool = _is_current_type_param(t, prefix);
         if !is_type && !is_known_method && !is_type_param && !t.is_module_path_allowed(prefix) {
-            t.err(e.line, e.column, "module `".concat(prefix).concat("` not in scope; add `import ").concat(prefix).concat(";` or use the full path"));
+            t.err_code_range(e.line, e.column, prefix.len(), "unknown-module", "module `".concat(prefix).concat("` not in scope; add `import ").concat(prefix).concat(";` or use the full path"));
             return null;
         }
         if t.fns.contains(pname) {
