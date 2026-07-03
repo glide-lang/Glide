@@ -1579,6 +1579,20 @@ case_feature("import hover shows module header",
         "HTTP/1.1 client" in (((r.get("result") or {}).get("contents", {}) or {}).get("value", "")),
         f"got: {(((r.get('result') or {}).get('contents', {}) or {}).get('value', '')[:80])!r}"))
 
+# Module-qualifier hover works at USE sites too (`http::client::…` in code).
+case_feature("qualifier hover at a use site",
+    'import stdlib::http::{client, cookies};\n'
+    'fn main() -> i32 {\n'
+    '    let c = http::client::HttpClient::new();\n'
+    '    c.free();\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/hover",
+     "params":{"position":{"line":2,"character":19}}},  # on `client` in the path
+    lambda r: check("use-site hover carries client.glide header",
+        "HTTP/1.1 client" in (((r.get("result") or {}).get("contents", {}) or {}).get("value", "")),
+        f"got: {(((r.get('result') or {}).get('contents', {}) or {}).get('value', '')[:80])!r}"))
+
 # A child import after the parent (which lazily synthesized it) is NOT flagged.
 case_diagnostics("explicit child import after parent is not redundant",
     'import stdlib::http;\n'

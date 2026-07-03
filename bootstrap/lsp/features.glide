@@ -2874,47 +2874,74 @@ pub fn handle_hover(req: *JsonValue, state: *LspState) {
             return;
         }
     }
-    // Import line: hover shows the target module FILE's header comment (the
-    // `//` block at its top). Hovering a specific name resolves to that
-    // module's own file (`client` in `import stdlib::http::{client, …};` or in
-    // `import stdlib::http::client;` shows http/client.glide's header).
+    // Module-qualifier hover: a word FOLLOWED BY `::` names a module (in an
+    // import line or at a use site like `http::client::HttpClient::new()`).
+    // Show the target module FILE's header comment (the `//` block at its
+    // top). The `::` requirement keeps a local variable named `client` giving
+    // its normal local hover. `Type::method` qualifiers fall through (no
+    // module matches the type name).
     {
         let hp: string = uri_to_path(uri);
-        let mut imp_file: string = "";
-        let mut imp_mod: string = "";
-        if doc.stmts != null {
+        let is_import_line: bool = _line_is_import(doc.text, line0);
+        let mut is_qualifier: bool = is_import_line;
+        if !is_qualifier {
+            let woff: i32 = _line_col_offset(doc.text, line0, col0);
+            if woff >= 0 {
+                let mut we: i32 = woff;
+                while we < doc.text.len() {
+                    let wc: i32 = doc.text.at(we).to_int();
+                    if wc == 95 || (wc >= 48 && wc <= 57) || (wc >= 65 && wc <= 90) || (wc >= 97 && wc <= 122) {
+                        we = we + 1;
+                    } else {
+                        break;
+                    }
+                }
+                is_qualifier = we + 1 < doc.text.len() && doc.text.at(we).to_int() == 58 && doc.text.at(we + 1).to_int() == 58;
+            }
+        }
+        if is_qualifier && word.eq("stdlib") {
+            let sres: *JsonValue = json_object();
+            let sc: *JsonValue = json_object();
+            json_obj_set(sc, "kind", json_string("markdown"));
+            json_obj_set(sc, "value", json_string("**`stdlib`**\n\nThe Glide standard library — filesystem, networking, HTTP, crypto, JSON, time, and more. Browse it with `glide doc --stdlib`."));
+            json_obj_set(sres, "contents", sc);
+            lsp_send_response(id, sres);
+            return;
+        }
+        if is_qualifier && doc.stmts != null {
+            let mut imp_file: string = "";
             for let ii: i32 = 0; ii < doc.stmts.len(); ii++ {
                 let is_: Stmt = doc.stmts.get(ii);
                 if is_.kind != ST_IMPORT || is_.origin == null || !is_.origin.eq(hp) {
                     continue;
                 }
-                // A module whose short name is the hovered word wins (covers
-                // synthesized package children and direct child imports).
+                // Any imported module (incl. synthesized package children)
+                // whose short name is the hovered word.
                 if is_.import_short != null && is_.import_short.eq(word) && is_.import_path != null {
                     imp_file = is_.import_path;
-                    imp_mod = word;
                     break;
                 }
-                if is_.line - 1 == line0 && is_.import_path != null && imp_file.eq("") {
-                    imp_file = is_.import_path;
-                    imp_mod = is_.import_short;
+            }
+            if imp_file.eq("") && is_import_line {
+                // Intermediate segment of THIS import's path (`http` in
+                // `import stdlib::http::client;`): resolve the path up to and
+                // including the word and show that file's header.
+                let seg_file: string = _import_segment_file(doc.text, line0, col0, word);
+                if !seg_file.eq("") {
+                    imp_file = seg_file;
                 }
             }
-        }
-        if !imp_file.eq("") && _line_is_import(doc.text, line0) {
-            let header: string = _module_header_comment(imp_file);
-            if !header.eq("") {
-                let mut title: string = "module";
-                if imp_mod != null && !imp_mod.eq("") {
-                    title = "module `".concat(imp_mod).concat("`");
+            if !imp_file.eq("") {
+                let header: string = _module_header_comment(imp_file);
+                if !header.eq("") {
+                    let hres: *JsonValue = json_object();
+                    let hc: *JsonValue = json_object();
+                    json_obj_set(hc, "kind", json_string("markdown"));
+                    json_obj_set(hc, "value", json_string("**module `".concat(word).concat("`**\n\n").concat(header)));
+                    json_obj_set(hres, "contents", hc);
+                    lsp_send_response(id, hres);
+                    return;
                 }
-                let hres: *JsonValue = json_object();
-                let hc: *JsonValue = json_object();
-                json_obj_set(hc, "kind", json_string("markdown"));
-                json_obj_set(hc, "value", json_string("**".concat(title).concat("**\n\n").concat(header)));
-                json_obj_set(hres, "contents", hc);
-                lsp_send_response(id, hres);
-                return;
             }
         }
     }
@@ -5199,4 +5226,63 @@ fn _module_header_comment(file: string) -> string {
         i = e + 1;
     }
     return out;
+}
+
+// On an import line, the module path truncated at the hovered segment,
+// resolved to a file: `import stdlib::http::client;` hovered at `http`
+// yields the resolved path of `stdlib/http.glide` ("" when none resolves).
+fn _import_segment_file(text: string, line0: i32, col0: i32, word: string) -> string {
+    // slice the line
+    let mut ln: i32 = 0;
+    let mut start: i32 = 0;
+    let n: i32 = text.len();
+    for let i: i32 = 0; i < n; i++ {
+        if ln == line0 {
+            start = i;
+            break;
+        }
+        if text.at(i).to_int() == 10 {
+            ln = ln + 1;
+        }
+    }
+    let mut e: i32 = start;
+    while e < n && text.at(e).to_int() != 10 {
+        e = e + 1;
+    }
+    let line: string = text.substring(start, e);
+    let ip: i32 = line.index_of("import");
+    if ip < 0 {
+        return "";
+    }
+    let after: string = line.substring(ip + 6, line.len());
+    // path text up to and including the hovered word
+    let wi: i32 = after.index_of(word);
+    if wi < 0 {
+        return "";
+    }
+    let mut p: string = after.substring(0, wi + word.len());
+    // strip spaces
+    let mut cleaned: string = "";
+    for let i: i32 = 0; i < p.len(); i++ {
+        if p.at(i).to_int() != 32 && p.at(i).to_int() != 9 {
+            cleaned = cleaned.concat(p.substring(i, i + 1));
+        }
+    }
+    // `stdlib::http` -> "stdlib/http.glide"
+    let mut fpath: string = "";
+    let mut i: i32 = 0;
+    while i < cleaned.len() {
+        if i + 1 < cleaned.len() && cleaned.at(i).to_int() == 58 && cleaned.at(i + 1).to_int() == 58 {
+            fpath = fpath.concat("/");
+            i = i + 2;
+        } else {
+            fpath = fpath.concat(cleaned.substring(i, i + 1));
+            i = i + 1;
+        }
+    }
+    let resolved: string = resolve_import("", fpath.concat(".glide"));
+    if __glide_file_exists(resolved) {
+        return resolved;
+    }
+    return "";
 }
