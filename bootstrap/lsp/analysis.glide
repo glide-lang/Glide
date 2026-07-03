@@ -2809,6 +2809,12 @@ pub fn analysis_redundant_import(t: *Typer, program: *Vector<Stmt>) {
         if s.import_path == null || s.import_path.eq("") {
             continue;
         }
+        // Synthesized imports (package-child lazy loading) have no source
+        // line. They must neither be flagged nor make the USER's own later
+        // line look like a duplicate.
+        if s.line < 1 {
+            continue;
+        }
         if _has_allow(&s, "redundant-import") {
             continue;
         }

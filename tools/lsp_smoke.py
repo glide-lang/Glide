@@ -1569,6 +1569,34 @@ case_feature("formatting refuses a file with parse errors",
     lambda r: check("no edits returned", (r.get("result") or []) == [],
                     f"got: {r.get('result')!r}"))
 
+# Hover on an import shows the target module file's header comment.
+case_feature("import hover shows module header",
+    'import stdlib::http::{client, cookies};\n'
+    'fn main() -> i32 { let c = client::HttpClient::new(); c.free(); let k = cookies::Cookie::new("a","b"); return 0; }',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/hover",
+     "params":{"position":{"line":0,"character":23}}},  # on `client`
+    lambda r: check("hover carries client.glide header",
+        "HTTP/1.1 client" in (((r.get("result") or {}).get("contents", {}) or {}).get("value", "")),
+        f"got: {(((r.get('result') or {}).get('contents', {}) or {}).get('value', '')[:80])!r}"))
+
+# A child import after the parent (which lazily synthesized it) is NOT flagged.
+case_diagnostics("explicit child import after parent is not redundant",
+    'import stdlib::http;\n'
+    'import stdlib::http::client;\n'
+    'fn main() -> i32 {\n'
+    '    let c = http::client::HttpClient::new();\n'
+    '    c.free();\n'
+    '    return 0;\n'
+    '}',
+    expect_codes_absent=["redundant-import"])
+
+# A REAL duplicate still warns.
+case_diagnostics("real duplicate import still flagged",
+    'import stdlib::fs;\n'
+    'import stdlib::fs;\n'
+    'fn main() -> i32 { let _e = fs::exists("/"); return 0; }',
+    expect_codes_present=["redundant-import"])
+
 # fmt merges sibling imports into one brace group.
 case_feature("formatting merges sibling imports",
     'import stdlib::http::client;\n'

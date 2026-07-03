@@ -2874,6 +2874,50 @@ pub fn handle_hover(req: *JsonValue, state: *LspState) {
             return;
         }
     }
+    // Import line: hover shows the target module FILE's header comment (the
+    // `//` block at its top). Hovering a specific name resolves to that
+    // module's own file (`client` in `import stdlib::http::{client, …};` or in
+    // `import stdlib::http::client;` shows http/client.glide's header).
+    {
+        let hp: string = uri_to_path(uri);
+        let mut imp_file: string = "";
+        let mut imp_mod: string = "";
+        if doc.stmts != null {
+            for let ii: i32 = 0; ii < doc.stmts.len(); ii++ {
+                let is_: Stmt = doc.stmts.get(ii);
+                if is_.kind != ST_IMPORT || is_.origin == null || !is_.origin.eq(hp) {
+                    continue;
+                }
+                // A module whose short name is the hovered word wins (covers
+                // synthesized package children and direct child imports).
+                if is_.import_short != null && is_.import_short.eq(word) && is_.import_path != null {
+                    imp_file = is_.import_path;
+                    imp_mod = word;
+                    break;
+                }
+                if is_.line - 1 == line0 && is_.import_path != null && imp_file.eq("") {
+                    imp_file = is_.import_path;
+                    imp_mod = is_.import_short;
+                }
+            }
+        }
+        if !imp_file.eq("") && _line_is_import(doc.text, line0) {
+            let header: string = _module_header_comment(imp_file);
+            if !header.eq("") {
+                let mut title: string = "module";
+                if imp_mod != null && !imp_mod.eq("") {
+                    title = "module `".concat(imp_mod).concat("`");
+                }
+                let hres: *JsonValue = json_object();
+                let hc: *JsonValue = json_object();
+                json_obj_set(hc, "kind", json_string("markdown"));
+                json_obj_set(hc, "value", json_string("**".concat(title).concat("**\n\n").concat(header)));
+                json_obj_set(hres, "contents", hc);
+                lsp_send_response(id, hres);
+                return;
+            }
+        }
+    }
     // Virtual fields of `!T` / `?T` / `?!T` — `ok` / `val` / `err` / `has`.
     // They have no declaration to hover, so resolve the receiver type and
     // surface the same documentation completion shows. Only fires when the
@@ -5091,4 +5135,68 @@ pub fn expr_calls_method(e: *Expr, var: string, method: string) -> bool {
         }
     }
     return false;
+}
+
+// True when the given 0-based line of `text` is an `import …;` line.
+fn _line_is_import(text: string, line0: i32) -> bool {
+    let mut ln: i32 = 0;
+    let mut start: i32 = 0;
+    let n: i32 = text.len();
+    for let i: i32 = 0; i < n; i++ {
+        if ln == line0 {
+            start = i;
+            break;
+        }
+        if text.at(i).to_int() == 10 {
+            ln = ln + 1;
+        }
+    }
+    if ln < line0 {
+        return false;
+    }
+    let mut j: i32 = start;
+    while j < n && (text.at(j).to_int() == 32 || text.at(j).to_int() == 9) {
+        j = j + 1;
+    }
+    return j + 6 <= n && text.substring(j, j + 6).eq("import") || (j + 10 <= n && text.substring(j, j + 10).eq("pub import"));
+}
+
+// The consecutive `//` comment block at the very top of a module file,
+// rendered as plain text (the `// ` prefixes stripped). "" when the file
+// doesn't start with a comment.
+fn _module_header_comment(file: string) -> string {
+    let src: string = read_file(file);
+    if src == null || src.eq("") {
+        return "";
+    }
+    let mut out: string = "";
+    let mut i: i32 = 0;
+    let n: i32 = src.len();
+    while i < n {
+        // line start: skip indentation
+        let mut j: i32 = i;
+        while j < n && (src.at(j).to_int() == 32 || src.at(j).to_int() == 9) {
+            j = j + 1;
+        }
+        if !(j + 1 < n && src.at(j).to_int() == 47 && src.at(j + 1).to_int() == 47) {
+            break;
+        }
+        let mut k: i32 = j + 2;
+        if k < n && src.at(k).to_int() == 32 {
+            k = k + 1;
+        }
+        let mut e: i32 = k;
+        while e < n && src.at(e).to_int() != 10 {
+            e = e + 1;
+        }
+        if !out.eq("") {
+            out = out.concat("\n");
+        }
+        out = out.concat(src.substring(k, e));
+        if e >= n {
+            break;
+        }
+        i = e + 1;
+    }
+    return out;
 }
