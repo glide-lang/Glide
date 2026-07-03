@@ -1721,33 +1721,54 @@ pub fn emit_dyn_runtime(g: *CG, program: *Vector<Stmt>) {
             }
             let ret_ty: string = type_to_c(m.fn_ret_ty);
             print!("static ".concat(ret_ty).concat(" __glide_").concat(type_name).concat("_as_").concat(trait_name).concat("__").concat(m.name).concat("_thunk(void* self_p"));
-            if m.fn_params != null && m.fn_params.len() > 1 {
-                for let j: i32 = 1; j < m.fn_params.len(); j++ {
+            let mut _tp_start: i32 = 1;
+            if m.fn_params == null || m.fn_params.len() == 0 || !m.fn_params.get(0).name.eq("self") {
+                _tp_start = 0;
+            }
+            if m.fn_params != null && m.fn_params.len() > _tp_start {
+                for let j: i32 = _tp_start; j < m.fn_params.len(); j++ {
                     let p: Param = m.fn_params.get(j);
                     print!(", ".concat(type_to_c(p.ty)).concat(" ").concat(c_safe_ident(p.name)));
                 }
             }
             println!(") {");
             let is_void: bool = m.fn_ret_ty == null || m.fn_ret_ty.kind == TY_NAMED && m.fn_ret_ty.name.eq("void");
-            // Decide the cast form by inspecting the first param.
+            // Decide the cast form by inspecting the first param. A method
+            // with NO receiver (`fn alelo();` in the trait) takes nothing —
+            // forwarding `self_p` to a 0-arg C fn was a cc error.
+            let mut has_self: bool = false;
             let mut self_expr: string = "*(".concat(type_name).concat("*)self_p");
             if m.fn_params != null && m.fn_params.len() > 0 {
                 let p0: Param = m.fn_params.get(0);
-                // `&self` / `&mut self` borrows lower to a C pointer exactly
-                // like `*Self` — all three take the cast, not the deref.
-                if p0.ty != null && (p0.ty.kind == TY_POINTER || p0.ty.kind == TY_BORROW || p0.ty.kind == TY_BORROW_MUT) {
-                    self_expr = "(".concat(type_name).concat("*)self_p");
+                if p0.name != null && p0.name.eq("self") {
+                    has_self = true;
+                    // `&self` / `&mut self` borrows lower to a C pointer exactly
+                    // like `*Self` — all three take the cast, not the deref.
+                    if p0.ty != null && (p0.ty.kind == TY_POINTER || p0.ty.kind == TY_BORROW || p0.ty.kind == TY_BORROW_MUT) {
+                        self_expr = "(".concat(type_name).concat("*)self_p");
+                    }
                 }
+            }
+            if !has_self {
+                self_expr = "";
             }
             if is_void {
                 print!("    ".concat(type_name).concat("_").concat(m.name).concat("(").concat(self_expr));
             } else {
                 print!("    return ".concat(type_name).concat("_").concat(m.name).concat("(").concat(self_expr));
             }
-            if m.fn_params != null && m.fn_params.len() > 1 {
-                for let j: i32 = 1; j < m.fn_params.len(); j++ {
+            let mut _fw_start: i32 = 1;
+            if !has_self {
+                _fw_start = 0;
+            }
+            if m.fn_params != null && m.fn_params.len() > _fw_start {
+                for let j: i32 = _fw_start; j < m.fn_params.len(); j++ {
                     let p: Param = m.fn_params.get(j);
-                    print!(", ".concat(c_safe_ident(p.name)));
+                    if j == 0 {
+                        print!(c_safe_ident(p.name));
+                    } else {
+                        print!(", ".concat(c_safe_ident(p.name)));
+                    }
                 }
             }
             println!(");");

@@ -2231,6 +2231,46 @@ fn type_var_contains(tps: *Vector<string>, name: string) -> bool {
 // A param type that names one of the fn's type-vars matches anything;
 // pointer/borrow/result wrappers recurse so `*T` matches `*Animal`.
 // Falls back to plain types_compat for everything else.
+// Implicit dyn coercion, Rust-style: an argument of concrete type `T` (or
+// `*T` / `&T`) where the parameter wants `*dyn Trait` and `impl Trait for T`
+// exists is rewritten IN PLACE to the fat-pointer form — `&arg as *dyn Trait`
+// for a value, `arg as *dyn Trait` for a pointer — so call sites don't need
+// the cast spelled out. Returns true when the rewrite happened.
+fn _coerce_dyn_arg(t: *Typer, want: *Type, got: *Type, args: *Vector<Expr>, idx: i32) -> bool {
+    if want == null || got == null || args == null || idx < 0 || idx >= args.len() {
+        return false;
+    }
+    if !(want.kind == TY_POINTER && want.inner != null && want.inner.kind == TY_DYN && want.inner.name != null) {
+        return false;
+    }
+    let tr: string = want.inner.name;
+    let mut is_value: bool = true;
+    let mut st: *Type = got;
+    if got.kind == TY_POINTER || got.kind == TY_BORROW || got.kind == TY_BORROW_MUT {
+        st = got.inner;
+        is_value = false;
+    }
+    if st == null || st.kind != TY_NAMED || st.name == null {
+        return false;
+    }
+    if !t.impl_set.contains(tr.concat("::").concat(st.name)) {
+        return false;
+    }
+    let a: Expr = args.get(idx);
+    let ap: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
+    *ap = a;
+    let mut src: *Expr = ap;
+    if is_value {
+        src = expr_unary(UN_ADDR, ap, a.line, a.column);
+    }
+    let dt: *Type = __glide_palloc(sizeof(Type)) as *Type;
+    dt.kind = TY_DYN;
+    dt.name = tr;
+    let cast: *Expr = expr_cast(src, ty_pointer(dt));
+    args.set(idx, *cast);
+    return true;
+}
+
 fn arg_compat(want: *Type, got: *Type, tps: *Vector<string>) -> bool {
     if want == null || got == null {
         return true;
@@ -4563,8 +4603,10 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                                 }
                             }
                             if !arg_compat(want_p, at, msig.type_params) {
-                                let got_name: string = if a.kind == EX_IDENT { a.str_val } else { "" };
-                                t.err_code_range(a.line, a.column, _arg_span(&a), "", "arg ".concat(p.name).concat(" type mismatch: expected ").concat(type_to_string(want_p)).concat(", got ").concat(type_to_string(at)).concat(_fnptr_hint(t, want_p, at, got_name)));
+                                if !_coerce_dyn_arg(t, want_p, at, e.args, i) {
+                                    let got_name: string = if a.kind == EX_IDENT { a.str_val } else { "" };
+                                    t.err_code_range(a.line, a.column, _arg_span(&a), "", "arg ".concat(p.name).concat(" type mismatch: expected ").concat(type_to_string(want_p)).concat(", got ").concat(type_to_string(at)).concat(_fnptr_hint(t, want_p, at, got_name)));
+                                }
                             }
                         }
                     } else {
@@ -4705,8 +4747,10 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                             let a: Expr = e.args.get(i);
                             let at: *Type = infer_expr(t, &a);
                             if !arg_compat(p.ty, at, sig.type_params) {
-                                let got_name: string = if a.kind == EX_IDENT { a.str_val } else { "" };
-                                t.err_code_range(a.line, a.column, _arg_span(&a), "", "arg ".concat(p.name).concat(" type mismatch: expected ").concat(type_to_string(p.ty)).concat(", got ").concat(type_to_string(at)).concat(_fnptr_hint(t, p.ty, at, got_name)));
+                                if !_coerce_dyn_arg(t, p.ty, at, e.args, i) {
+                                    let got_name: string = if a.kind == EX_IDENT { a.str_val } else { "" };
+                                    t.err_code_range(a.line, a.column, _arg_span(&a), "", "arg ".concat(p.name).concat(" type mismatch: expected ").concat(type_to_string(p.ty)).concat(", got ").concat(type_to_string(at)).concat(_fnptr_hint(t, p.ty, at, got_name)));
+                                }
                             }
                         }
                         // Walk variadic tail args for nested type errors but

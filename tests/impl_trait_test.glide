@@ -34,3 +34,30 @@ fn test_dyn_borrow_receiver() -> i32 {
     assert_eq!(take_dyn(b as *dyn Sized2), 4);
     return 0;
 }
+
+// Implicit dyn coercion at call sites: a concrete value or pointer whose type
+// implements the trait passes straight into a `*dyn Trait` parameter — no
+// `as *dyn` spelled out. Also: a trait method with NO receiver dispatches
+// through dyn (the vtable thunk must not forward self to a 0-arg fn).
+trait Named {
+    fn tag() -> i32;
+    fn value(&self) -> i32;
+}
+
+impl Named for Boxy {
+    pub fn tag() -> i32 { return 77; }
+    pub fn value(&self) -> i32 { return self.n; }
+}
+
+fn describe(x: *dyn Named) -> i32 {
+    return x.value();
+}
+
+fn test_implicit_dyn_coercion() -> i32 {
+    let v = Boxy { n: 3 };
+    assert_eq!(describe(v), 3);
+    let p: *Boxy = malloc(8) as *Boxy;
+    p.n = 8;
+    assert_eq!(describe(p), 8);
+    return 0;
+}
