@@ -2271,6 +2271,38 @@ fn _coerce_dyn_arg(t: *Typer, want: *Type, got: *Type, args: *Vector<Expr>, idx:
     return true;
 }
 
+// Auto-ref for generic-bound params: a VALUE argument where the parameter
+// wants `*T` (T a type param — the `impl Trait` desugar and hand-written
+// bounds both produce that shape) is rewritten to `&arg`, so
+// `a(Alelo { … })` works like Rust's auto-ref. Returns true on rewrite.
+fn _coerce_ref_generic_arg(t: *Typer, want: *Type, got: *Type, tps: *Vector<string>, args: *Vector<Expr>, idx: i32) -> bool {
+    if want == null || got == null || args == null || tps == null || idx < 0 || idx >= args.len() {
+        return false;
+    }
+    if !(want.kind == TY_POINTER && want.inner != null && want.inner.kind == TY_NAMED && want.inner.name != null) {
+        return false;
+    }
+    let mut is_tp: bool = false;
+    for let i: i32 = 0; i < tps.len(); i++ {
+        if tps.get(i).eq(want.inner.name) {
+            is_tp = true;
+            break;
+        }
+    }
+    if !is_tp {
+        return false;
+    }
+    if got.kind != TY_NAMED || got.name == null || !t.structs.contains(got.name) {
+        return false;
+    }
+    let a: Expr = args.get(idx);
+    let ap: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
+    *ap = a;
+    let refd: *Expr = expr_unary(UN_ADDR, ap, a.line, a.column);
+    args.set(idx, *refd);
+    return true;
+}
+
 fn arg_compat(want: *Type, got: *Type, tps: *Vector<string>) -> bool {
     if want == null || got == null {
         return true;
@@ -4603,7 +4635,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                                 }
                             }
                             if !arg_compat(want_p, at, msig.type_params) {
-                                if !_coerce_dyn_arg(t, want_p, at, e.args, i) {
+                                if !_coerce_dyn_arg(t, want_p, at, e.args, i) && !_coerce_ref_generic_arg(t, want_p, at, msig.type_params, e.args, i) {
                                     let got_name: string = if a.kind == EX_IDENT { a.str_val } else { "" };
                                     t.err_code_range(a.line, a.column, _arg_span(&a), "", "arg ".concat(p.name).concat(" type mismatch: expected ").concat(type_to_string(want_p)).concat(", got ").concat(type_to_string(at)).concat(_fnptr_hint(t, want_p, at, got_name)));
                                 }
@@ -4747,7 +4779,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                             let a: Expr = e.args.get(i);
                             let at: *Type = infer_expr(t, &a);
                             if !arg_compat(p.ty, at, sig.type_params) {
-                                if !_coerce_dyn_arg(t, p.ty, at, e.args, i) {
+                                if !_coerce_dyn_arg(t, p.ty, at, e.args, i) && !_coerce_ref_generic_arg(t, p.ty, at, sig.type_params, e.args, i) {
                                     let got_name: string = if a.kind == EX_IDENT { a.str_val } else { "" };
                                     t.err_code_range(a.line, a.column, _arg_span(&a), "", "arg ".concat(p.name).concat(" type mismatch: expected ").concat(type_to_string(p.ty)).concat(", got ").concat(type_to_string(at)).concat(_fnptr_hint(t, p.ty, at, got_name)));
                                 }

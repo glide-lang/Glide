@@ -61,3 +61,12 @@ fn test_implicit_dyn_coercion() -> i32 {
     assert_eq!(describe(p), 8);
     return 0;
 }
+
+
+// Auto-ref: a VALUE passes into an `impl Trait` / `<T: Bound>` parameter —
+// the typer inserts the `&` (like Rust's auto-ref).
+fn test_value_into_impl_arg() -> i32 {
+    let v = Boxy { n: 11 };
+    assert_eq!(take_impl(v), 11);
+    return 0;
+}
