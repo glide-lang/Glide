@@ -1968,7 +1968,7 @@ fn _infer_let_type_str(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt) -> string {
 
 // Emit one type-hint InlayHint for an inferred `let`, anchored right after
 // the variable name, if it falls inside the requested line range.
-fn _emit_let_hint(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt, line_start: i32, line_end: i32, hints: *JsonValue) {
+fn _emit_let_hint(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt, line_start: i32, line_end: i32, hints: *JsonValue, state: *LspState) {
     if s.name == null || s.name.eq("") {
         return;
     } // tuple destructuring: skip
@@ -1981,6 +1981,11 @@ fn _emit_let_hint(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt, line_start: i32, 
     }
     let tstr: string = _infer_let_type_str(stmts, host, s);
     if tstr.eq("") {
+        return;
+    }
+    // Don't hint a phantom type: a struct literal of a type that doesn't exist
+    // (`let p = alelo::Penis {}`) would otherwise show `: Penis` inline.
+    if s.let_value != null && s.let_value.kind == EX_STRUCT_LIT && !_type_name_known(stmts, state, tstr) {
         return;
     }
     let col0: i32 = s.name_col - 1 + s.name.len();
@@ -2128,7 +2133,7 @@ fn _emit_lifecycle_hint(root: *Vector<Stmt>, s: *Stmt, lines: *Vector<string>, l
     json_arr_push(hints, h);
 }
 
-fn _collect_inlay_lets(stmts: *Vector<Stmt>, host: *Stmt, body: *Vector<Stmt>, root: *Vector<Stmt>, lines: *Vector<string>, line_start: i32, line_end: i32, hints: *JsonValue) {
+fn _collect_inlay_lets(stmts: *Vector<Stmt>, host: *Stmt, body: *Vector<Stmt>, root: *Vector<Stmt>, lines: *Vector<string>, line_start: i32, line_end: i32, hints: *JsonValue, state: *LspState) {
     if body == null {
         return;
     }
@@ -2137,18 +2142,18 @@ fn _collect_inlay_lets(stmts: *Vector<Stmt>, host: *Stmt, body: *Vector<Stmt>, r
         if s.kind == ST_LET {
             let sp: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
             *sp = s;
-            _emit_let_hint(stmts, host, sp, line_start, line_end, hints);
+            _emit_let_hint(stmts, host, sp, line_start, line_end, hints, state);
             _emit_lifecycle_hint(root, sp, lines, line_start, line_end, hints);
         }
         if s.kind == ST_FOR && s.for_init != null && s.for_init.kind == ST_LET {
-            _emit_let_hint(stmts, host, s.for_init, line_start, line_end, hints);
+            _emit_let_hint(stmts, host, s.for_init, line_start, line_end, hints, state);
             _emit_lifecycle_hint(root, s.for_init, lines, line_start, line_end, hints);
         }
         if s.then_body != null {
-            _collect_inlay_lets(stmts, host, s.then_body, root, lines, line_start, line_end, hints);
+            _collect_inlay_lets(stmts, host, s.then_body, root, lines, line_start, line_end, hints, state);
         }
         if s.else_body != null {
-            _collect_inlay_lets(stmts, host, s.else_body, root, lines, line_start, line_end, hints);
+            _collect_inlay_lets(stmts, host, s.else_body, root, lines, line_start, line_end, hints, state);
         }
     }
 }
@@ -2362,7 +2367,7 @@ pub fn handle_inlay_hint(req: *JsonValue, state: *LspState) {
         if s.kind == ST_FN && s.fn_body != null {
             let host: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
             *host = s;
-            _collect_inlay_lets(doc.stmts, host, s.fn_body, s.fn_body, lines, line_start, line_end, hints);
+            _collect_inlay_lets(doc.stmts, host, s.fn_body, s.fn_body, lines, line_start, line_end, hints, state);
             if own {
                 _collect_param_inlays(doc.stmts, s.fn_body, dpath, line_start, line_end, hints);
             }
@@ -2373,7 +2378,7 @@ pub fn handle_inlay_hint(req: *JsonValue, state: *LspState) {
                     if m.kind == ST_FN && m.fn_body != null {
                         let mh: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
                         *mh = m;
-                        _collect_inlay_lets(doc.stmts, mh, m.fn_body, m.fn_body, lines, line_start, line_end, hints);
+                        _collect_inlay_lets(doc.stmts, mh, m.fn_body, m.fn_body, lines, line_start, line_end, hints, state);
                         if own {
                             _collect_param_inlays(doc.stmts, m.fn_body, dpath, line_start, line_end, hints);
                         }

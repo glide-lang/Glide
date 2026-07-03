@@ -1081,6 +1081,13 @@ case_feature("inlayHint infers struct-literal type",
     lambda r: check("`a = Alelo{}` hint -> ': Alelo'",
         inlay_map(r).get((1,24)) == ": Alelo", f"got {inlay_map(r).get((1,24))}"))
 
+case_feature("inlayHint skips a literal of an unknown type",
+    'fn main() -> i32 { let p = Xyz {}; return 0; }',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/inlayHint","params":dict(_FULL_RANGE)},
+    lambda r: check("no phantom `: Xyz` hint",
+        not any((lbl or "").strip() == ": Xyz" for lbl in inlay_map(r).values()),
+        f"got {list(inlay_map(r).values())}"))
+
 case_feature("inlayHint resolves Vector generic param",
     'fn main() -> i32 {\n'
     '    let v = Vector::new();\n'
