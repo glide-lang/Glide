@@ -158,6 +158,25 @@ case_diagnostics("null comparison stays legal",
     '}',
     expect_codes_absent=["cmp-type-mismatch"])
 
+# Same-file duplicate definitions are errors (fn / struct / enum).
+case_diagnostics("duplicate definitions are flagged",
+    'fn handle() -> i32 { return 0; }\n'
+    'fn handle() -> i32 { return 1; }\n'
+    'enum Provider { A }\n'
+    'enum Provider { B }\n'
+    'struct Alelo { x: i32 }\n'
+    'struct Alelo { y: i32 }\n'
+    'fn main() -> i32 { return handle(); }',
+    expect_codes_present=["duplicate-definition"])
+
+# Unique definitions stay clean.
+case_diagnostics("unique definitions have no duplicate error",
+    'fn handle() -> i32 { return 0; }\n'
+    'enum Provider { A }\n'
+    'struct Alelo { x: i32 }\n'
+    'fn main() -> i32 { return handle(); }',
+    expect_codes_absent=["duplicate-definition"])
+
 # A match whose arms all yield `{}` produces void; binding it is rejected (the
 # alelo bug: `let res = match … {}` then `stream.write(res)`).
 case_diagnostics("binding a void match is rejected",
