@@ -2469,6 +2469,43 @@ fn _index_struct_stmts(state: *LspState, name: string) -> *Vector<Stmt> {
     return null;
 }
 
+// Parse the file that declares trait `name` (project index, then stdlib) and
+// return its stmts, so a cross-file / qualified trait impl can offer the
+// trait's methods as stubs. Null when the trait isn't indexed.
+fn _trait_stmts_from_index(idx: *Vector<ImportableSym>, name: string) -> *Vector<Stmt> {
+    if idx == null {
+        return null;
+    }
+    for let i: i32 = 0; i < idx.len(); i++ {
+        let sym: ImportableSym = idx.get(i);
+        if sym.name == null || !sym.name.eq(name) {
+            continue;
+        }
+        if sym.def_path == null || sym.def_path.eq("") {
+            continue;
+        }
+        let src: string = read_file(sym.def_path);
+        if src.eq("") {
+            continue;
+        }
+        let lex: *Lexer = Lexer::new(src);
+        let par: *Parser = Parser::new(lex);
+        let stmts: *Vector<Stmt> = parse_program(par);
+        if stmts != null {
+            return stmts;
+        }
+    }
+    return null;
+}
+
+fn _index_trait_stmts(state: *LspState, name: string) -> *Vector<Stmt> {
+    let ps: *Vector<Stmt> = _trait_stmts_from_index(state.project_index, name);
+    if ps != null {
+        return ps;
+    }
+    return _trait_stmts_from_index(state.stdlib_index, name);
+}
+
 // Build a goto-definition Location for `name` from the project index
 // (def_path + def_line + def_col), for qualified / not-yet-imported
 // references whose decl isn't in the open doc's AST. Null when not indexed
@@ -4752,25 +4789,40 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
     // real offer is the trait's missing methods as ready stubs — pick one and
     // the signature lands complete, body ready to fill. Keywords follow.
     if _in_impl_body(doc.text, line0, col0) {
-        let _ti: string = _enclosing_impl_trait(doc.text, line0);
+        let _ti_raw: string = _enclosing_impl_trait(doc.text, line0);
+        // The header may qualify the trait (`impl alelo::Pinto for Foo`); the
+        // decl is keyed by its bare leaf, in this file or another.
+        let mut _ti: string = _ti_raw;
+        let mut _ti_cc: i32 = -1;
+        for let k: i32 = 0; k + 1 < _ti_raw.len(); k++ {
+            if _ti_raw.at(k).to_int() == 58 && _ti_raw.at(k + 1).to_int() == 58 {
+                _ti_cc = k;
+            }
+        }
+        if _ti_cc >= 0 {
+            _ti = _ti_raw.substring(_ti_cc + 2, _ti_raw.len());
+        }
         if !_ti.eq("") {
-            let _td: *Stmt = find_top_decl(doc.stmts, _ti);
-            if _td != null && _td.kind == ST_TRAIT && _td.impl_methods != null {
-                // Methods this impl already wrote (any impl of this trait in
-                // this file at/around the cursor).
-                let _done: *HashMap<bool> = HashMap::new();
-                for let ii: i32 = 0; ii < doc.stmts.len(); ii++ {
-                    let _is: Stmt = doc.stmts.get(ii);
-                    if _is.kind != ST_IMPL || _is.impl_trait_name == null || !_is.impl_trait_name.eq(_ti) || _is.impl_methods == null {
-                        continue;
-                    }
-                    for let mj: i32 = 0; mj < _is.impl_methods.len(); mj++ {
-                        let _im: Stmt = _is.impl_methods.get(mj);
-                        if _im.name != null {
-                            _done.insert(_im.name, true);
-                        }
+            let mut _td: *Stmt = find_top_decl(doc.stmts, _ti);
+            if _td == null || _td.kind != ST_TRAIT {
+                let _tstmts: *Vector<Stmt> = _index_trait_stmts(state, _ti);
+                if _tstmts != null {
+                    let _tcand: *Stmt = find_top_decl(_tstmts, _ti);
+                    if _tcand != null && _tcand.kind == ST_TRAIT {
+                        _td = _tcand;
                     }
                 }
+            }
+            if _td != null && _td.kind == ST_TRAIT && _td.impl_methods != null {
+                // Methods already written in THIS impl body — read from the
+                // TEXT the user typed, not the parsed AST. The parser
+                // materializes trait defaults into every impl, and another
+                // type's impl of the same trait (the trait author's own,
+                // arriving via the import) would also pollute an AST-based
+                // scan; a text scan of the enclosing braces sees exactly what
+                // the user has written so far.
+                let _done: *HashMap<bool> = HashMap::new();
+                _impl_written_methods(doc.text, line0, _done);
                 for let mi: i32 = 0; mi < _td.impl_methods.len(); mi++ {
                     let tm: Stmt = _td.impl_methods.get(mi);
                     if tm.kind != ST_FN || tm.name == null || _done.contains(tm.name) {
@@ -6613,6 +6665,134 @@ fn _code_action_title(code: string, new_text: string) -> string {
 // The trait name of the nearest enclosing `impl <Trait> for <Type> {` header
 // above `line0` ("" for a plain impl / none). Text-based so an EMPTY impl body
 // works — the AST helper keys off methods, which an empty impl doesn't have.
+// Collect the method names already written in the impl block enclosing
+// `line0`, by scanning the text from the impl header down to (but not past)
+// the closing brace. Used to drop already-implemented methods from the stub
+// offer without trusting the parser (which materializes defaults).
+fn _impl_written_methods(text: string, line0: i32, done: *HashMap<bool>) {
+    let lines: *Vector<string> = Vector::new();
+    let n: i32 = text.len();
+    let mut ls: i32 = 0;
+    for let c: i32 = 0; c <= n; c++ {
+        if c == n || text.at(c).to_int() == 10 {
+            lines.push(text.substring(ls, c));
+            ls = c + 1;
+        }
+    }
+    // Find the impl header line at/above line0.
+    let mut hdr: i32 = -1;
+    for let i: i32 = line0; i >= 0; i = i - 1 {
+        if i >= lines.len() {
+            continue;
+        }
+        let line: string = lines.get(i);
+        let mut j: i32 = 0;
+        while j < line.len() && (line.at(j).to_int() == 32 || line.at(j).to_int() == 9) {
+            j = j + 1;
+        }
+        let rest: string = line.substring(j, line.len());
+        if rest.starts_with("impl ") || rest.starts_with("impl<") {
+            hdr = i;
+            break;
+        }
+        if line.len() > 0 && line.at(0).to_int() == 125 {
+            return;
+        }
+    }
+    if hdr < 0 {
+        return;
+    }
+    // From the header down, collect `fn NAME` until the impl's own `}`.
+    for let i: i32 = hdr; i < lines.len(); i++ {
+        let line: string = lines.get(i);
+        let mut j: i32 = 0;
+        while j < line.len() && (line.at(j).to_int() == 32 || line.at(j).to_int() == 9) {
+            j = j + 1;
+        }
+        let rest: string = line.substring(j, line.len());
+        if i > hdr && rest.starts_with("}") {
+            return;
+        }
+        // `pub fn name` / `fn name`
+        let mut r2: string = rest;
+        if r2.starts_with("pub ") {
+            r2 = r2.substring(4, r2.len());
+        }
+        if r2.starts_with("fn ") {
+            let after: string = r2.substring(3, r2.len());
+            let mut nm: string = "";
+            for let k: i32 = 0; k < after.len(); k++ {
+                let ch: i32 = after.at(k).to_int();
+                if ch >= 65 && ch <= 90 || ch >= 97 && ch <= 122 || ch >= 48 && ch <= 57 || ch == 95 {
+                    nm = nm.concat(after.substring(k, k + 1));
+                } else {
+                    break;
+                }
+            }
+            if !nm.eq("") {
+                done.insert(nm, true);
+            }
+        }
+    }
+}
+
+// The target type of the enclosing `impl … for <Target> {` header// The target type of the enclosing `impl … for <Target> {` header (the bare
+// type name), or "" — companion to _enclosing_impl_trait.
+fn _enclosing_impl_target(text: string, line0: i32) -> string {
+    let mut ln: i32 = 0;
+    let mut cur: i32 = 0;
+    let starts: *Vector<string> = Vector::new();
+    let n: i32 = text.len();
+    let mut line_start: i32 = 0;
+    while cur <= n && ln <= line0 {
+        if cur == n || text.at(cur).to_int() == 10 {
+            starts.push(text.substring(line_start, cur));
+            line_start = cur + 1;
+            ln = ln + 1;
+        }
+        cur = cur + 1;
+    }
+    for let i: i32 = starts.len() - 1; i >= 0; i = i - 1 {
+        let line: string = starts.get(i);
+        let mut j: i32 = 0;
+        while j < line.len() && (line.at(j).to_int() == 32 || line.at(j).to_int() == 9) {
+            j = j + 1;
+        }
+        let rest: string = line.substring(j, line.len());
+        if rest.starts_with("impl ") || rest.starts_with("impl<") {
+            let fi: i32 = rest.index_of(" for ");
+            if fi < 0 {
+                return "";
+            }
+            let mut tail: string = rest.substring(fi + 5, rest.len());
+            // stop at the first `{`, whitespace, or generic bracket
+            let mut out: string = "";
+            for let k: i32 = 0; k < tail.len(); k++ {
+                let c: i32 = tail.at(k).to_int();
+                if c == 32 || c == 9 || c == 123 || c == 60 {
+                    break;
+                }
+                out = out.concat(tail.substring(k, k + 1));
+            }
+            // drop a module qualifier on the target too
+            let mut cc: i32 = -1;
+            for let z: i32 = 0; z + 1 < out.len(); z++ {
+                if out.at(z).to_int() == 58 && out.at(z + 1).to_int() == 58 {
+                    cc = z;
+                }
+            }
+            if cc >= 0 {
+                out = out.substring(cc + 2, out.len());
+            }
+            return out;
+        }
+        if line.len() > 0 && line.at(0).to_int() == 125 {
+            return "";
+        }
+    }
+    return "";
+}
+
 fn _enclosing_impl_trait(text: string, line0: i32) -> string {
     let mut ln: i32 = 0;
     let mut cur: i32 = 0;
@@ -6721,6 +6901,13 @@ fn _resolve_qualifier_module(stmts: *Vector<Stmt>, path: string, qual: string) -
         let full: string = module_path_from_path(s.import_path);
         if full.eq("") {
             continue;
+        }
+        // Only pin `::`-qualified modules (stdlib/deps, where the short leaf is
+        // ambiguous — `client` in http vs tls12). A loose single-segment module
+        // (`import alelo;`) derives to a bare FS-path leaf with no `::`; leave
+        // it unpinned so the bare qualifier matches the index by leaf.
+        if !full.contains("::") {
+            return "";
         }
         if s.import_short.eq(qual) {
             return full;

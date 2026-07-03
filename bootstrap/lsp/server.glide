@@ -815,21 +815,48 @@ fn _lsp_autofetch_deps(state: *LspState, root: string) {
     }
 }
 
+// Index just the immediate `.glide` files of `dir` (no recursion) as modules
+// under their bare file name, so loose sibling files become importable and
+// qualifiable (`import alelo;`, `alelo::Penis`). Skips the manifest.
+fn _index_flat_glide_dir(state: *LspState, dir: string, target: *Vector<ImportableSym>) {
+    let files: *Vector<string> = fs_list_dir(dir, ".glide");
+    if files == null {
+        return;
+    }
+    for let i: i32 = 0; i < files.len(); i++ {
+        let fname: string = files.get(i);
+        if fname.eq("") || fname.eq("glide.glide") {
+            continue;
+        }
+        let path: string = dir.concat("/").concat(fname);
+        let mod_name: string = drop_glide_ext(fname);
+        _index_one_module(state, path, mod_name, mod_name, target);
+    }
+}
+
 fn _refresh_project_index(state: *LspState, uri: string) {
     let path: string = uri_to_path(uri);
     if path.eq("") {
         return;
     }
     let dir: string = parent_dir(path);
-    let root: string = find_manifest_root(dir);
+    let mut root: string = find_manifest_root(dir);
+    let mut has_manifest: bool = true;
     if root.eq("") {
-        return;
+        // No `glide.glide` above the file — treat the file's OWN directory as
+        // the project root so a loose multi-file layout (alelo.glide +
+        // main.glide side by side, no manifest, no src/) still gets cross-file
+        // completion and import for its siblings.
+        root = dir;
+        has_manifest = false;
     }
     // Auto-fetch any declared-but-uncached dep before indexing, so imports
     // resolve without the user running `glide fetch` first. Guarded to run
     // once per project per session; creates the `build/deps/` links the
     // fingerprint below then picks up.
-    _lsp_autofetch_deps(state, root);
+    if has_manifest {
+        _lsp_autofetch_deps(state, root);
+    }
     // Re-trigger the rebuild whenever the dep set could have changed:
     // a different project root, a manifest edit, a new `build/deps/`
     // entry from `glide fetch`, or a file added/removed within an
@@ -855,6 +882,10 @@ fn _refresh_project_index(state: *LspState, uri: string) {
     // which strings are libc-owned vs cache-owned to free safely.
     let fresh: *Vector<ImportableSym> = Vector::new();
     state.project_index = fresh;
+    // Index the root directory's own top-level `.glide` files — the loose
+    // layout where modules sit next to `main.glide` with no `src/`. Skips the
+    // manifest file itself. Non-recursive, so `build/` artefacts are ignored.
+    _index_flat_glide_dir(state, root, fresh);
     let src_dir: string = root.concat("/src");
     if __glide_fs_is_dir(src_dir) {
         // Project src isn't a "package" in the dep sense — no entry-file
@@ -909,6 +940,19 @@ fn _project_dep_fingerprint(root: string) -> string {
     let srcd: string = root.concat("/src");
     if __glide_fs_is_dir(srcd) {
         _fp_walk_glide_files_content(srcd, &out);
+    }
+    // Loose root-level modules: hash their names+content so editing a sibling
+    // (adding a pub decl to alelo.glide) rebuilds the index without a restart.
+    out = out.concat("\0root:");
+    let rootfiles: *Vector<string> = fs_list_dir(root, ".glide");
+    if rootfiles != null {
+        for let i: i32 = 0; i < rootfiles.len(); i++ {
+            let rf: string = rootfiles.get(i);
+            if rf.eq("") || rf.eq("glide.glide") {
+                continue;
+            }
+            out = out.concat(rf).concat("=").concat(read_file(root.concat("/").concat(rf))).concat(";");
+        }
     }
     out = out.concat("\0gm:");
     let gm: string = root.concat("/build/deps");

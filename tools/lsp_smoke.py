@@ -1683,6 +1683,38 @@ case_diagnostics("real duplicate import still flagged",
     'fn main() -> i32 { let _e = fs::exists("/"); return 0; }',
     expect_codes_present=["redundant-import"])
 
+# Cross-file, loose-layout project (no manifest): a sibling module's `pub`
+# symbols are qualifiable and importable, and a cross-file trait impl offers
+# the trait's methods as stubs.
+_ALELO = ("pub trait Pinto {\n"
+          "    fn ola(&self) -> string;\n"
+          "    fn saudacao(&self) {\n"
+          "        return;\n"
+          "    }\n"
+          "}\n"
+          "pub struct Penis {}\n"
+          "impl Pinto for Penis {\n"
+          "    pub fn ola(&self) -> string { return \"hi\"; }\n"
+          "}\n")
+
+case_completion_project("loose module `alelo::` lists its pub members",
+    {"alelo.glide": _ALELO,
+     "main.glide": "import alelo;\n\nfn main() -> i32 {\n    let p = alelo::\n    return 0;\n}\n"},
+    "main.glide", {"line": 3, "character": 19},
+    present=["Penis", "Pinto"])
+
+case_completion_project("loose module `import alelo::` lists its pub members",
+    {"alelo.glide": _ALELO,
+     "use.glide": "import alelo::\n"},
+    "use.glide", {"line": 0, "character": 14},
+    present=["Penis", "Pinto"])
+
+case_completion_project("cross-file trait impl offers the trait's methods",
+    {"alelo.glide": _ALELO,
+     "impl.glide": "import alelo;\n\nstruct Foo {}\n\nimpl alelo::Pinto for Foo {\n    \n}\n"},
+    "impl.glide", {"line": 5, "character": 4},
+    present=["fn ola(\u2026)", "fn saudacao(\u2026)"])
+
 # A trait DEFAULT method with a non-void return and no return statement is a
 # missing-return error, same as a free fn.
 case_diagnostics("trait default method must return on every path",
