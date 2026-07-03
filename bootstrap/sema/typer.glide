@@ -5240,7 +5240,11 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 _un_col = e.field_col;
             }
             t.err_code_range(_un_line, _un_col, e.str_val.len(), "", "unknown struct `".concat(e.str_val).concat("` — did you forget an `import`?"));
-            return ty_named(e.str_val);
+            // The struct doesn't exist, so DON'T infer the binding as it — a
+            // phantom `let p: Penis` is misleading (hover, downstream). Return
+            // null, matching how an unknown identifier types (`let x` with no
+            // type).
+            return null;
         }
         // Construction-site field visibility: setting a field of a struct
         // declared in ANOTHER file requires that field to be `pub` — exactly

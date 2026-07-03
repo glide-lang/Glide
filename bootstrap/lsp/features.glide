@@ -1228,13 +1228,52 @@ fn find_local_let_in_body(body: *Vector<Stmt>, name: string) -> *Stmt {
 // Render a hover string for a local `let`. Prefers the explicit annotation;
 // otherwise infers from the initializer (literals, or `Generic::new()` plus
 // a constraint from later usage like `var.push(x)` to resolve T).
-fn render_hover_for_let(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt, hpath: string) -> string {
+// True if `name` is a struct/enum/trait declared in this file or in the
+// project / stdlib index. Used so hover doesn't infer a phantom type for a
+// literal of a type that doesn't exist (`let p = alelo::Penis {}`).
+fn _type_name_known(stmts: *Vector<Stmt>, state: *LspState, name: string) -> bool {
+    if name == null || name.eq("") {
+        return true;
+    }
+    let ld: *Stmt = find_top_decl(stmts, name);
+    if ld != null {
+        return true;
+    }
+    if state == null {
+        return false;
+    }
+    if _index_has_type(state.project_index, name) {
+        return true;
+    }
+    return _index_has_type(state.stdlib_index, name);
+}
+
+fn _index_has_type(idx: *Vector<ImportableSym>, name: string) -> bool {
+    if idx == null {
+        return false;
+    }
+    for let i: i32 = 0; i < idx.len(); i++ {
+        let sym: ImportableSym = idx.get(i);
+        if sym.name == null || !sym.name.eq(name) {
+            continue;
+        }
+        if sym.kind == ST_STRUCT || sym.kind == ST_ENUM || sym.kind == ST_TRAIT {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn render_hover_for_let(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt, hpath: string, state: *LspState) -> string {
     let mut header: string = "let ";
     if s.is_mut {
         header = header.concat("mut ");
     }
     header = header.concat(s.name);
     let mut inferred: bool = false;
+    // Set when the initializer is a struct literal of a type that doesn't
+    // exist — suppresses the fallback inferencers so no phantom type shows.
+    let mut _unknown_lit: bool = false;
     if s.let_ty != null {
         header = header.concat(": ").concat(type_to_string_pretty(s.let_ty));
     } else {
@@ -1287,8 +1326,16 @@ fn render_hover_for_let(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt, hpath: stri
                                     inferred = true;
                                 } else {
                                     if e.kind == EX_STRUCT_LIT && e.str_val != null && !e.str_val.eq("") {
-                                        header = header.concat(": ").concat(e.str_val);
-                                        inferred = true;
+                                        // Only show the type if it actually
+                                        // exists; a literal of an unknown type
+                                        // (`alelo::Penis {}` with no Penis) must
+                                        // not infer a phantom `let p: Penis`.
+                                        if _type_name_known(stmts, state, e.str_val) {
+                                            header = header.concat(": ").concat(e.str_val);
+                                            inferred = true;
+                                        } else {
+                                            _unknown_lit = true;
+                                        }
                                     }
                                 }
                             }
@@ -1300,7 +1347,7 @@ fn render_hover_for_let(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt, hpath: stri
         // Fallback for anything the literal/constructor branches don't cover —
         // method calls, `?` propagation, field access — via the shared
         // Expr inferencer, so `let r = stream.read_str(1024)?` shows `string`.
-        if !inferred && s.let_value != null {
+        if !inferred && !_unknown_lit && s.let_value != null {
             let it: *Type = lsp_infer_expr(stmts, host, s.let_value);
             if it != null {
                 header = header.concat(": ").concat(type_to_string_pretty(it));
@@ -1310,7 +1357,7 @@ fn render_hover_for_let(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt, hpath: stri
         // Match-expression initializer (`let res = match r { ok(v) => v, … }`):
         // the AST-walking resolver unifies the yield arms (and resolves payload
         // bindings through the scrutinee), which lsp_infer_expr doesn't.
-        if !inferred && s.let_value != null && s.let_value.kind == EX_MATCH {
+        if !inferred && !_unknown_lit && s.let_value != null && s.let_value.kind == EX_MATCH {
             let mt: *Type = _expr_type_node(s.let_value, stmts, s.line - 1, hpath, 0);
             if mt != null {
                 header = header.concat(": ").concat(type_to_string_pretty(mt));
@@ -3179,7 +3226,7 @@ pub fn handle_hover(req: *JsonValue, state: *LspState) {
             if content.eq("") {
                 let lst: *Stmt = find_local_let_in_body(host.fn_body, word);
                 if lst != null {
-                    content = render_hover_for_let(doc.stmts, host, lst, uri_to_path(uri));
+                    content = render_hover_for_let(doc.stmts, host, lst, uri_to_path(uri), state);
                 }
             }
             // Not a `let` or a param — a match-arm binding (`f` in `ok(f) =>`)

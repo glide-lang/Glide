@@ -1398,6 +1398,34 @@ def case_hover_has(label, body, pos, expect_substr):
     check(f"hover mentions {expect_substr!r}",
           expect_substr.lower() in str(text).lower(), f"got {str(text)[:90]!r}")
 
+def case_hover_lacks(label, body, pos, absent_substr):
+    """Single-file hover whose markdown must NOT contain `absent_substr` (ci)."""
+    print(f"\n[hover] {label}")
+    path, uri = write_tmp(label.replace(" ", "_") + ".glide", body)
+    msgs = [
+        {"jsonrpc":"2.0","id":1,"method":"initialize","params":{}},
+        {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{
+            "textDocument":{"uri":uri,"languageId":"glide","version":1,"text":body}}},
+        {"jsonrpc":"2.0","id":2,"method":"textDocument/hover",
+         "params":{"textDocument":{"uri":uri},"position":pos}},
+        {"jsonrpc":"2.0","method":"exit","params":None},
+    ]
+    rs = run_session(msgs)
+    target = next((r for r in rs if r.get("id") == 2), None)
+    result = (target or {}).get("result") or {}
+    contents = result.get("contents") if isinstance(result, dict) else None
+    text = contents.get("value", "") if isinstance(contents, dict) else (contents or "")
+    if isinstance(text, list):
+        text = " ".join(str(x) for x in text)
+    check(f"hover does NOT mention {absent_substr!r}",
+          absent_substr.lower() not in str(text).lower(), f"got {str(text)[:90]!r}")
+
+# A struct literal of a type that doesn't exist must not infer a phantom type
+# (`let y = Xyz {}` hovers as `let y`, no `: Xyz`).
+case_hover_lacks("unknown struct literal infers no phantom type",
+    "fn main() -> i32 {\n    let y = Xyz {};\n    return 0;\n}\n",
+    {"line": 1, "character": 8}, ": Xyz")
+
 def case_definition_line(label, body, pos, expect_line):
     """Single-file goto-definition that must resolve to `expect_line` (0-based);
     pass expect_line=None to assert NO definition (e.g. an intrinsic)."""
