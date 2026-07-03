@@ -1337,6 +1337,12 @@ fn _check_type_known(t: *Typer, ty: *Type, line: i32, col: i32) {
     if ty.kind == TY_NAMED {
         if !_is_known_type_name(t, ty.name) {
             _emit_unknown_type(t, ty.name, pl, pc);
+        } else {
+            // Known but not imported here: a real declared struct loaded via
+            // some other file still needs its own import to be named.
+            if t.struct_origin.contains(ty.name) && !t.is_visible(ty.name) {
+                t.err_code_range(pl, pc, ty.name.len(), "type-not-in-scope", "type `".concat(ty.name).concat("` is not in scope; import it or qualify it (`<module>::").concat(ty.name).concat("`)"));
+            }
         }
         return;
     }
@@ -5235,6 +5241,12 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         // private field cannot be built with a literal outside its own file —
         // the private fields aren't settable there, so the type owns its
         // construction through a public function (`T::new(...)`).
+        // The type has to be in scope to build it, same rule as calling a
+        // static method on it: a loaded-but-unimported struct is an error.
+        if t.enforce_visibility && e.str_val != null && t.struct_origin.contains(e.str_val) && !t.is_visible(e.str_val) {
+            t.err_code_range(e.line, e.column, e.str_val.len(), "type-not-in-scope", "type `".concat(e.str_val).concat("` is not in scope; import it or qualify it (`<module>::").concat(e.str_val).concat("`)"));
+            return ty_named(e.str_val);
+        }
         if t.enforce_visibility && e.str_val != null && t.struct_origin.contains(e.str_val) && t.struct_has_private.contains(e.str_val) {
             let owner: string = t.struct_origin.get(e.str_val);
             if !owner.eq(t.current_origin) {

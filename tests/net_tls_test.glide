@@ -1,5 +1,6 @@
 import stdlib::testing::*;
 import stdlib::net::tls::*;
+import stdlib::http::*;
 import stdlib::http::client::*;
 
 // Live-internet tests — skip via env-var if offline. Each opens a real

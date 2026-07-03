@@ -1695,6 +1695,22 @@ case_diagnostics("sibling type not brought by nested import",
     '}',
     expect_codes_present=["type-not-in-scope"])
 
+# The same rule applies to a type ANNOTATION and a struct LITERAL, not just a
+# static-method call.
+case_diagnostics("unimported type in annotation is flagged",
+    'import stdlib::http::{cookies::CookieJar};\n'
+    'fn take(c: *Cookie) -> i32 { return 0; }\n'
+    'fn main() -> i32 { return 0; }',
+    expect_codes_present=["type-not-in-scope"])
+
+case_diagnostics("unimported type in struct literal is flagged",
+    'import stdlib::http::{cookies::CookieJar};\n'
+    'fn main() -> i32 {\n'
+    '    let c = Cookie { name: "", value: "" };\n'
+    '    return 0;\n'
+    '}',
+    expect_codes_present=["type-not-in-scope"])
+
 # fmt folds shared-prefix brace entries into a nested group.
 case_feature("formatting folds nested import groups",
     'import stdlib::http::{client, cookies::CookieJar, cookies::Cookie};\n'
