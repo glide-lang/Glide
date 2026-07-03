@@ -5683,7 +5683,7 @@ fn collect_uses_in_stmt(s: *Stmt, name: string, out: *Vector<UseSite>) {
     }
 }
 
-fn use_to_range(u: *UseSite, name_len: i32) -> *JsonValue {
+fn use_to_range(u: *UseSite, name_len: i32, text: string, pos_utf8: bool) -> *JsonValue {
     let r: *JsonValue = json_object();
     let mut l: i32 = u.line - 1;
     if l < 0 {
@@ -5693,19 +5693,28 @@ fn use_to_range(u: *UseSite, name_len: i32) -> *JsonValue {
     if c < 0 {
         c = 0;
     }
+    // Byte columns -> UTF-16 for the editor (identity on ASCII lines, or when
+    // the client negotiated UTF-8).
+    let mut cs: i32 = c;
+    let mut ce: i32 = c + name_len;
+    if !pos_utf8 && text != null {
+        cs = byte_to_u16_col(text, l, c);
+        ce = byte_to_u16_col(text, l, c + name_len);
+    }
     let s: *JsonValue = json_object();
     json_obj_set(s, "line", json_int(l));
-    json_obj_set(s, "character", json_int(c));
+    json_obj_set(s, "character", json_int(cs));
     let e: *JsonValue = json_object();
     json_obj_set(e, "line", json_int(l));
-    json_obj_set(e, "character", json_int(c + name_len));
+    json_obj_set(e, "character", json_int(ce));
     json_obj_set(r, "start", s);
     json_obj_set(r, "end", e);
     return r;
 }
 
 pub fn handle_references(req: *JsonValue, state: *LspState) {
-    let (id, uri, line0, col0) = read_pos_params(req);
+    let (id, uri, line0, col0raw) = read_pos_params(req);
+    let col0: i32 = lsp_in_col(state, uri, line0, col0raw);
     if !state.docs.contains(uri) {
         lsp_send_response(id, json_array());
         return;
@@ -5751,7 +5760,7 @@ pub fn handle_references(req: *JsonValue, state: *LspState) {
         }
         let loc: *JsonValue = json_object();
         json_obj_set(loc, "uri", json_string(uri));
-        json_obj_set(loc, "range", use_to_range(&u, word.len()));
+        json_obj_set(loc, "range", use_to_range(&u, word.len(), doc.text, state.pos_utf8));
         json_arr_push(arr, loc);
     }
     lsp_send_response(id, arr);
@@ -5826,7 +5835,8 @@ fn _body_declares_local(body: *Vector<Stmt>, word: string) -> bool {
 }
 
 pub fn handle_document_highlight(req: *JsonValue, state: *LspState) {
-    let (id, uri, line0, col0) = read_pos_params(req);
+    let (id, uri, line0, col0raw) = read_pos_params(req);
+    let col0: i32 = lsp_in_col(state, uri, line0, col0raw);
     if !state.docs.contains(uri) {
         lsp_send_response(id, json_array());
         return;
@@ -5869,7 +5879,7 @@ pub fn handle_document_highlight(req: *JsonValue, state: *LspState) {
             continue;
         }
         let h: *JsonValue = json_object();
-        json_obj_set(h, "range", use_to_range(&u, word.len()));
+        json_obj_set(h, "range", use_to_range(&u, word.len(), doc.text, state.pos_utf8));
         json_obj_set(h, "kind", json_int(1)); // 1 = Text (read), 2 = Read, 3 = Write
         json_arr_push(arr, h);
     }
@@ -5915,7 +5925,7 @@ pub fn handle_rename(req: *JsonValue, state: *LspState) {
             continue;
         }
         let edit: *JsonValue = json_object();
-        json_obj_set(edit, "range", use_to_range(&u, word.len()));
+        json_obj_set(edit, "range", use_to_range(&u, word.len(), doc.text, state.pos_utf8));
         json_obj_set(edit, "newText", json_string(new_name));
         json_arr_push(edits, edit);
     }
@@ -5931,7 +5941,8 @@ pub fn handle_rename(req: *JsonValue, state: *LspState) {
 // highlight while the user types the new name. Refuses keywords, literals,
 // and empty selections.
 pub fn handle_prepare_rename(req: *JsonValue, state: *LspState) {
-    let (id, uri, line0, col0) = read_pos_params(req);
+    let (id, uri, line0, col0raw) = read_pos_params(req);
+    let col0: i32 = lsp_in_col(state, uri, line0, col0raw);
     if !state.docs.contains(uri) {
         lsp_send_response(id, json_null());
         return;

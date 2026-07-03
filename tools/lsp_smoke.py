@@ -900,6 +900,22 @@ case_feature("documentHighlight anchors a method use at the method name",
 # module name in `import w3;` lights the import segment AND every `w3::` use.
 # A function-local name (self / param / local) highlights only within its own
 # fn — `n` in `a` must not light up `b`'s `n`.
+# Positions after a multi-byte char convert byte->UTF-16 for the editor: the
+# `x` after "Olá" (á = 2 bytes, 1 UTF-16 unit) highlights at its UTF-16 column,
+# not shifted right by the extra byte.
+case_feature("documentHighlight is UTF-16-correct after a multi-byte char",
+    'fn main() -> i32 {\n'
+    '    let x = 1;\n'
+    '    println!("Ol\u00e1", x);\n'
+    '    return 0;\n'
+    '}',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/documentHighlight",
+     "params":{"position":{"line":1,"character":8}}},  # `x` on the let line
+    lambda r: check("`x` after Olá highlights at UTF-16 col 20 on line 2",
+        any(h["range"]["start"]["line"] == 2 and h["range"]["start"]["character"] == 20
+            for h in (r.get("result") or [])),
+        f"got {[h['range']['start'] for h in (r.get('result') or [])]}"))
+
 # Macro invocations highlight: `println!` at two call sites lights both.
 case_feature("documentHighlight covers macro invocations",
     'fn main() -> i32 {\n'

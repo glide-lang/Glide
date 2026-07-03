@@ -238,6 +238,9 @@ pub struct LspState {
     // `initialize`. When false, completion must emit plain, valid text — a
     // naive client otherwise mangles `${1:v}` into a bare `1`.
     pub client_snippets: bool,
+    // True when the client negotiated UTF-8 positions; then byte columns pass
+    // through unchanged. False (default) means UTF-16 — convert at the boundary.
+    pub pos_utf8: bool,
 }
 
 pub fn lsp_state_new() -> *LspState {
@@ -260,6 +263,7 @@ pub fn lsp_state_new() -> *LspState {
     let fa: *HashMap<bool> = HashMap::new();
     s.fetch_attempted = fa;
     s.client_snippets = false;
+    s.pos_utf8 = false;
     populate_stdlib_index(s);
     return s;
 }
@@ -346,6 +350,96 @@ pub fn lsp_send_notification(method: string, params: *JsonValue) {
 
 // Pull the request id and the `textDocument`/`position` fields every
 // position-based handler needs. Returns (id, uri, line, col).
+// Byte offset where 0-indexed `line0` begins in `text` (byte-indexed).
+fn _line_byte_start(text: string, line0: i32) -> i32 {
+    let n: i32 = text.len();
+    let mut ln: i32 = 0;
+    let mut i: i32 = 0;
+    while i < n && ln < line0 {
+        if text.at(i).to_int() == 10 {
+            ln = ln + 1;
+        }
+        i = i + 1;
+    }
+    return i;
+}
+
+// UTF-8 lead-byte -> (byte length, UTF-16 unit count).
+fn _utf8_len(c0: i32) -> i32 {
+    let mut c: i32 = c0;
+    if c < 0 {
+        c = c + 256;
+    }
+    if c >= 240 {
+        return 4;
+    }
+    if c >= 224 {
+        return 3;
+    }
+    if c >= 192 {
+        return 2;
+    }
+    return 1;
+}
+
+fn _utf8_units(c0: i32) -> i32 {
+    let mut c: i32 = c0;
+    if c < 0 {
+        c = c + 256;
+    }
+    if c >= 240 {
+        return 2;
+    }
+    return 1;
+}
+
+// Convert a byte column (Glide's internal, from the byte-counting lexer) to a
+// UTF-16 unit column for the editor. Identity on an all-ASCII line.
+pub fn byte_to_u16_col(text: string, line0: i32, byte_col: i32) -> i32 {
+    if text == null || byte_col <= 0 {
+        return byte_col;
+    }
+    let start: i32 = _line_byte_start(text, line0);
+    let n: i32 = text.len();
+    let mut b: i32 = 0;
+    let mut u: i32 = 0;
+    let mut i: i32 = start;
+    while i < n && b < byte_col {
+        let cc: i32 = text.at(i).to_int();
+        if cc == 10 {
+            break;
+        }
+        let l: i32 = _utf8_len(cc);
+        b = b + l;
+        u = u + _utf8_units(cc);
+        i = i + l;
+    }
+    return u;
+}
+
+// Convert a UTF-16 unit column from the editor to Glide's byte column.
+pub fn u16_to_byte_col(text: string, line0: i32, u16_col: i32) -> i32 {
+    if text == null || u16_col <= 0 {
+        return u16_col;
+    }
+    let start: i32 = _line_byte_start(text, line0);
+    let n: i32 = text.len();
+    let mut b: i32 = 0;
+    let mut u: i32 = 0;
+    let mut i: i32 = start;
+    while i < n && u < u16_col {
+        let cc: i32 = text.at(i).to_int();
+        if cc == 10 {
+            break;
+        }
+        let l: i32 = _utf8_len(cc);
+        b = b + l;
+        u = u + _utf8_units(cc);
+        i = i + l;
+    }
+    return b;
+}
+
 pub fn read_pos_params(req: *JsonValue) -> (*JsonValue, string, i32, i32) {
     let params: *JsonValue = json_get(req, "params");
     let pos: *JsonValue = json_get(params, "position");
@@ -353,27 +447,28 @@ pub fn read_pos_params(req: *JsonValue) -> (*JsonValue, string, i32, i32) {
     return (json_get(req, "id"), uri, json_as_int(json_get(pos, "line")), json_as_int(json_get(pos, "character")));
 }
 
+// Convert an incoming UTF-16 column to Glide's byte column for the doc at
+// `uri`, when the client didn't negotiate UTF-8. Identity otherwise. Every
+// position-taking handler runs its col0 through this so word_at / AST columns
+// line up on multi-byte lines.
+pub fn lsp_in_col(state: *LspState, uri: string, line0: i32, u16_col: i32) -> i32 {
+    if state.pos_utf8 || !state.docs.contains(uri) {
+        return u16_col;
+    }
+    let doc: LspDoc = state.docs.get(uri);
+    return u16_to_byte_col(doc.text, line0, u16_col);
+}
+
 // ---- Method handlers ---------------------------------------------------
 fn handle_initialize(req: *JsonValue) {
     let id: *JsonValue = json_get(req, "id");
     let result: *JsonValue = json_object();
     let caps: *JsonValue = json_object();
-    // Position encoding negotiation (LSP 3.17). Glide's lexer counts byte
-    // (UTF-8) columns, so ask for UTF-8 when the client offers it — otherwise
-    // the editor's default UTF-16 misplaces every position on a line that has
-    // a multi-byte character before it (e.g. `self.ola()` after `"Olá"`).
-    // Silently stays on UTF-16 when the client doesn't advertise UTF-8.
-    let encs: *JsonValue = json_get(json_get(json_get(json_get(req, "params"), "capabilities"), "general"), "positionEncodings");
-    let mut want_u8: bool = false;
-    let en: i32 = _json_arr_len(encs);
-    for let i: i32 = 0; i < en; i++ {
-        if json_as_string(json_at(encs, i)).eq("utf-8") {
-            want_u8 = true;
-        }
-    }
-    if want_u8 {
-        json_obj_set(caps, "positionEncoding", json_string("utf-8"));
-    }
+    // Position encoding: the editor defaults to UTF-16, but Glide's lexer
+    // counts byte (UTF-8) columns. Rather than negotiate (and risk a client
+    // that declares UTF-8 support inconsistently), the server keeps UTF-16 and
+    // converts every position at the boundary (see lsp_in_col / use_to_range /
+    // byte_to_u16_col), which also handles astral chars via surrogate counting.
     // textDocumentSync: 1 = Full sync. We re-parse on every change.
     json_obj_set(caps, "textDocumentSync", json_int(1));
     json_obj_set(caps, "hoverProvider", json_bool(true));
