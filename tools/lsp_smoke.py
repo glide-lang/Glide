@@ -1683,6 +1683,16 @@ case_diagnostics("real duplicate import still flagged",
     'fn main() -> i32 { let _e = fs::exists("/"); return 0; }',
     expect_codes_present=["redundant-import"])
 
+# A trait DEFAULT method with a non-void return and no return statement is a
+# missing-return error, same as a free fn.
+case_diagnostics("trait default method must return on every path",
+    'trait Measured {\n'
+    '    fn size() -> i32 {\n'
+    '    }\n'
+    '}\n'
+    'fn main() -> i32 { return 0; }',
+    expect_codes_present=["missing-return"])
+
 # A sibling type from a nested import is NOT in bare scope (strict, Rust-style):
 # `cookies::CookieJar` loads the cookies module and brings CookieJar, but a bare
 # `Cookie` (also in cookies, not imported) is a compile error.

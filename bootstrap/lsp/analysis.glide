@@ -1181,6 +1181,18 @@ pub fn analysis_missing_return(t: *Typer, program: *Vector<Stmt>) {
             }
             continue;
         }
+        // A trait's DEFAULT method (one with a body) is the user's own code and
+        // gets the same every-path return check. Signature-only methods have no
+        // body and `_missing_return_check` returns early for them.
+        if s.kind == ST_TRAIT && s.impl_methods != null {
+            for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+                let m: Stmt = s.impl_methods.get(j);
+                if m.kind == ST_FN {
+                    _missing_return_check(t, &m, s.origin);
+                }
+            }
+            continue;
+        }
         if s.kind != ST_FN {
             continue;
         }
