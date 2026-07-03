@@ -179,6 +179,8 @@ fn _arith_method(op: i32) -> string {
 
 // The source symbol for an operator, for diagnostics.
 fn _op_symbol(op: i32) -> string {
+    if op == OP_EQ { return "=="; }
+    if op == OP_NE { return "!="; }
     if op == OP_ADD { return "+"; }
     if op == OP_SUB { return "-"; }
     if op == OP_MUL { return "*"; }
@@ -1846,7 +1848,7 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
                 what = "function";
             }
             if dupmap.contains(s.name) && dupmap.get(s.name).eq(s.origin) {
-                t.err_code(s.name_line, s.name_col, "duplicate-definition", "the ".concat(what).concat(" `").concat(s.name).concat("` is defined more than once in this file"));
+                t.err_code_range(s.name_line, s.name_col, s.name.len(), "duplicate-definition", "the ".concat(what).concat(" `").concat(s.name).concat("` is defined more than once in this file"));
             } else {
                 dupmap.insert(s.name, s.origin);
             }
@@ -3138,7 +3140,7 @@ fn _check_match_coverage(t: *Typer, scrut_ty: *Type, arms: *Vector<MatchArm>, li
             }
         }
         if miss_count > 0 {
-            t.push_diag(line, col, 1, "match-not-exhaustive", "match on `".concat(scrut_ty.name).concat("` is not exhaustive: missing ").concat(missing).concat(". Add an arm for each, or `_ =>` to handle the rest."));
+            t.err_code_range(line, col, 5, "match-not-exhaustive", "match on `".concat(scrut_ty.name).concat("` is not exhaustive: missing ").concat(missing).concat(". Add an arm for each, or `_ =>` to handle the rest."));
         }
     }
     // Result / Option / OptResult are closed sums too — require every
@@ -3180,7 +3182,7 @@ fn _check_match_coverage(t: *Typer, scrut_ty: *Type, arms: *Vector<MatchArm>, li
             if is_optres {
                 kindname = "OptResult";
             }
-            t.push_diag(line, col, 1, "match-not-exhaustive", "match on a ".concat(kindname).concat(" is not exhaustive: missing ").concat(missing2).concat(". Add an arm for each, or `_ =>` to handle the rest."));
+            t.err_code_range(line, col, 5, "match-not-exhaustive", "match on a ".concat(kindname).concat(" is not exhaustive: missing ").concat(missing2).concat(". Add an arm for each, or `_ =>` to handle the rest."));
         }
         needed.free();
     }
@@ -3523,7 +3525,7 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
             // match … {}` fed into `stream.write(res)`). Reject it; the fix is to
             // call the expression as its own statement.
             if _ty_is_void(val_ty) {
-                t.err_code(s.let_value.line, s.let_value.column, "void-binding", "cannot bind `".concat(s.name).concat("`: this expression yields nothing (void). Call it as a statement instead."));
+                t.err_code_range(s.name_line, s.name_col, s.name.len(), "void-binding", "cannot bind `".concat(s.name).concat("`: this expression yields nothing (void). Call it as a statement instead."));
             }
             final_ty = val_ty;
         }
@@ -3836,7 +3838,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                         result_ty = arm_ty;
                     } else {
                         if !types_compat(result_ty, arm_ty) {
-                            t.err_code(e.line, e.column, "match-arm-mismatch", "match arms have incompatible types: `".concat(type_to_string(result_ty)).concat("` vs `").concat(type_to_string(arm_ty)).concat("`"));
+                            t.err_code_range(e.line, e.column, 5, "match-arm-mismatch", "match arms have incompatible types: `".concat(type_to_string(result_ty)).concat("` vs `").concat(type_to_string(arm_ty)).concat("`"));
                         }
                     }
                 }
@@ -3994,7 +3996,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             let l_voidp: bool = lt != null && lt.kind == TY_POINTER && lt.inner != null && lt.inner.kind == TY_NAMED && lt.inner.name != null && lt.inner.name.eq("void");
             let r_voidp: bool = rt != null && rt.kind == TY_POINTER && rt.inner != null && rt.inner.kind == TY_NAMED && rt.inner.name != null && rt.inner.name.eq("void");
             if !types_compat(lt, rt) && !l_voidp && !r_voidp {
-                t.err_code(e.line, e.column, "cmp-type-mismatch", "cannot compare `".concat(type_to_string(lt)).concat("` with `").concat(type_to_string(rt)).concat("`"));
+                t.err_code_range(e.line, e.column, _op_symbol(op).len(), "cmp-type-mismatch", "cannot compare `".concat(type_to_string(lt)).concat("` with `").concat(type_to_string(rt)).concat("`"));
             }
             return ty_named("bool");
         }
