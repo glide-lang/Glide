@@ -900,6 +900,30 @@ case_feature("documentHighlight anchors a method use at the method name",
 # module name in `import w3;` lights the import segment AND every `w3::` use.
 # A function-local name (self / param / local) highlights only within its own
 # fn — `n` in `a` must not light up `b`'s `n`.
+# `self` gets one semantic-token type (keyword) everywhere, so the receiver
+# and the value don't render in different colours.
+def _semtok_types(body, want_tokens):
+    import json as _j
+    path, uri = write_tmp("semself.glide", body)
+    msgs=[{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}},
+     {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri,"languageId":"glide","version":1,"text":body}}},
+     {"jsonrpc":"2.0","id":2,"method":"textDocument/semanticTokens/full","params":{"textDocument":{"uri":uri}}},
+     {"jsonrpc":"2.0","method":"exit","params":None}]
+    rs=run_session(msgs)
+    tgt=next((r for r in rs if r.get("id")==2),None)
+    data=((tgt or {}).get("result") or {}).get("data",[])
+    TYPES=["keyword","function","method","type","parameter","variable","property","macro","namespace"]
+    lines=body.split("\n"); ln=0; col=0; out=[]
+    for i in range(0,len(data),5):
+        dl,dc,l,tp,md=data[i:i+5]; ln+=dl; col=(dc if dl else col+dc)
+        tok=lines[ln][col:col+l] if ln<len(lines) else ""
+        if tok in want_tokens: out.append((tok,TYPES[tp]))
+    return out
+
+print("\n[semantic-tokens] self is one consistent type")
+_st=_semtok_types("trait P {\n    fn a(&self) -> i32;\n    fn b(&self) -> i32 { return self.a(); }\n}", {"self"})
+check("every `self` is `keyword`", _st and all(t=="keyword" for _,t in _st), f"got {_st}")
+
 # Positions after a multi-byte char convert byte->UTF-16 for the editor: the
 # `x` after "Olá" (á = 2 bytes, 1 UTF-16 unit) highlights at its UTF-16 column,
 # not shifted right by the extra byte.

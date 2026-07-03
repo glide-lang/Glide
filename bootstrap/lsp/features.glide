@@ -1861,14 +1861,26 @@ pub fn handle_semantic_tokens(req: *JsonValue, state: *LspState) {
             }
         } else {
             if t.kind == TOK_IDENT {
-                // Refresh the enclosing fn once per line so param detection is
-                // cheap; only the plain-ident path actually reads `host`.
-                let tline0: i32 = t.line - 1;
-                if tline0 != cached_line {
-                    cached_line = tline0;
-                    host = fn_containing(doc.stmts, tline0, path);
+                // `self` / `Self` get ONE token type regardless of position, so
+                // the receiver (`&self`), the value (`self.field`) and a bare
+                // `self` don't drift between the parameter and variable colours.
+                // `self` reads as a language keyword, `Self` as a type.
+                if t.lexeme.eq("self") {
+                    sem = SEMTOK_KEYWORD;
+                } else {
+                    if t.lexeme.eq("Self") {
+                        sem = SEMTOK_TYPE;
+                    } else {
+                        // Refresh the enclosing fn once per line so param
+                        // detection is cheap; only the plain-ident path reads it.
+                        let tline0: i32 = t.line - 1;
+                        if tline0 != cached_line {
+                            cached_line = tline0;
+                            host = fn_containing(doc.stmts, tline0, path);
+                        }
+                        sem = _semtok_classify(toks, i, n, type_names, host);
+                    }
                 }
-                sem = _semtok_classify(toks, i, n, type_names, host);
             }
         }
         if sem < 0 {
