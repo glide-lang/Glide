@@ -231,7 +231,7 @@ impl Interp {
     // Register every fn in `program` so the interpreter can call them.
     // Macro fn bodies typically reach helpers in the same module via
     // plain ident calls.
-    pub fn register_fns(self: *Interp, program: *Vector<Stmt>) {
+    pub fn register_fns(self, program: *Vector<Stmt>) {
         for let i: i32 = 0; i < program.len(); i++ {
             let s: Stmt = program.get(i);
             if s.kind == ST_FN && s.name != null && !s.name.eq("") {
@@ -240,7 +240,7 @@ impl Interp {
         }
     }
 
-    pub fn err(self: *Interp, msg: string) {
+    pub fn err(self, msg: string) {
         // Two-site format: macro-fn body location (where the
         // intrinsic / unsupported node was hit) + the use site
         // (where the @derive / @<name> annotation lives). Either
@@ -259,7 +259,7 @@ impl Interp {
 
     // Called by the expander before each interp_call so error
     // messages can blame the @derive / @<name> use site too.
-    pub fn set_use_site(self: *Interp, line: i32, col: i32, origin: string) {
+    pub fn set_use_site(self, line: i32, col: i32, origin: string) {
         self.current_use_line = line;
         self.current_use_col = col;
         self.current_use_origin = origin;

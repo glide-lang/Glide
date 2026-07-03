@@ -202,7 +202,7 @@ impl HpackEncoder {
     /// enc.encode_header(buf, ":path", "/api");
     /// enc.encode_header(buf, "user-agent", "glide");
     /// ```
-    pub fn encode_header(self: *HpackEncoder, buf: *ByteBuffer,
+    pub fn encode_header(self, buf: *ByteBuffer,
                          name: string, value: string) {
         // Try to find an exact (name, value) match in static or dyn table.
         let exact_idx: i32 = self._find_exact(name, value);
@@ -224,7 +224,7 @@ impl HpackEncoder {
         self._add_dynamic(name, value);
     }
 
-    fn _find_exact(self: *HpackEncoder, name: string, value: string) -> i32 {
+    fn _find_exact(self, name: string, value: string) -> i32 {
         for let i: i32 = 0; i < self.static_names.len(); i++ {
             if self.static_names.get(i).eq(name)
                && self.static_values.get(i).eq(value) {
@@ -240,7 +240,7 @@ impl HpackEncoder {
         return 0;
     }
 
-    fn _find_name(self: *HpackEncoder, name: string) -> i32 {
+    fn _find_name(self, name: string) -> i32 {
         for let i: i32 = 0; i < self.static_names.len(); i++ {
             if self.static_names.get(i).eq(name) { return i + 1; }
         }
@@ -252,7 +252,7 @@ impl HpackEncoder {
         return 0;
     }
 
-    fn _add_dynamic(self: *HpackEncoder, name: string, value: string) {
+    fn _add_dynamic(self, name: string, value: string) {
         let entry_size: i32 = name.len() + value.len() + 32;
         // Evict from the tail until we fit, or the table is empty.
         while self.dyn_size + entry_size > self.max_table_size
@@ -345,7 +345,7 @@ impl HpackDecoder {
     ///     }
     /// }
     /// ```
-    pub fn decode_block(self: *HpackDecoder, raw: string,
+    pub fn decode_block(self, raw: string,
                         len: i32) -> !*Vector<*HpackHeader> {
         let out: *Vector<*HpackHeader> = Vector::new();
         let mut pos: i32 = 0;
@@ -393,7 +393,7 @@ impl HpackDecoder {
         return ok(out);
     }
 
-    fn _lookup(self: *HpackDecoder, idx: i32) -> !*HpackHeader {
+    fn _lookup(self, idx: i32) -> !*HpackHeader {
         let s_n: i32 = self.static_names.len();
         if idx <= s_n {
             let h: *HpackHeader = malloc(sizeof(HpackHeader)) as *HpackHeader;
@@ -411,7 +411,7 @@ impl HpackDecoder {
         return ok(h);
     }
 
-    fn _decode_literal(self: *HpackDecoder, raw: string, pos: i32,
+    fn _decode_literal(self, raw: string, pos: i32,
                        prefix: i32, len: i32) -> !*Pair<i32, *HpackHeader> {
         let idx_r: !*Pair<i32, i32> = _decode_integer(raw, pos, prefix, len);
         if !idx_r.ok { return err(idx_r.err); }
@@ -437,7 +437,7 @@ impl HpackDecoder {
         return ok(Pair::new(p, h));
     }
 
-    fn _add_dynamic(self: *HpackDecoder, name: string, value: string) {
+    fn _add_dynamic(self, name: string, value: string) {
         let entry_size: i32 = name.len() + value.len() + 32;
         while self.dyn_size + entry_size > self.max_table_size
               && self.dyn_names.len() > 0 {
@@ -457,7 +457,7 @@ impl HpackDecoder {
         self.dyn_size = self.dyn_size + entry_size;
     }
 
-    fn _evict_one(self: *HpackDecoder) {
+    fn _evict_one(self) {
         let last: i32 = self.dyn_names.len() - 1;
         if last < 0 { return; }
         let n: string = self.dyn_names.get(last);
@@ -473,7 +473,7 @@ impl HpackDecoder {
         self.dyn_values = nv;
     }
 
-    fn _evict_to_fit(self: *HpackDecoder) {
+    fn _evict_to_fit(self) {
         while self.dyn_size > self.max_table_size && self.dyn_names.len() > 0 {
             self._evict_one();
         }

@@ -78,14 +78,14 @@ impl Parser {
         return p;
     }
 
-    pub fn free(self: *Parser) {
+    pub fn free(self) {
         if self.diags != null {
             self.diags.free();
         }
         __glide_pfree(self as *void);
     }
 
-    fn advance(self: *Parser) -> Token {
+    fn advance(self) -> Token {
         let prev: Token = self.current;
         self.prev_line = prev.line;
         self.prev_col = prev.column;
@@ -95,32 +95,32 @@ impl Parser {
         return prev;
     }
 
-    fn at_eof(self: *Parser) -> bool {
+    fn at_eof(self) -> bool {
         return self.current.kind == TOK_EOF;
     }
 
-    fn at_kw(self: *Parser, lexeme: string) -> bool {
+    fn at_kw(self, lexeme: string) -> bool {
         if self.current.kind != TOK_KEYWORD {
             return false;
         }
         return self.current.lexeme.eq(lexeme);
     }
 
-    fn at_op(self: *Parser, lexeme: string) -> bool {
+    fn at_op(self, lexeme: string) -> bool {
         if self.current.kind != TOK_OP {
             return false;
         }
         return self.current.lexeme.eq(lexeme);
     }
 
-    fn peek_op(self: *Parser, lexeme: string) -> bool {
+    fn peek_op(self, lexeme: string) -> bool {
         if self.peek.kind != TOK_OP {
             return false;
         }
         return self.peek.lexeme.eq(lexeme);
     }
 
-    fn eat_kw(self: *Parser, lexeme: string) -> bool {
+    fn eat_kw(self, lexeme: string) -> bool {
         if self.at_kw(lexeme) {
             self.advance();
             return true;
@@ -128,7 +128,7 @@ impl Parser {
         return false;
     }
 
-    fn eat_op(self: *Parser, lexeme: string) -> bool {
+    fn eat_op(self, lexeme: string) -> bool {
         if self.at_op(lexeme) {
             self.advance();
             return true;
@@ -138,19 +138,19 @@ impl Parser {
 
     // Lowest-level diagnostic push: full control over code, span, and an
     // optional mechanical fix (zero-width range + replacement = insertion).
-    fn push_pdiag(self: *Parser, line: i32, col: i32, span: i32, code: string, msg: string, fl: i32, fc: i32, fel: i32, fec: i32, repl: string) {
+    fn push_pdiag(self, line: i32, col: i32, span: i32, code: string, msg: string, fl: i32, fc: i32, fel: i32, fec: i32, repl: string) {
         let d: ParseDiag = ParseDiag { origin: "", line: line, col: col, msg: msg, code: code, span: span, fix_line: fl, fix_col: fc, fix_end_line: fel, fix_end_col: fec, fix_replacement: repl };
         self.diags.push(d);
         self.error_count = self.error_count + 1;
     }
 
-    fn err(self: *Parser, msg: string) {
+    fn err(self, msg: string) {
         self.err_code("parse", msg);
     }
 
     // Like `err` but with an explicit diagnostic code. The underline spans the
     // offending token so editors highlight the whole token, not one char.
-    fn err_code(self: *Parser, code: string, msg: string) {
+    fn err_code(self, code: string, msg: string) {
         let full: string = msg.concat(" near '").concat(self.current.lexeme).concat("'");
         let mut span: i32 = self.current.lexeme.len();
         if span < 1 {
@@ -162,7 +162,7 @@ impl Parser {
     // Same as `err` but anchors at the end of the most-recently-consumed
     // token. Used for "expected ';'" so the underline lands at the end of
     // the prior stmt instead of the start of the next one.
-    fn err_after_prev(self: *Parser, msg: string) {
+    fn err_after_prev(self, msg: string) {
         let full: string = msg.concat(" near '").concat(self.current.lexeme).concat("'");
         let mut line: i32 = self.prev_line;
         let mut col: i32 = self.prev_col + self.prev_len;
@@ -173,7 +173,7 @@ impl Parser {
         self.push_pdiag(line, col, 1, "parse", full, 0, 0, 0, 0, "");
     }
 
-    fn expect_op(self: *Parser, lexeme: string) -> bool {
+    fn expect_op(self, lexeme: string) -> bool {
         if self.at_op(lexeme) {
             self.advance();
             return true;
@@ -198,7 +198,7 @@ impl Parser {
     // True at either `>` or the start of a `>>` token. Handles the nested-
     // generics case (`Vector<Foo<T>>`) where the lexer hands back `>>` as
     // a single shift-right token.
-    fn at_close_angle(self: *Parser) -> bool {
+    fn at_close_angle(self) -> bool {
         if self.current.kind != TOK_OP {
             return false;
         }
@@ -207,7 +207,7 @@ impl Parser {
 
     // Consume a single closing `>`. If the current token is `>>`, splits it
     // so the outer generic still sees the second `>`.
-    fn consume_close_angle(self: *Parser) -> bool {
+    fn consume_close_angle(self) -> bool {
         if self.at_op(">") {
             self.advance();
             return true;
@@ -221,7 +221,7 @@ impl Parser {
         return false;
     }
 
-    fn expect_ident(self: *Parser) -> string {
+    fn expect_ident(self) -> string {
         if self.current.kind == TOK_IDENT || self.current.kind == TOK_KEYWORD {
             let name: string = self.current.lexeme;
             self.advance();

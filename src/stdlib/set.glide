@@ -34,7 +34,7 @@ impl StringSet {
     /// s.insert("apple");    // true
     /// s.insert("apple");    // false (already there)
     /// ```
-    fn insert(self: *StringSet, k: string) -> bool {
+    fn insert(self, k: string) -> bool {
         if self.m.contains(k) {
             return false;
         }
@@ -49,7 +49,7 @@ impl StringSet {
     /// s.contains("ready");   // true
     /// s.contains("nope");    // false
     /// ```
-    fn contains(self: *StringSet, k: string) -> bool {
+    fn contains(self, k: string) -> bool {
         return self.m.contains(k);
     }
 
@@ -60,7 +60,7 @@ impl StringSet {
     /// s.remove("a");    // true
     /// s.remove("a");    // false (already gone)
     /// ```
-    fn remove(self: *StringSet, k: string) -> bool {
+    fn remove(self, k: string) -> bool {
         return self.m.remove(k);
     }
 
@@ -70,7 +70,7 @@ impl StringSet {
     /// s.insert("a"); s.insert("b");
     /// s.len();   // 2
     /// ```
-    fn len(self: *StringSet) -> i32 {
+    fn len(self) -> i32 {
         return self.m.len();
     }
 
@@ -81,7 +81,7 @@ impl StringSet {
     /// s.clear();
     /// s.len();   // 0
     /// ```
-    fn clear(self: *StringSet) {
+    fn clear(self) {
         self.m.clear();
     }
 
@@ -92,7 +92,7 @@ impl StringSet {
     /// let s: *StringSet = StringSet::new();
     /// defer s.free();
     /// ```
-    fn free(self: *StringSet) {
+    fn free(self) {
         self.m.free();
         free(self as *void);
     }

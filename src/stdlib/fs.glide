@@ -1111,17 +1111,17 @@ pub struct Permissions { mode: i32 }
 
 impl Permissions {
     /// The mode bits (e.g. `0644`).
-    pub fn mode(self: *Permissions) -> i32 { return self.mode; }
+    pub fn mode(self) -> i32 { return self.mode; }
     /// `true` if no write bit is set.
-    pub fn readonly(self: *Permissions) -> bool { return (self.mode & 146) == 0; }
+    pub fn readonly(self) -> bool { return (self.mode & 146) == 0; }
     /// Turns read-only on/off by adjusting the write bits. Only changes
     /// the in-memory value; use `fs::set_permissions` to write it to the file.
-    pub fn set_readonly(self: *Permissions, ro: bool) {
+    pub fn set_readonly(self, ro: bool) {
         if ro { self.mode = self.mode - (self.mode & 146); }
         else { self.mode = self.mode | 128; }
     }
     /// Frees this structure.
-    pub fn free(self: *Permissions) { free(self as *void); }
+    pub fn free(self) { free(self as *void); }
 }
 
 /// Metadata of a file or directory: size, type, permissions, and the
@@ -1142,32 +1142,32 @@ pub struct Metadata {
 
 impl Metadata {
     /// Content size in bytes.
-    pub fn len(self: *Metadata) -> i64 { return self.size; }
+    pub fn len(self) -> i64 { return self.size; }
     /// Same as `len()` — size in bytes.
-    pub fn size(self: *Metadata) -> i64 { return self.size; }
+    pub fn size(self) -> i64 { return self.size; }
     /// The entry's type (file/directory/link).
-    pub fn file_type(self: *Metadata) -> FileType { return self.kind; }
+    pub fn file_type(self) -> FileType { return self.kind; }
     /// `true` if it is a regular file.
-    pub fn is_file(self: *Metadata) -> bool { return self.kind.is_file(); }
+    pub fn is_file(self) -> bool { return self.kind.is_file(); }
     /// `true` if it is a directory.
-    pub fn is_dir(self: *Metadata) -> bool { return self.kind.is_dir(); }
+    pub fn is_dir(self) -> bool { return self.kind.is_dir(); }
     /// `true` if it is a symbolic link (only when obtained via `symlink_metadata`).
-    pub fn is_symlink(self: *Metadata) -> bool { return self.kind.is_symlink(); }
+    pub fn is_symlink(self) -> bool { return self.kind.is_symlink(); }
     /// Time of the last content modification.
-    pub fn modified(self: *Metadata) -> Time { return self.mtime; }
+    pub fn modified(self) -> Time { return self.mtime; }
     /// Time of the last access.
-    pub fn accessed(self: *Metadata) -> Time { return self.atime; }
+    pub fn accessed(self) -> Time { return self.atime; }
     /// Creation time (or metadata-change time, depending on the platform).
-    pub fn created(self: *Metadata) -> Time { return self.ctime; }
+    pub fn created(self) -> Time { return self.ctime; }
     /// The file's permissions.
-    pub fn permissions(self: *Metadata) -> *Permissions {
+    pub fn permissions(self) -> *Permissions {
         let p: *Permissions = malloc(sizeof(Permissions)) as *Permissions;
         p.mode = self.mode; return p;
     }
     /// `true` if the file has no write bits.
-    pub fn readonly(self: *Metadata) -> bool { return (self.mode & 146) == 0; }
+    pub fn readonly(self) -> bool { return (self.mode & 146) == 0; }
     /// Frees this structure.
-    pub fn free(self: *Metadata) { free(self as *void); }
+    pub fn free(self) { free(self as *void); }
 }
 
 // stat/lstat -> Metadata, or a central error.
@@ -1339,20 +1339,20 @@ impl OpenOptions {
         return o;
     }
     /// Allows reading.
-    pub fn read(self: *OpenOptions, v: bool) -> *OpenOptions { self.rd = v; return self; }
+    pub fn read(self, v: bool) -> *OpenOptions { self.rd = v; return self; }
     /// Allows writing.
-    pub fn write(self: *OpenOptions, v: bool) -> *OpenOptions { self.wr = v; return self; }
+    pub fn write(self, v: bool) -> *OpenOptions { self.wr = v; return self; }
     /// Every write goes to the end of the file (append mode).
-    pub fn append(self: *OpenOptions, v: bool) -> *OpenOptions { self.ap = v; return self; }
+    pub fn append(self, v: bool) -> *OpenOptions { self.ap = v; return self; }
     /// Truncates the file to zero on open (requires writing).
-    pub fn truncate(self: *OpenOptions, v: bool) -> *OpenOptions { self.tr = v; return self; }
+    pub fn truncate(self, v: bool) -> *OpenOptions { self.tr = v; return self; }
     /// Creates the file if it does not exist (requires write/append).
-    pub fn create(self: *OpenOptions, v: bool) -> *OpenOptions { self.cr = v; return self; }
+    pub fn create(self, v: bool) -> *OpenOptions { self.cr = v; return self; }
     /// Creates exclusively: fails with `AlreadyExists` if the file already
     /// exists. Avoids the check-then-create race.
-    pub fn create_new(self: *OpenOptions, v: bool) -> *OpenOptions { self.cn = v; return self; }
+    pub fn create_new(self, v: bool) -> *OpenOptions { self.cn = v; return self; }
     /// Opens `path` with the chosen options.
-    pub fn open(self: *OpenOptions, path: string) -> !*File {
+    pub fn open(self, path: string) -> !*File {
         let mut glf: i32 = 0;
         if self.rd { glf = glf | _FS_RD; }
         if self.wr { glf = glf | _FS_WR; }
@@ -1363,7 +1363,7 @@ impl OpenOptions {
         return _open_file(path, glf, 420, "open");
     }
     /// Frees the options.
-    pub fn free(self: *OpenOptions) { free(self as *void); }
+    pub fn free(self) { free(self as *void); }
 }
 
 /// An open file. Supports incremental reading, writing, and seeking.
@@ -1387,18 +1387,18 @@ fn _open_file(path: string, glf: i32, mode: i32, op: string) -> !*File {
 /// Read bytes from a source. `File` implements this contract, so functions
 /// can be generic over "something you can read".
 pub trait Read {
-    fn read(self: *Self, max: i32) -> !*ByteBuffer;
+    fn read(self, max: i32) -> !*ByteBuffer;
 }
 
 /// Write bytes to a sink.
 pub trait Write {
-    fn write(self: *Self, data: string) -> !i64;
+    fn write(self, data: string) -> !i64;
 }
 
 impl Read for File {
     /// Reads up to `max` bytes at the current position, advancing the cursor. An
     /// empty buffer (len 0) signals end of file.
-    fn read(self: *File, max: i32) -> !*ByteBuffer {
+    fn read(self, max: i32) -> !*ByteBuffer {
         let b: *ByteBuffer = ByteBuffer::with_capacity(max);
         let n: i64 = __glide_fd_read(self.fd, b.data as *void, max as i64);
         if n < 0 { b.free(); return err(_fs_err("read", self.path, n as i32)); }
@@ -1411,7 +1411,7 @@ impl Write for File {
     /// Writes the bytes of `data`, advancing the cursor. Returns how many bytes
     /// were written (may be fewer than the total in one call; use
     /// `write_all` to guarantee all of it).
-    fn write(self: *File, data: string) -> !i64 {
+    fn write(self, data: string) -> !i64 {
         let n: i64 = __glide_fd_write_str(self.fd, data, data.len() as i64);
         if n < 0 { return err(_fs_err("write", self.path, n as i32)); }
         return ok(n);
@@ -1430,7 +1430,7 @@ impl File {
     pub fn options() -> *OpenOptions { return OpenOptions::new(); }
 
     /// Reads the whole file (from the cursor) into a single byte buffer.
-    pub fn read_to_end(self: *File) -> !*ByteBuffer {
+    pub fn read_to_end(self) -> !*ByteBuffer {
         let out: *ByteBuffer = ByteBuffer::new();
         while true {
             let r: !*ByteBuffer = self.read(65536);
@@ -1443,7 +1443,7 @@ impl File {
         return ok(out);
     }
     /// Reads the whole file as text (the bytes become a string).
-    pub fn read_to_string(self: *File) -> !string {
+    pub fn read_to_string(self) -> !string {
         let r: !*ByteBuffer = self.read_to_end();
         if !r.ok { return err(r.err); }
         let s: string = r.val.to_string();
@@ -1452,7 +1452,7 @@ impl File {
     }
     /// Reads EXACTLY `n` bytes. Fails with `UnexpectedEof` if the file ends
     /// before that.
-    pub fn read_exact(self: *File, n: i32) -> !*ByteBuffer {
+    pub fn read_exact(self, n: i32) -> !*ByteBuffer {
         let out: *ByteBuffer = ByteBuffer::new();
         while out.len() < n {
             let r: !*ByteBuffer = self.read(n - out.len());
@@ -1467,13 +1467,13 @@ impl File {
         return ok(out);
     }
     /// Writes the bytes of a `ByteBuffer`.
-    pub fn write_bytes(self: *File, buf: *ByteBuffer) -> !i64 {
+    pub fn write_bytes(self, buf: *ByteBuffer) -> !i64 {
         let n: i64 = __glide_fd_write(self.fd, buf.data as *void, buf.len() as i64);
         if n < 0 { return err(_fs_err("write", self.path, n as i32)); }
         return ok(n);
     }
     /// Writes ALL of `data`, looping until nothing is left.
-    pub fn write_all(self: *File, data: string) -> ! {
+    pub fn write_all(self, data: string) -> ! {
         let total: i32 = data.len();
         let mut off: i32 = 0;
         while off < total {
@@ -1485,7 +1485,7 @@ impl File {
     }
     /// Moves the read/write cursor. Returns the new position from the
     /// start of the file.
-    pub fn seek(self: *File, from: SeekFrom) -> !i64 {
+    pub fn seek(self, from: SeekFrom) -> !i64 {
         let mut off: i64 = 0;
         let mut whence: i32 = _SEEK_SET;
         match from {
@@ -1498,25 +1498,25 @@ impl File {
         return ok(r);
     }
     /// The current cursor position (bytes from the start).
-    pub fn stream_position(self: *File) -> !i64 { return self.seek(SeekFrom::Current(0)); }
+    pub fn stream_position(self) -> !i64 { return self.seek(SeekFrom::Current(0)); }
     /// Ensures written data reaches the disk.
-    pub fn sync_all(self: *File) -> ! {
+    pub fn sync_all(self) -> ! {
         let rc: i32 = __glide_fd_sync(self.fd);
         if rc != 0 { return err(_fs_err("sync_all", self.path, rc)); }
         return ok();
     }
     /// Sets the file size to `len` bytes (truncates, or extends with
     /// zeros).
-    pub fn set_len(self: *File, len: i64) -> ! {
+    pub fn set_len(self, len: i64) -> ! {
         let rc: i32 = __glide_fd_truncate(self.fd, len);
         if rc != 0 { return err(_fs_err("set_len", self.path, rc)); }
         return ok();
     }
     /// The metadata of the open file.
-    pub fn metadata(self: *File) -> !*Metadata { return _stat_into(self.path, 1, "metadata"); }
+    pub fn metadata(self) -> !*Metadata { return _stat_into(self.path, 1, "metadata"); }
     /// Closes the descriptor and frees the handle. After this the `File` must
     /// not be used again.
-    pub fn close(self: *File) {
+    pub fn close(self) {
         let _rc: i32 = __glide_fd_close(self.fd);
         free(self as *void);
     }
@@ -1535,12 +1535,12 @@ pub struct DirEntry { name: string, dir: string, kind: i32 }
 
 impl DirEntry {
     /// The entry's name (without the directory).
-    pub fn file_name(self: *DirEntry) -> string { return self.name; }
+    pub fn file_name(self) -> string { return self.name; }
     /// The full path of the entry (directory + name).
-    pub fn path(self: *DirEntry) -> string { return join(self.dir, self.name); }
+    pub fn path(self) -> string { return join(self.dir, self.name); }
     /// The entry's type. Cheap when the OS reported the type in the listing;
     /// otherwise it queries the disk.
-    pub fn file_type(self: *DirEntry) -> !FileType {
+    pub fn file_type(self) -> !FileType {
         if self.kind != 3 { return ok(_filetype_from(self.kind)); }
         let m: !*Metadata = symlink_metadata(self.path());
         if !m.ok { return err(m.err); }
@@ -1549,7 +1549,7 @@ impl DirEntry {
         return ok(ft);
     }
     /// The entry's metadata (without following the link).
-    pub fn metadata(self: *DirEntry) -> !*Metadata { return symlink_metadata(self.path()); }
+    pub fn metadata(self) -> !*Metadata { return symlink_metadata(self.path()); }
 }
 
 /// The result of `read_dir`: the list of a directory's entries. It is
@@ -1558,11 +1558,11 @@ pub struct ReadDir { entries: *Vector<*DirEntry> }
 
 impl ReadDir {
     /// How many entries the directory has.
-    pub fn len(self: *ReadDir) -> i32 { return self.entries.len(); }
+    pub fn len(self) -> i32 { return self.entries.len(); }
     /// The i-th entry.
-    pub fn get(self: *ReadDir, i: i32) -> *DirEntry { return self.entries.get(i); }
+    pub fn get(self, i: i32) -> *DirEntry { return self.entries.get(i); }
     /// Frees the entries and the list.
-    pub fn free(self: *ReadDir) {
+    pub fn free(self) {
         for let i: i32 = 0; i < self.entries.len(); i++ { free(self.entries.get(i) as *void); }
         self.entries.free();
         free(self as *void);

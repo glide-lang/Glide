@@ -85,7 +85,7 @@ impl UdpSocket {
     /// Send `data` to `dst`. Returns the number of bytes sent (or err on
     /// failure). UDP doesn't fragment user-mode payloads — keep each call
     /// ≤ 1472 bytes for safe v4 over Ethernet.
-    pub fn send_to(self: *UdpSocket, data: string, dst: *SocketAddr) -> !i32 {
+    pub fn send_to(self, data: string, dst: *SocketAddr) -> !i32 {
         let fam: i32 = if dst.ip.is_v6() { AF_V6 } else { AF_V4 };
         let n: i32 = data.len();
         let buf: *u8 = malloc(n) as *u8;
@@ -101,7 +101,7 @@ impl UdpSocket {
 
     /// Block until a datagram arrives. `max` caps payload size — bytes past
     /// `max` are silently dropped by the kernel.
-    pub fn recv_from(self: *UdpSocket, max: i32) -> !*UdpRecv {
+    pub fn recv_from(self, max: i32) -> !*UdpRecv {
         let buf: *u8 = malloc(max) as *u8;
         let mut fam: i32 = 0;
         let mut v4: i64 = 0;
@@ -125,7 +125,7 @@ impl UdpSocket {
 
     /// Like `send_to`, but sends the raw bytes of `b` — binary-safe, no
     /// per-byte string copy.
-    pub fn send_buf(self: *UdpSocket, b: *ByteBuffer, dst: *SocketAddr) -> !i32 {
+    pub fn send_buf(self, b: *ByteBuffer, dst: *SocketAddr) -> !i32 {
         let fam: i32 = if dst.ip.is_v6() { AF_V6 } else { AF_V4 };
         let sent: i64 = gnet_sendto(self.fd, b.data as *void, b.len,
                                     fam, dst.ip.v4 as i64, dst.ip.v6_hi, dst.ip.v6_lo, dst.port);
@@ -140,7 +140,7 @@ impl UdpSocket {
     /// let dg: *UdpDatagram = sock.recv_from_buf(1500)?;
     /// defer dg.data.free();
     /// ```
-    pub fn recv_from_buf(self: *UdpSocket, max: i32) -> !*UdpDatagram {
+    pub fn recv_from_buf(self, max: i32) -> !*UdpDatagram {
         let b: *ByteBuffer = ByteBuffer::with_capacity(max);
         let mut fam: i32 = 0;
         let mut v4: i64 = 0;
@@ -162,7 +162,7 @@ impl UdpSocket {
     }
 
     /// Close the socket and free the struct. Pair with `defer`.
-    pub fn close(self: *UdpSocket) {
+    pub fn close(self) {
         gnet_close(self.fd);
         free(self as *void);
     }

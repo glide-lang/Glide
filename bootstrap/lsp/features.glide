@@ -495,7 +495,7 @@ pub fn keyword_doc(name: string) -> string {
         return "```glide\nimpl T { fn method(self: *T, ...) { ... } }\n```\n\n---\n\nAttach methods (and macros) to a type. The first param `self: *T` makes the method instance-callable as `value.method(args)`.\n\n```glide\nimpl Counter {\n    fn bump(self: *Counter) { self.n = self.n + 1; }\n}\n```";
     }
     if name.eq("interface") {
-        return "```glide\ninterface Name { fn method(self: *Self, ...) -> T; }\n```\n\n---\n\nDeclare a set of method signatures that types can implement.";
+        return "```glide\ninterface Name { fn method(self, ...) -> T; }\n```\n\n---\n\nDeclare a set of method signatures that types can implement.";
     }
     if name.eq("type") {
         return "```glide\ntype Alias = ExistingType;\n```\n\n---\n\nDefine a type alias. Resolved transparently — the alias and the original are interchangeable.\n\n```glide\ntype Bytes = []u8;\n```";
@@ -551,13 +551,13 @@ pub fn keyword_doc(name: string) -> string {
         return "```glide\n*dyn Trait\n```\n\n---\n\nA pointer to an erased-type value that implements `Trait`. Dispatch is dynamic (vtable lookup) instead of monomorphised — useful for heterogeneous containers and runtime polymorphism.\n\n```glide\nlet w: *dyn Writer = &my_struct;\nw.write(\"hi\");\n```";
     }
     if name.eq("trait") {
-        return "```glide\ntrait Name {\n    fn method(self: *Self, ...) -> T;\n    fn defaulted(self: *Self) -> i32 { return 0; }   // default impl\n}\n```\n\n---\n\nA set of method signatures (with optional default bodies) that types can implement via `impl Trait for T`. Used as bound `T: Trait` for generic constraints and via `*dyn Trait` for dynamic dispatch.";
+        return "```glide\ntrait Name {\n    fn method(self, ...) -> T;\n    fn defaulted(self) -> i32 { return 0; }   // default impl\n}\n```\n\n---\n\nA set of method signatures (with optional default bodies) that types can implement via `impl Trait for T`. Used as bound `T: Trait` for generic constraints and via `*dyn Trait` for dynamic dispatch.";
     }
     if name.eq("interface") {
-        return "```glide\ninterface Name { fn method(self: *Self, ...) -> T; }\n```\n\n---\n\nLegacy alias for `trait`. New code should prefer `trait`.";
+        return "```glide\ninterface Name { fn method(self, ...) -> T; }\n```\n\n---\n\nLegacy alias for `trait`. New code should prefer `trait`.";
     }
     if name.eq("Self") {
-        return "```glide\nfn method(self: *Self) -> Self { ... }\n```\n\n---\n\nInside a `trait` / `impl` declaration, refers to the implementing type. Resolved to the concrete type at instantiation time.";
+        return "```glide\nfn method(self) -> Self { ... }\n```\n\n---\n\nInside a `trait` / `impl` declaration, refers to the implementing type. Resolved to the concrete type at instantiation time.";
     }
     if name.eq("naked") {
         return "```glide\nnaked fn name(args) -> T { asm! { ... } }\n```\n\n---\n\nFunction emitted with `__attribute__((naked))` — no prologue / epilogue. Body must contain only `asm!` blocks; calling convention is raw, so you assemble the entire stack frame yourself.";

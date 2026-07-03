@@ -360,7 +360,7 @@ impl Router {
     /// r.use_mw(auth);
     /// r.get("/me", whoami);
     /// ```
-    pub fn use_mw(self: *Router,
+    pub fn use_mw(self,
                   mw: fn(*HttpRequest, *Chain) -> HttpResponse) -> *Router {
         self.mw.push(mw);
         return self;
@@ -387,7 +387,7 @@ impl Router {
     /// Returns `self` for chaining. Doesn't borrow `sub` — copies the
     /// route entries — so the caller is free to drop or reuse the
     /// sub-router after the call.
-    pub fn scope(self: *Router, prefix: string, sub: *Router) -> *Router {
+    pub fn scope(self, prefix: string, sub: *Router) -> *Router {
         let normalised: string = _normalise_prefix(prefix);
         let mut i: i32 = 0;
         while i < sub.routes.len() {
@@ -441,7 +441,7 @@ impl Router {
     ///
     /// Returns `self` so the call chains. v1 supports a single global
     /// state slot — multiple Routers in the same process share it.
-    pub fn state(self: *Router, p: *void) -> *Router {
+    pub fn state(self, p: *void) -> *Router {
         __glide_router_state_set(p);
         return self;
     }
@@ -454,7 +454,7 @@ impl Router {
     /// r.route("GET", "/users/:id", get_user);
     /// r.route("*",   "/health",    health);
     /// ```
-    pub fn route(self: *Router, method: string, pattern: string,
+    pub fn route(self, method: string, pattern: string,
                  handler: fn(*HttpRequest) -> HttpResponse) {
         let empty: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse> = Vector::new();
         self.routes.push(Route {
@@ -471,43 +471,43 @@ impl Router {
     /// ```glide
     /// r.get("/users/:id", get_user);
     /// ```
-    pub fn get(self: *Router, pattern: string,
+    pub fn get(self, pattern: string,
                handler: fn(*HttpRequest) -> HttpResponse) {
         self.route("GET", pattern, handler);
     }
 
     /// Shortcut for `route("POST", ...)`.
-    pub fn post(self: *Router, pattern: string,
+    pub fn post(self, pattern: string,
                 handler: fn(*HttpRequest) -> HttpResponse) {
         self.route("POST", pattern, handler);
     }
 
     /// Shortcut for `route("PUT", ...)`.
-    pub fn put(self: *Router, pattern: string,
+    pub fn put(self, pattern: string,
                handler: fn(*HttpRequest) -> HttpResponse) {
         self.route("PUT", pattern, handler);
     }
 
     /// Shortcut for `route("DELETE", ...)`.
-    pub fn delete(self: *Router, pattern: string,
+    pub fn delete(self, pattern: string,
                   handler: fn(*HttpRequest) -> HttpResponse) {
         self.route("DELETE", pattern, handler);
     }
 
     /// Shortcut for `route("PATCH", ...)`.
-    pub fn patch(self: *Router, pattern: string,
+    pub fn patch(self, pattern: string,
                  handler: fn(*HttpRequest) -> HttpResponse) {
         self.route("PATCH", pattern, handler);
     }
 
     /// Shortcut for `route("HEAD", ...)`.
-    pub fn head(self: *Router, pattern: string,
+    pub fn head(self, pattern: string,
                 handler: fn(*HttpRequest) -> HttpResponse) {
         self.route("HEAD", pattern, handler);
     }
 
     /// Shortcut for `route("OPTIONS", ...)`.
-    pub fn options(self: *Router, pattern: string,
+    pub fn options(self, pattern: string,
                    handler: fn(*HttpRequest) -> HttpResponse) {
         self.route("OPTIONS", pattern, handler);
     }
@@ -519,7 +519,7 @@ impl Router {
     ///     return HttpResponse::ok().text("ok");
     /// });
     /// ```
-    pub fn any(self: *Router, pattern: string,
+    pub fn any(self, pattern: string,
                handler: fn(*HttpRequest) -> HttpResponse) {
         self.route(ANY_METHOD, pattern, handler);
     }
@@ -528,7 +528,7 @@ impl Router {
     /// router-level `use_mw` chain runs first, then `mws` (in order),
     /// then `handler`. Used by the `@middleware(...)` proc-attr to wire
     /// route-scoped middlewares without losing the global chain.
-    pub fn route_with(self: *Router, method: string, pattern: string,
+    pub fn route_with(self, method: string, pattern: string,
                       mws: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse>,
                       handler: fn(*HttpRequest) -> HttpResponse) {
         self.routes.push(Route {
@@ -547,7 +547,7 @@ impl Router {
     ///     return HttpResponse::with_status(404).json("{\"err\":\"missing\"}");
     /// });
     /// ```
-    pub fn not_found_with(self: *Router,
+    pub fn not_found_with(self,
                           handler: fn(*HttpRequest) -> HttpResponse) {
         self.not_found = handler;
     }
@@ -562,7 +562,7 @@ impl Router {
     /// let req: HttpRequest = ...;
     /// let resp: HttpResponse = r.dispatch(&req);
     /// ```
-    pub fn dispatch(self: *Router, req: *HttpRequest) -> HttpResponse {
+    pub fn dispatch(self, req: *HttpRequest) -> HttpResponse {
         let path: string = req.path_only();
         // Reject `..` segments before the route table. A literal-text
         // pattern can't normally hit them (each segment is matched
@@ -590,7 +590,7 @@ impl Router {
     }
 
     /// Release the route table and the router struct. Pair with `defer`.
-    pub fn free(self: *Router) {
+    pub fn free(self) {
         for let i: i32 = 0; i < self.routes.len(); i++ {
             let r: Route = self.routes.get(i);
             r.segments.free();
@@ -609,7 +609,7 @@ impl Router {
     /// r.get("/", index);
     /// r.listen(8080);
     /// ```
-    pub fn listen(self: *Router, port: i32) -> !i32 {
+    pub fn listen(self, port: i32) -> !i32 {
         let lr: !*TcpListener = TcpListener::bind(port);
         if !lr.ok { return err(lr.err); }
         let l: *TcpListener = lr.val;
@@ -638,7 +638,7 @@ impl Router {
     /// ```glide
     /// r.listen_workers(8080, 4);
     /// ```
-    pub fn listen_workers(self: *Router, port: i32, n: i32) -> !i32 {
+    pub fn listen_workers(self, port: i32, n: i32) -> !i32 {
         __glide_router_sm_set(self as *void);
         return http_listen_workers(port, n, _router_sm_dispatch);
     }
@@ -647,7 +647,7 @@ impl Router {
     /// need to block (database queries, downstream HTTP calls, chan
     /// synchronisation). Slower than `listen_workers` (~107k vs ~159k
     /// req/s on the reference 4-core box) but unrestricted.
-    pub fn listen_workers_blocking(self: *Router, port: i32, n: i32) -> !i32 {
+    pub fn listen_workers_blocking(self, port: i32, n: i32) -> !i32 {
         if os_has_reuseport_balance() {
             let pr: !*TcpListener = TcpListener::bind_reuseport(port);
             if !pr.ok { return err(pr.err); }

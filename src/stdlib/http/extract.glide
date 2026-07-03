@@ -117,12 +117,12 @@ pub struct Headers {
 impl Headers {
     /// Same lookup as `req.header(name)` — case-insensitive, `""` when
     /// missing.
-    pub fn get(self: *Headers, name: string) -> string {
+    pub fn get(self, name: string) -> string {
         return self.req.header(name);
     }
 
     /// True iff a header with `name` is present and non-empty.
-    pub fn has(self: *Headers, name: string) -> bool {
+    pub fn has(self, name: string) -> bool {
         return self.req.header(name).len() > 0;
     }
 }
@@ -359,7 +359,7 @@ impl FromRequest for Form {
 
 impl Form {
     /// First value for `name`. Returns `""` when not present.
-    pub fn get(self: *Form, name: string) -> string {
+    pub fn get(self, name: string) -> string {
         for let i: i32 = 0; i < self.data.len(); i++ {
             if self.data.name_at(i).eq(name) { return self.data.value_at(i); }
         }
@@ -367,7 +367,7 @@ impl Form {
     }
 
     /// `true` iff at least one field with `name` is present.
-    pub fn has(self: *Form, name: string) -> bool {
+    pub fn has(self, name: string) -> bool {
         for let i: i32 = 0; i < self.data.len(); i++ {
             if self.data.name_at(i).eq(name) { return true; }
         }
@@ -402,7 +402,7 @@ impl Cookies {
     /// header string each call — cheap (cookies are short, typically
     /// 1-5 entries) but cache if you call repeatedly in the same
     /// handler.
-    pub fn get(self: *Cookies, name: string) -> string {
+    pub fn get(self, name: string) -> string {
         let h: string = self.header;
         let n: i32 = h.len();
         if n == 0 { return ""; }
@@ -434,7 +434,7 @@ impl Cookies {
     }
 
     /// `true` iff the named cookie is present.
-    pub fn has(self: *Cookies, name: string) -> bool {
+    pub fn has(self, name: string) -> bool {
         return self.get(name).len() > 0;
     }
 }

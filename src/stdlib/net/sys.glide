@@ -97,7 +97,7 @@ impl Socket {
     /// Bind to a local address. The whole address rides the flat ABI — the
     /// family tag selects which fields netcore reads, so passing all of them
     /// is safe regardless of v4/v6.
-    pub fn bind(self: *Socket, sa: *SocketAddr) -> !i32 {
+    pub fn bind(self, sa: *SocketAddr) -> !i32 {
         let fam: i32 = _af_tag(sa.ip);
         if gnet_bind(self.fd, fam, sa.ip.v4 as i64, sa.ip.v6_hi, sa.ip.v6_lo, sa.port) < 0 {
             return err("bind: ".concat(gnet_last_error()));
@@ -107,7 +107,7 @@ impl Socket {
 
     /// Connect to a remote address (blocking for now; the reactor-async
     /// path lands in the next foundation sub-step).
-    pub fn connect(self: *Socket, sa: *SocketAddr) -> !i32 {
+    pub fn connect(self, sa: *SocketAddr) -> !i32 {
         let fam: i32 = _af_tag(sa.ip);
         if gnet_connect(self.fd, fam, sa.ip.v4 as i64, sa.ip.v6_hi, sa.ip.v6_lo, sa.port) < 0 {
             return err("connect: ".concat(gnet_last_error()));
@@ -115,7 +115,7 @@ impl Socket {
         return ok(0);
     }
 
-    pub fn listen(self: *Socket, backlog: i32) -> !i32 {
+    pub fn listen(self, backlog: i32) -> !i32 {
         if gnet_listen(self.fd, backlog) < 0 { return err("listen: ".concat(gnet_last_error())); }
         return ok(0);
     }
@@ -124,7 +124,7 @@ impl Socket {
     /// Goes through the reactor: parks the listener inside a coroutine,
     /// blocks via the fallback otherwise. The accepted Socket is left
     /// non-blocking + TCP_NODELAY, so its reads/writes run async in a coro.
-    pub fn accept(self: *Socket) -> !*Socket {
+    pub fn accept(self) -> !*Socket {
         let mut f: i32 = 0;
         let mut v4: i64 = 0;
         let mut hi: i64 = 0;
@@ -138,7 +138,7 @@ impl Socket {
     }
 
     /// The locally-bound address (resolves an ephemeral `:0` port).
-    pub fn local_addr(self: *Socket) -> !*SocketAddr {
+    pub fn local_addr(self) -> !*SocketAddr {
         let mut f: i32 = 0;
         let mut v4: i64 = 0;
         let mut hi: i64 = 0;
@@ -151,7 +151,7 @@ impl Socket {
     }
 
     /// The connected peer's address.
-    pub fn peer_addr(self: *Socket) -> !*SocketAddr {
+    pub fn peer_addr(self) -> !*SocketAddr {
         let mut f: i32 = 0;
         let mut v4: i64 = 0;
         let mut hi: i64 = 0;
@@ -164,7 +164,7 @@ impl Socket {
     }
 
     /// Set an int-valued socket option. `level`/`opt` come from `gnet_const`.
-    pub fn set_opt_int(self: *Socket, level: i32, opt: i32, val: i32) -> !i32 {
+    pub fn set_opt_int(self, level: i32, opt: i32, val: i32) -> !i32 {
         if gnet_setsockopt_int(self.fd, level, opt, val) < 0 {
             return err("setsockopt: ".concat(gnet_last_error()));
         }
@@ -172,19 +172,19 @@ impl Socket {
     }
 
     /// SO_REUSEADDR — the common "let me rebind this port immediately".
-    pub fn set_reuse_addr(self: *Socket, on: bool) -> !i32 {
+    pub fn set_reuse_addr(self, on: bool) -> !i32 {
         let v: i32 = if on { 1 } else { 0 };
         return self.set_opt_int(gnet_const(OPT_SOL_SOCKET), gnet_const(OPT_SO_REUSEADDR), v);
     }
 
-    pub fn shutdown(self: *Socket, how: i32) -> !i32 {
+    pub fn shutdown(self, how: i32) -> !i32 {
         if gnet_shutdown(self.fd, how) < 0 { return err("shutdown: ".concat(gnet_last_error())); }
         return ok(0);
     }
 
     /// Send all `n` bytes (reactor-integrated: parks in a coro on a non-
     /// blocking fd, blocks otherwise). Returns bytes sent.
-    pub fn send(self: *Socket, buf: *void, n: i32) -> !i32 {
+    pub fn send(self, buf: *void, n: i32) -> !i32 {
         let r: i64 = gnet_write_async(self.fd, buf, n);
         if r < 0 { return err("send: ".concat(gnet_last_error())); }
         return ok(r as i32);
@@ -192,7 +192,7 @@ impl Socket {
 
     /// Receive up to `max` bytes into a caller-owned buffer (reactor-
     /// integrated). Returns bytes read (0 at EOF).
-    pub fn recv(self: *Socket, buf: *void, max: i32) -> !i32 {
+    pub fn recv(self, buf: *void, max: i32) -> !i32 {
         let r: i64 = gnet_read_async(self.fd, buf, max);
         if r < 0 { return err("recv: ".concat(gnet_last_error())); }
         return ok(r as i32);
@@ -219,25 +219,25 @@ pub fn socketaddr_from_abi(family: i32, v4: i64, hi: i64, lo: i64, port: i32) ->
 // Concrete impl target (codegen requires TY_NAMED); self: *Self. Conveniences
 // are FREE FUNCTIONS over *dyn Stream, never default trait methods.
 pub trait Stream {
-    fn read_bytes(self: *Self, buf: *u8, max: i32) -> !i32;
-    fn write_bytes(self: *Self, buf: *u8, n: i32) -> !i32;
-    fn close(self: *Self);
+    fn read_bytes(self, buf: *u8, max: i32) -> !i32;
+    fn write_bytes(self, buf: *u8, n: i32) -> !i32;
+    fn close(self);
 }
 
 impl Stream for Socket {
     // Reactor-integrated: parks the coroutine when the fd is non-blocking
     // (server conns), blocks gracefully otherwise. write_bytes writes all n.
-    fn read_bytes(self: *Socket, buf: *u8, max: i32) -> !i32 {
+    fn read_bytes(self, buf: *u8, max: i32) -> !i32 {
         let n: i64 = gnet_read_async(self.fd, buf as *void, max);
         if n < 0 { return err(gnet_last_error()); }
         return ok(n as i32);
     }
-    fn write_bytes(self: *Socket, buf: *u8, n: i32) -> !i32 {
+    fn write_bytes(self, buf: *u8, n: i32) -> !i32 {
         let w: i64 = gnet_write_async(self.fd, buf as *void, n);
         if w < 0 { return err(gnet_last_error()); }
         return ok(w as i32);
     }
-    fn close(self: *Socket) {
+    fn close(self) {
         if self.fd >= 0 { gnet_close(self.fd); }
         free(self as *void);
     }

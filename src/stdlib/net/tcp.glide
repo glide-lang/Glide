@@ -103,7 +103,7 @@ impl TcpStream {
 
     /// Write `data` once. May write fewer bytes than requested under
     /// pressure — use `write_all` to retry until every byte is sent.
-    pub fn write(self: *TcpStream, data: string) -> !i32 {
+    pub fn write(self, data: string) -> !i32 {
         let buf: *u8 = _str_buf(data);
         let n: i64 = gnet_send(self.fd, buf as *void, data.len());
         free(buf as *void);
@@ -116,7 +116,7 @@ impl TcpStream {
     /// ```glide
     /// stream.write_all("HTTP/1.0 200 OK\r\n\r\nhi");
     /// ```
-    pub fn write_all(self: *TcpStream, data: string) -> !i32 {
+    pub fn write_all(self, data: string) -> !i32 {
         let n: i32 = data.len();
         let buf: *u8 = _str_buf(data);
         let w: i64 = gnet_write_async(self.fd, buf as *void, n);
@@ -135,7 +135,7 @@ impl TcpStream {
     /// defer buf.free();
     /// let text: string = String::from_utf8(buf)?;
     /// ```
-    pub fn read(self: *TcpStream, max: i32) -> !*ByteBuffer {
+    pub fn read(self, max: i32) -> !*ByteBuffer {
         let b: *ByteBuffer = ByteBuffer::with_capacity(max);
         let n: i64 = gnet_read_async(self.fd, b.data as *void, max);
         if n < 0 { b.free(); return err("tcp: recv: ".concat(gnet_last_error())); }
@@ -146,7 +146,7 @@ impl TcpStream {
     /// Like `read`, but returns the bytes as a heap-copied, NUL-terminated
     /// `string`. Convenient for text protocols; the bytes are NOT UTF-8
     /// validated — use `read` + `String::from_utf8` when you need that.
-    pub fn read_str(self: *TcpStream, max: i32) -> !string {
+    pub fn read_str(self, max: i32) -> !string {
         let buf: *u8 = malloc(max as usize) as *u8;
         let n: i64 = gnet_read_async(self.fd, buf as *void, max);
         if n < 0 { free(buf as *void); return err("tcp: recv: ".concat(gnet_last_error())); }
@@ -157,7 +157,7 @@ impl TcpStream {
 
     /// Read until the connection closes (EOF). Useful for HTTP/1.0-style
     /// "read everything" responses.
-    pub fn read_to_end(self: *TcpStream) -> !string {
+    pub fn read_to_end(self) -> !string {
         // Doubling ByteBuffer instead of an `out = out.concat(...)` fold,
         // which recopies the whole prefix every chunk (O(n^2)) — pathological
         // on a multi-MB download. 64 KiB reads also cut the syscall count.
@@ -178,14 +178,14 @@ impl TcpStream {
     /// Raw single-buffer write by pointer (server fast path — avoids a
     /// string/ByteBuffer wrapper when the caller already holds a C buffer).
     /// Returns bytes written. Prefer `write_all` / `write_buf` in user code.
-    pub fn write_ptr(self: *TcpStream, buf: *void, n: i32) -> !i32 {
+    pub fn write_ptr(self, buf: *void, n: i32) -> !i32 {
         let w: i64 = gnet_write_async(self.fd, buf, n);
         if w < 0 { return err("tcp: write: ".concat(gnet_last_error())); }
         return ok(w as i32);
     }
 
     /// Write every byte of `b` in one call.
-    pub fn write_buf(self: *TcpStream, b: *ByteBuffer) -> !i32 {
+    pub fn write_buf(self, b: *ByteBuffer) -> !i32 {
         let w: i64 = gnet_write_async(self.fd, b.data as *void, b.len);
         if w < 0 { return err("tcp: write_buf: ".concat(gnet_last_error())); }
         return ok(w as i32);
@@ -194,7 +194,7 @@ impl TcpStream {
     /// Gather-write two buffers (e.g. a response header + body) in a single
     /// syscall, so they ship in one TCP segment without an intermediate
     /// memcpy. Returns total bytes sent.
-    pub fn write2(self: *TcpStream, buf1: *void, n1: i32, buf2: *void, n2: i32) -> !i32 {
+    pub fn write2(self, buf1: *void, n1: i32, buf2: *void, n2: i32) -> !i32 {
         let w: i64 = gnet_writev2_async(self.fd, buf1, n1, buf2, n2);
         if w < 0 { return err("tcp: writev2: ".concat(gnet_last_error())); }
         return ok(w as i32);
@@ -202,7 +202,7 @@ impl TcpStream {
 
     /// Zero-copy file -> socket (Linux `sendfile`, Windows `TransmitFile`,
     /// read+write loop elsewhere). Returns total bytes sent.
-    pub fn sendfile(self: *TcpStream, path: string) -> !i32 {
+    pub fn sendfile(self, path: string) -> !i32 {
         let n: i64 = gnet_sendfile_from_path(self.fd, path);
         if n < 0 { return err("tcp: sendfile: ".concat(gnet_last_error())); }
         return ok(n as i32);
@@ -210,7 +210,7 @@ impl TcpStream {
 
     /// Apply a read + write timeout in milliseconds (`0` disables), via
     /// SO_RCVTIMEO / SO_SNDTIMEO. Keep the fd blocking for this to bite.
-    pub fn set_timeout_ms(self: *TcpStream, ms: i32) {
+    pub fn set_timeout_ms(self, ms: i32) {
         let _r: i64 = gnet_set_timeout(self.fd, ms);
     }
 
@@ -223,7 +223,7 @@ impl TcpStream {
     /// let who: *SocketAddr = conn.peer_addr()?;
     /// println!("connection from {}", who.to_string());   // "203.0.113.7:54233"
     /// ```
-    pub fn peer_addr(self: *TcpStream) -> !*SocketAddr {
+    pub fn peer_addr(self) -> !*SocketAddr {
         let mut f: i32 = 0;
         let mut v4: i64 = 0;
         let mut hi: i64 = 0;
@@ -237,7 +237,7 @@ impl TcpStream {
 
     /// The locally-bound address of this stream (resolves the ephemeral port
     /// the kernel picked for an outbound `connect`).
-    pub fn local_addr(self: *TcpStream) -> !*SocketAddr {
+    pub fn local_addr(self) -> !*SocketAddr {
         let mut f: i32 = 0;
         let mut v4: i64 = 0;
         let mut hi: i64 = 0;
@@ -256,7 +256,7 @@ impl TcpStream {
     /// let ip: *IpAddr = conn.peer_ip()?;
     /// if ip.is_loopback() { println!("local caller"); }
     /// ```
-    pub fn peer_ip(self: *TcpStream) -> !*IpAddr {
+    pub fn peer_ip(self) -> !*IpAddr {
         let addr: *SocketAddr = self.peer_addr()?;
         return ok(addr.ip);
     }
@@ -264,7 +264,7 @@ impl TcpStream {
     /// Half-close the connection with `SHUT_RD` / `SHUT_WR` / `SHUT_RDWR`.
     /// `shutdown(SHUT_WR)` signals EOF to the peer while still letting you
     /// drain its reply — unlike `close`, the fd stays open.
-    pub fn shutdown(self: *TcpStream, how: i32) -> !i32 {
+    pub fn shutdown(self, how: i32) -> !i32 {
         if gnet_shutdown(self.fd, how) < 0 {
             return err("tcp: shutdown: ".concat(gnet_last_error()));
         }
@@ -273,23 +273,23 @@ impl TcpStream {
 
     /// TCP_NODELAY — disable Nagle so small writes flush without waiting to
     /// coalesce. Worth it for latency-sensitive, request/response protocols.
-    pub fn set_nodelay(self: *TcpStream, on: bool) -> !i32 {
+    pub fn set_nodelay(self, on: bool) -> !i32 {
         return sock_set_nodelay(self.fd, on);
     }
 
     /// SO_KEEPALIVE — probe an idle connection so a dead peer eventually
     /// surfaces as a read/write error instead of a silently-wedged socket.
-    pub fn set_keepalive(self: *TcpStream, on: bool) -> !i32 {
+    pub fn set_keepalive(self, on: bool) -> !i32 {
         return sock_set_keepalive(self.fd, on);
     }
 
     /// SO_RCVBUF — receive-buffer size hint in bytes (the kernel may round it).
-    pub fn set_recv_buf(self: *TcpStream, bytes: i32) -> !i32 {
+    pub fn set_recv_buf(self, bytes: i32) -> !i32 {
         return sock_set_recv_buf(self.fd, bytes);
     }
 
     /// SO_SNDBUF — send-buffer size hint in bytes (the kernel may round it).
-    pub fn set_send_buf(self: *TcpStream, bytes: i32) -> !i32 {
+    pub fn set_send_buf(self, bytes: i32) -> !i32 {
         return sock_set_send_buf(self.fd, bytes);
     }
 
@@ -301,7 +301,7 @@ impl TcpStream {
     /// let hdr: *u8 = malloc(4) as *u8;
     /// conn.read_exact(hdr, 4)?;   // block until all 4 header bytes arrive
     /// ```
-    pub fn read_exact(self: *TcpStream, buf: *u8, n: i32) -> !i32 {
+    pub fn read_exact(self, buf: *u8, n: i32) -> !i32 {
         let mut got: i32 = 0;
         while got < n {
             let r: i32 = self.read_bytes(&buf[got], n - got)?;
@@ -321,17 +321,17 @@ impl TcpStream {
 /// wrappers (blocking on this client fd; parking when used on a
 /// non-blocking fd inside a coroutine).
 impl Stream for TcpStream {
-    fn read_bytes(self: *TcpStream, buf: *u8, max: i32) -> !i32 {
+    fn read_bytes(self, buf: *u8, max: i32) -> !i32 {
         let n: i64 = gnet_read_async(self.fd, buf as *void, max);
         if n < 0 { return err("tcp: read_bytes: ".concat(gnet_last_error())); }
         return ok(n as i32);
     }
-    fn write_bytes(self: *TcpStream, buf: *u8, n: i32) -> !i32 {
+    fn write_bytes(self, buf: *u8, n: i32) -> !i32 {
         let w: i64 = gnet_write_async(self.fd, buf as *void, n);
         if w < 0 { return err("tcp: write_bytes: ".concat(gnet_last_error())); }
         return ok(w as i32);
     }
-    fn close(self: *TcpStream) {
+    fn close(self) {
         gnet_close(self.fd);
         free(self as *void);
     }

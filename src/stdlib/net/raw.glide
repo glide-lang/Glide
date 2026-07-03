@@ -50,7 +50,7 @@ impl RawSocket {
     }
 
     /// Send `n` bytes of `buf` to `dst` (the IP layer adds the header).
-    pub fn send_to(self: *RawSocket, buf: *void, n: i32, dst: *SocketAddr) -> !i32 {
+    pub fn send_to(self, buf: *void, n: i32, dst: *SocketAddr) -> !i32 {
         let fam: i32 = if dst.ip.is_v6() { AF_V6 } else { AF_V4 };
         let sent: i64 = gnet_sendto(self.fd, buf, n, fam,
                                     dst.ip.v4 as i64, dst.ip.v6_hi, dst.ip.v6_lo, dst.port);
@@ -60,7 +60,7 @@ impl RawSocket {
 
     /// Receive one packet into a caller-owned buffer. Returns the byte
     /// count + sender. Blocking; set a timeout with `set_timeout_ms`.
-    pub fn recv_from(self: *RawSocket, buf: *void, max: i32) -> !*RawRecv {
+    pub fn recv_from(self, buf: *void, max: i32) -> !*RawRecv {
         let mut fam: i32 = 0;
         let mut v4: i64 = 0;
         let mut hi: i64 = 0;
@@ -78,7 +78,7 @@ impl RawSocket {
     }
 
     /// Outgoing TTL (hop limit) — used by traceroute to probe each hop.
-    pub fn set_ttl(self: *RawSocket, ttl: i32) -> !i32 {
+    pub fn set_ttl(self, ttl: i32) -> !i32 {
         if gnet_setsockopt_int(self.fd, gnet_const(OPT_IPPROTO_IP), gnet_const(OPT_IP_TTL), ttl) < 0 {
             return err("raw: set_ttl: ".concat(gnet_last_error()));
         }
@@ -87,14 +87,14 @@ impl RawSocket {
 
     /// Receive timeout in ms (`0` disables). Needed so ping/traceroute
     /// don't block forever on a dropped reply.
-    pub fn set_timeout_ms(self: *RawSocket, ms: i32) -> !i32 {
+    pub fn set_timeout_ms(self, ms: i32) -> !i32 {
         if gnet_set_timeout(self.fd, ms) < 0 {
             return err("raw: set_timeout: ".concat(gnet_last_error()));
         }
         return ok(0);
     }
 
-    pub fn close(self: *RawSocket) {
+    pub fn close(self) {
         gnet_close(self.fd);
         free(self as *void);
     }

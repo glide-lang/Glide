@@ -50,7 +50,7 @@ impl FormData {
     /// f.set("tag", "red");
     /// f.set("tag", "blue");   // both kept; encodes as "tag=red&tag=blue"
     /// ```
-    pub fn set(self: *FormData, name: string, value: string) {
+    pub fn set(self, name: string, value: string) {
         self.names.push(name);
         self.values.push(value);
     }
@@ -61,7 +61,7 @@ impl FormData {
     /// f.set("a", "1"); f.set("b", "2");
     /// f.len();   // 2
     /// ```
-    pub fn len(self: *FormData) -> i32 { return self.names.len(); }
+    pub fn len(self) -> i32 { return self.names.len(); }
 
     /// Name at insertion position `i`. Pair with `value_at(i)` to walk
     /// the form.
@@ -71,10 +71,10 @@ impl FormData {
     ///     println!(f.name_at(i), "=", f.value_at(i));
     /// }
     /// ```
-    pub fn name_at(self: *FormData, i: i32) -> string { return self.names.get(i); }
+    pub fn name_at(self, i: i32) -> string { return self.names.get(i); }
 
     /// Value at insertion position `i`. See `name_at`.
-    pub fn value_at(self: *FormData, i: i32) -> string { return self.values.get(i); }
+    pub fn value_at(self, i: i32) -> string { return self.values.get(i); }
 
     /// Build the wire string: `k=v&k=v` with each piece percent-encoded.
     ///
@@ -83,7 +83,7 @@ impl FormData {
     /// f.set("token", "abc xyz=99");
     /// f.encode();   // "user=alice&token=abc%20xyz%3D99"
     /// ```
-    pub fn encode(self: *FormData) -> string {
+    pub fn encode(self) -> string {
         let mut out: string = "";
         for let i: i32 = 0; i < self.names.len(); i++ {
             if i > 0 { out = out.concat("&"); }

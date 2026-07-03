@@ -100,7 +100,7 @@ impl Mail {
     /// m.attachments.push(att);
     /// let wire: string = m.to_rfc5322();   // multipart/mixed envelope
     /// ```
-    pub fn to_rfc5322(self: *Mail) -> string {
+    pub fn to_rfc5322(self) -> string {
         let mut h: string = "";
         if !self.from.eq("") {
             h = h.concat("From: ").concat(self.from).concat("\r\n");
