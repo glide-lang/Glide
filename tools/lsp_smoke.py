@@ -215,6 +215,44 @@ case_diagnostics("rust-style match: yield + fn return",
     'fn main() -> i32 { let r = g(); return 0; }',
     expect_codes_absent=["void-binding","match-arm-mismatch"])
 
+# A duplicate arm is unreachable (and used to die as a cc ICE).
+case_diagnostics("duplicate match arm is flagged",
+    'fn f() -> !i32 { return ok(1); }\n'
+    'fn main() -> i32 {\n'
+    '    match f() {\n'
+    '        ok(v) => {}\n'
+    '        ok(w) => {}\n'
+    '        err(e) => {}\n'
+    '    }\n'
+    '    return 0;\n'
+    '}',
+    expect_codes_present=["duplicate-arm"])
+
+# Binding more names than the payload has fields (used to ICE in cc).
+case_diagnostics("pattern arity mismatch is flagged",
+    'fn f() -> !i32 { return ok(1); }\n'
+    'fn main() -> i32 {\n'
+    '    match f() {\n'
+    '        ok(a, b) => {}\n'
+    '        err(e) => {}\n'
+    '    }\n'
+    '    return 0;\n'
+    '}',
+    expect_codes_present=["pattern-arity"])
+
+# Enum-constructor initializer types the binding, so the match is checked:
+# an unannotated `let s = Shape::Circle(…)` still gets exhaustiveness.
+case_diagnostics("enum ctor let feeds match exhaustiveness",
+    'enum Shape { Circle(f64), Rect(f64, f64) }\n'
+    'fn main() -> i32 {\n'
+    '    let s = Shape::Circle(1.0);\n'
+    '    match s {\n'
+    '        Circle(r) => {}\n'
+    '    }\n'
+    '    return 0;\n'
+    '}',
+    expect_codes_present=["match-not-exhaustive"])
+
 # A value arm next to a PLAIN void arm (no return) is an error.
 case_diagnostics("value arm + plain void arm is an error",
     'fn f() -> !i32 { return ok(1); }\n'

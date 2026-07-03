@@ -1911,7 +1911,7 @@ fn parse_match(p: *Parser) -> *Stmt {
             let ass: *Expr = parse_maybe_assign(p, e);
             body.push(*stmt_expr(ass));
         }
-        let arm: MatchArm = MatchArm { variant: variant, bindings: bindings, body: body, lead: arm_lead, trail: "", lit: lit };
+        let arm: MatchArm = MatchArm { variant: variant, bindings: bindings, body: body, line: lit_line, col: lit_col, lead: arm_lead, trail: "", lit: lit };
         p.eat_op(",");
         if p.current.trail != null && !p.current.trail.eq("") {
             arm.trail = p.current.trail;
@@ -2016,7 +2016,7 @@ fn parse_match_expr(p: *Parser) -> *Expr {
             yr.is_arm_yield = true;
             body.push(*yr);
         }
-        let arm: MatchArm = MatchArm { variant: variant, bindings: bindings, body: body, lead: arm_lead, trail: "", lit: lit };
+        let arm: MatchArm = MatchArm { variant: variant, bindings: bindings, body: body, line: lit_line, col: lit_col, lead: arm_lead, trail: "", lit: lit };
         p.eat_op(",");
         if p.current.trail != null && !p.current.trail.eq("") {
             arm.trail = p.current.trail;

@@ -916,6 +916,8 @@ pub struct Typer {
     // Enum exhaustiveness: enum name -> comma-joined variant names. Built in
     // pre_register; consulted by ST_MATCH check to flag uncovered variants.
     pub enums: *HashMap<string>,
+    // "Enum::Variant" -> payload field count, for pattern-arity checking.
+    pub enum_arities: *HashMap<i32>,
     pub error_count: i32,
     pub diagnostics: *Vector<DiagEntry>,
     // Related "why" locations, keyed by diagnostic index. See DiagRelated.
@@ -1421,6 +1423,8 @@ impl Typer {
         t.assoc_table = at;
         let en: *HashMap<string> = HashMap::new();
         t.enums = en;
+        let ena: *HashMap<i32> = HashMap::new();
+        t.enum_arities = ena;
         t.error_count = 0;
         let fh: *Vector<FnptrHint> = Vector::new();
         t.fnptr_hints = fh;
@@ -1959,6 +1963,11 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
                         vlist = vlist.concat(",");
                     }
                     vlist = vlist.concat(ev.name);
+                    let mut _ar: i32 = 0;
+                    if ev.fields != null {
+                        _ar = ev.fields.len();
+                    }
+                    t.enum_arities.insert(s.name.concat("::").concat(ev.name), _ar);
                 }
             }
             t.enums.insert(s.name, vlist);
@@ -3093,6 +3102,16 @@ fn _check_match_coverage(t: *Typer, scrut_ty: *Type, arms: *Vector<MatchArm>, li
     let covered: *HashMap<bool> = HashMap::new();
     for let i: i32 = 0; i < arms.len(); i++ {
         let a: MatchArm = arms.get(i);
+        // Anchor every arm diagnostic at the arm's own pattern token; older
+        // ASTs (line 0) fall back to the match head.
+        let mut a_line: i32 = a.line;
+        let mut a_col: i32 = a.col;
+        let mut a_span: i32 = a.variant.len();
+        if a_line < 1 {
+            a_line = line;
+            a_col = col;
+            a_span = 5;
+        }
         if a.variant.eq("_") {
             has_wildcard = true;
             continue;
@@ -3102,16 +3121,28 @@ fn _check_match_coverage(t: *Typer, scrut_ty: *Type, arms: *Vector<MatchArm>, li
         if a.lit != null {
             has_literal = true;
             if is_enum || is_opt || is_res {
-                t.err_code_range(line, col, 5, "invalid-pattern", "literal pattern `".concat(a.variant).concat("` cannot match a `").concat(type_to_string(scrut_ty)).concat("` scrutinee"));
+                t.err_code_range(a_line, a_col, a_span, "invalid-pattern", "literal pattern `".concat(a.variant).concat("` cannot match a `").concat(type_to_string(scrut_ty)).concat("` scrutinee"));
                 continue;
             }
             let lt: *Type = infer_expr(t, a.lit);
             if scrut_ty != null && !types_compat(scrut_ty, lt) {
-                t.err_code_range(line, col, 5, "pattern-type-mismatch", "literal pattern `".concat(a.variant).concat("` has type `").concat(type_to_string(lt)).concat("`, but the match scrutinee is `").concat(type_to_string(scrut_ty)).concat("`"));
+                t.err_code_range(a_line, a_col, a_span, "pattern-type-mismatch", "literal pattern `".concat(a.variant).concat("` has type `").concat(type_to_string(lt)).concat("`, but the match scrutinee is `").concat(type_to_string(scrut_ty)).concat("`"));
             }
             continue;
         }
+        // A repeated arm is dead — and the C lowering emitted a duplicate
+        // `case` label, which died in cc as a self-blaming ICE.
+        if covered.contains(a.variant) {
+            t.err_code_range(a_line, a_col, a_span, "duplicate-arm", "`".concat(a.variant).concat("` is matched more than once; this arm is unreachable"));
+            continue;
+        }
         covered.insert(a.variant, true);
+        // Binding arity: more names than the payload has fields miscompiled
+        // (undeclared C locals). Fewer is fine — the payload is just ignored.
+        let mut bind_n: i32 = 0;
+        if a.bindings != null {
+            bind_n = a.bindings.len();
+        }
         if is_enum && parts != null {
             let mut found: bool = false;
             for let j: i32 = 0; j < parts.len(); j++ {
@@ -3121,17 +3152,34 @@ fn _check_match_coverage(t: *Typer, scrut_ty: *Type, arms: *Vector<MatchArm>, li
                 }
             }
             if !found {
-                t.err_code_range(line, col, 5, "unknown-variant", "`".concat(a.variant).concat("` is not a variant of `").concat(scrut_ty.name).concat("`"));
+                t.err_code_range(a_line, a_col, a_span, "unknown-variant", "`".concat(a.variant).concat("` is not a variant of `").concat(scrut_ty.name).concat("`"));
+            } else {
+                let akey: string = scrut_ty.name.concat("::").concat(a.variant);
+                if t.enum_arities.contains(akey) && bind_n > t.enum_arities.get(akey) {
+                    t.err_code_range(a_line, a_col, a_span, "pattern-arity", "`".concat(a.variant).concat("` has ").concat(format!("{}", t.enum_arities.get(akey))).concat(" payload field(s), but ").concat(format!("{}", bind_n)).concat(" names are bound"));
+                }
             }
         } else {
             if is_opt {
                 if !a.variant.eq("some") && !a.variant.eq("none") {
-                    t.err_code_range(line, col, 5, "unknown-variant", "`".concat(a.variant).concat("` is not a variant of an Option; use `some` / `none`"));
+                    t.err_code_range(a_line, a_col, a_span, "unknown-variant", "`".concat(a.variant).concat("` is not a variant of an Option; use `some` / `none`"));
+                } else {
+                    let mut _want: i32 = 1;
+                    if a.variant.eq("none") {
+                        _want = 0;
+                    }
+                    if bind_n > _want {
+                        t.err_code_range(a_line, a_col, a_span, "pattern-arity", "`".concat(a.variant).concat("` binds at most ").concat(format!("{}", _want)).concat(" value(s), but ").concat(format!("{}", bind_n)).concat(" names are bound"));
+                    }
                 }
             } else {
                 if is_res {
                     if !a.variant.eq("ok") && !a.variant.eq("err") {
-                        t.err_code_range(line, col, 5, "unknown-variant", "`".concat(a.variant).concat("` is not a variant of a Result; use `ok` / `err`"));
+                        t.err_code_range(a_line, a_col, a_span, "unknown-variant", "`".concat(a.variant).concat("` is not a variant of a Result; use `ok` / `err`"));
+                    } else {
+                        if bind_n > 1 {
+                            t.err_code_range(a_line, a_col, a_span, "pattern-arity", "`".concat(a.variant).concat("` binds at most 1 value, but ").concat(format!("{}", bind_n)).concat(" names are bound"));
+                        }
                     }
                 }
             }
@@ -4612,6 +4660,18 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             let is_type: bool = t.structs.contains(prefix);
             let is_known_method: bool = t.fns.contains(pname);
             let is_type_param: bool = _is_current_type_param(t, prefix);
+            // Enum payload constructor `Shape::Circle(1.0)` yields the enum, so
+            // an unannotated `let s = Shape::Circle(…)` types as Shape and its
+            // `match` gets the variant/exhaustiveness/arity checks.
+            if is_type && t.enums.contains(prefix) && t.enum_arities.contains(prefix.concat("::").concat(e.lhs.field)) {
+                if e.args != null {
+                    for let ei: i32 = 0; ei < e.args.len(); ei++ {
+                        let ea: Expr = e.args.get(ei);
+                        infer_expr(t, &ea);
+                    }
+                }
+                return ty_named(prefix);
+            }
             if !is_type && !is_known_method && !is_type_param && !t.is_module_path_allowed(prefix) {
                 let path_span: i32 = prefix.len() + 2 + e.lhs.field.len();
                 t.err_code_range(e.lhs.line, e.lhs.column, path_span, "", "module `".concat(prefix).concat("` not in scope; add `import ").concat(prefix).concat(";` or use the full path"));
