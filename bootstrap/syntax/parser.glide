@@ -588,6 +588,17 @@ fn parse_fn(p: *Parser) -> *Stmt {
         let pn_line: i32 = p.current.line;
         let pn_col: i32 = p.current.column;
         let pname: string = p.expect_ident();
+        // Rust-style bare receiver: `fn m(self, …)` inside an impl means
+        // `self: *Self`; the impl post-pass substitutes the target type.
+        // An annotated `self: *T` keeps working unchanged.
+        if pname.eq("self") && !p.at_op(":") {
+            let sprm: Param = Param { name: pname, ty: ty_pointer(ty_named("Self")), name_line: pn_line, name_col: pn_col };
+            params.push(sprm);
+            if !p.eat_op(",") {
+                break;
+            }
+            continue;
+        }
         p.expect_op(":");
         let pty: *Type = parse_type(p);
         let prm: Param = Param { name: pname, ty: pty, name_line: pn_line, name_col: pn_col };

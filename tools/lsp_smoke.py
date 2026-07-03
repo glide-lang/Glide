@@ -1569,6 +1569,39 @@ case_feature("formatting refuses a file with parse errors",
     lambda r: check("no edits returned", (r.get("result") or []) == [],
                     f"got: {r.get('result')!r}"))
 
+# Rust-style bare receiver: `fn bump(self)` works in impls and traits.
+case_diagnostics("bare self receiver compiles",
+    'struct C { n: i32 }\n'
+    'impl C {\n'
+    '    pub fn bump(self) { self.n = self.n + 1; }\n'
+    '    pub fn get(self) -> i32 { return self.n; }\n'
+    '}\n'
+    'fn main() -> i32 {\n'
+    '    let c: *C = malloc(8) as *C;\n'
+    '    c.bump();\n'
+    '    return c.get();\n'
+    '}',
+    expect_codes_absent=["ice"])
+
+# Member completion on a let bound to a match result (`res.`) lists the
+# payload type's instance methods.
+case_completion_has("match-bound let gets member completion",
+    'struct P { x: i32 }\n'
+    'impl P {\n'
+    '    pub fn probe(self) -> i32 { return self.x; }\n'
+    '}\n'
+    'fn get() -> !*P { return err("no"); }\n'
+    'fn main() -> i32 {\n'
+    '    let res = match get() {\n'
+    '        ok(v) => v,\n'
+    '        err(e) => { return 1; }\n'
+    '    };\n'
+    '    res.\n'
+    '    return 0;\n'
+    '}',
+    {"line":10,"character":8},
+    ["probe","x"])
+
 # Hover on a match-arm binding shows its derived type.
 case_feature("hover on a match binding shows its type",
     'struct P { x: i32 }\n'

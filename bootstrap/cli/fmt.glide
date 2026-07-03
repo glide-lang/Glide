@@ -1217,7 +1217,13 @@ fn fmt_fn(s: *Stmt, depth: i32) -> string {
                 head = head.concat(", ");
             }
             let p: Param = s.fn_params.get(i);
-            head = head.concat(p.name).concat(": ").concat(fmt_type(p.ty));
+            // The receiver renders bare (`self`), Rust-style — its type is
+            // always the impl target, so the annotation carries no information.
+            if i == 0 && p.name != null && p.name.eq("self") {
+                head = head.concat("self");
+            } else {
+                head = head.concat(p.name).concat(": ").concat(fmt_type(p.ty));
+            }
         }
     }
     if s.is_variadic {

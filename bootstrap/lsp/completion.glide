@@ -1794,7 +1794,10 @@ pub fn _expr_type_node(e: *Expr, root: *Vector<Stmt>, line0: i32, path: string, 
                 continue; // exits the fn; says nothing about the match type
             }
             if mlast.expr_value != null {
-                let mt: *Type = _expr_type_node(mlast.expr_value, root, line0, path, depth + 1);
+                // Resolve the arm's value AT THE ARM'S OWN LINE — its payload
+                // bindings (`v` in `ok(v) => v`) are only in scope there, not
+                // at the caller's cursor line (which may be after the match).
+                let mt: *Type = _expr_type_node(mlast.expr_value, root, mlast.line - 1, path, depth + 1);
                 if mt != null {
                     return mt;
                 }
