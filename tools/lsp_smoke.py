@@ -1929,6 +1929,14 @@ case_diagnostics_project("unused module import is flagged",
     "main.glide",
     present=["unused-import"])
 
+# A module-qualified trait in a `*dyn mod::Trait` param doesn't false-flag the
+# module import as unused (the qualifier is tracked through the dyn type).
+case_diagnostics_project("qualified dyn trait keeps its module import used",
+    {"alelo.glide": "pub trait Pinto { fn ola(&self) -> string; }\n",
+     "main.glide": "import alelo;\nfn a(x: *dyn alelo::Pinto) -> string { return x.ola(); }\nfn main() -> i32 { return 0; }\n"},
+    "main.glide",
+    absent=["unused-import"])
+
 # The unused import is faded (DiagnosticTag.Unnecessary = 1).
 case_diagnostics_project("unused import is tagged Unnecessary",
     {"alelo.glide": "pub fn helper() -> i32 { return 1; }\n",

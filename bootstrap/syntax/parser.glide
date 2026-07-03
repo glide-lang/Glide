@@ -980,6 +980,11 @@ fn parse_impl(p: *Parser) -> *Stmt {
         if target != null && target.kind == TY_NAMED {
             trait_name = target.name;
         }
+        // A module-qualified trait (`impl alelo::Pinto for T`) parses as an
+        // assoc type (`Owner::Name`); the trait leaf is its `name`.
+        if target != null && target.kind == TY_ASSOC {
+            trait_name = target.name;
+        }
         p.advance();
         target = parse_type(p);
     }
@@ -2624,10 +2629,23 @@ fn parse_type(p: *Parser) -> *Type {
     // (`*dyn Trait`) since the size depends on the runtime type.
     if p.at_kw("dyn") {
         p.advance();
-        let name: string = p.expect_ident();
+        // Accept a module-qualified trait (`dyn alelo::Pinto`): keep the last
+        // segment as the trait name (codegen builds identifiers from it) and
+        // remember the qualifier in `inner` so an unused-import scan still sees
+        // the module reference.
+        let mut name: string = p.expect_ident();
+        let mut qualifier: string = "";
+        while p.at_op("::") {
+            p.advance();
+            qualifier = name;
+            name = p.expect_ident();
+        }
         let t: *Type = __glide_palloc(sizeof(Type)) as *Type;
         t.kind = TY_DYN;
         t.name = name;
+        if !qualifier.eq("") {
+            t.inner = ty_named(qualifier);
+        }
         return t;
     }
     if p.eat_op("&") {
