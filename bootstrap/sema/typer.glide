@@ -916,6 +916,10 @@ pub struct Typer {
     // Enum exhaustiveness: enum name -> comma-joined variant names. Built in
     // pre_register; consulted by ST_MATCH check to flag uncovered variants.
     pub enums: *HashMap<string>,
+    // True while check_fn is visiting an impl METHOD (LSP focused mode).
+    // A bare call `free(x)` inside a method named `free` targets the FREE
+    // FUNCTION, never the method — so the self-recursion lint must not fire.
+    pub in_impl_method: bool,
     // "Enum::Variant" -> payload field count, for pattern-arity checking.
     pub enum_arities: *HashMap<i32>,
     // "Enum::Variant#i" -> payload field type, so match-arm bindings get their
@@ -1426,6 +1430,7 @@ impl Typer {
         t.assoc_table = at;
         let en: *HashMap<string> = HashMap::new();
         t.enums = en;
+        t.in_impl_method = false;
         let ena: *HashMap<i32> = HashMap::new();
         t.enum_arities = ena;
         let enp: *HashMap<Type> = HashMap::new();
@@ -2845,12 +2850,14 @@ fn check_top(t: *Typer, s: *Stmt) {
             // warnings so their latent backlog doesn't surface as errors here.
             let own_impl: bool = s.origin == null || s.origin.eq("") || s.origin.eq(t.user_origin);
             t.demote_errors = !own_impl;
+            t.in_impl_method = true;
             for let i: i32 = 0; i < s.impl_methods.len(); i++ {
                 let m: Stmt = s.impl_methods.get(i);
                 if m.kind == ST_FN {
                     check_fn(t, &m);
                 }
             }
+            t.in_impl_method = false;
             t.demote_errors = false;
             t.impl_type_params = saved_tps;
         }
@@ -2896,7 +2903,15 @@ fn first_unconditional_self_call(body: *Vector<Stmt>, name: string) -> *Expr {
     }
     for let i: i32 = 0; i < body.len(); i++ {
         let st: Stmt = body.get(i);
-        if st.kind == ST_IF || st.kind == ST_WHILE || st.kind == ST_FOR || st.kind == ST_MATCH || st.kind == ST_RETURN || st.kind == ST_BREAK || st.kind == ST_CONTINUE {
+        // `return f();` recurses just as unconditionally as a bare `f();` —
+        // check the returned expression before treating the return as a stop.
+        if st.kind == ST_RETURN {
+            if is_self_call_expr(st.expr_value, name) {
+                return st.expr_value;
+            }
+            return null;
+        }
+        if st.kind == ST_IF || st.kind == ST_WHILE || st.kind == ST_FOR || st.kind == ST_MATCH || st.kind == ST_BREAK || st.kind == ST_CONTINUE {
             return null;
         }
         if st.kind == ST_EXPR && is_self_call_expr(st.expr_value, name) {
@@ -2956,7 +2971,7 @@ fn check_fn(t: *Typer, s: *Stmt) {
             kill_dead_borrows(t, s.fn_body, i);
         }
         let rc: *Expr = first_unconditional_self_call(s.fn_body, s.name);
-        if rc != null {
+        if rc != null && !t.in_impl_method {
             t.err_code_range(rc.line, rc.column, s.name.len(), "infinite-recursion", "function `".concat(s.name).concat("` recurses unconditionally; every call overflows the stack"));
         }
     }

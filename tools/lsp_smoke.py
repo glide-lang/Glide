@@ -1569,6 +1569,29 @@ case_feature("formatting refuses a file with parse errors",
     lambda r: check("no edits returned", (r.get("result") or []) == [],
                     f"got: {r.get('result')!r}"))
 
+# A method named `free` that calls the BUILTIN free() is not self-recursion.
+case_diagnostics("method free calling builtin free is not recursion",
+    'struct R { x: i32 }\n'
+    'impl R {\n'
+    '    pub fn free(self) {\n'
+    '        free(self as *void);\n'
+    '    }\n'
+    '}\n'
+    'fn main() -> i32 {\n'
+    '    let r: *R = malloc(8) as *R;\n'
+    '    r.free();\n'
+    '    return 0;\n'
+    '}',
+    expect_codes_absent=["infinite-recursion"])
+
+# `return f();` recurses just as unconditionally as a bare `f();`.
+case_diagnostics("tail self-call is flagged as infinite recursion",
+    'fn loopy() -> i32 {\n'
+    '    return loopy();\n'
+    '}\n'
+    'fn main() -> i32 { return loopy(); }',
+    expect_codes_present=["infinite-recursion"])
+
 # line!() expands inside match-arm bodies (used to print (nil)).
 # The check drives the compiler end-to-end via diagnostics absence; the
 # behavior itself is covered by the expander walking arm bodies.
