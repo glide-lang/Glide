@@ -242,7 +242,16 @@ fn peel_child_module_items(stmts: *Vector<Stmt>, s: *Stmt, resolved: string, dir
     let mut first_child_file: string = "";
     let mut first_child_name: string = "";
     for let i: i32 = 0; i < s.imported_items.len(); i++ {
-        let item: string = s.imported_items.get(i);
+        let mut item: string = s.imported_items.get(i);
+        // Nested entry (`cookies::CookieJar`, flattened from
+        // `cookies::{CookieJar}`): the head is the child module, the tail a
+        // symbol to bring into scope from it.
+        let mut sub_item: string = "";
+        let nest_cc: i32 = item.index_of("::");
+        if nest_cc > 0 {
+            sub_item = item.substring(nest_cc + 2, item.len());
+            item = item.substring(0, nest_cc);
+        }
         // Resolve the child through the normal import search (importer-relative,
         // then the roots), so dir-only packages (`stdlib/net/` with no
         // `net.glide`) find their children the same way a hand-written
@@ -253,8 +262,21 @@ fn peel_child_module_items(stmts: *Vector<Stmt>, s: *Stmt, resolved: string, dir
         }
         let child_file: string = resolve_import(dir, base_mod.concat("/").concat(item).concat(".glide"));
         if !__glide_file_exists(child_file) {
-            keep.push(item);
+            keep.push(s.imported_items.get(i));
             continue;
+        }
+        // The nested symbol comes into scope bare via a synthesized selective
+        // import of the child file (`import …::cookies::{CookieJar};`).
+        if !sub_item.eq("") {
+            let sel: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
+            ast_fill_defaults(sel);
+            sel.kind = ST_IMPORT;
+            sel.import_path = child_file;
+            let sel_items: *Vector<string> = Vector::new();
+            sel_items.push(sub_item);
+            sel.imported_items = sel_items;
+            sel.origin = origin;
+            stmts.push(*sel);
         }
         if cache != null {
             load_into_with_cache(stmts, child_file, loaded, pdiags, cache);

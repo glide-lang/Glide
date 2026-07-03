@@ -35,3 +35,15 @@ fn test_dir_only_group() -> i32 {
     assert_str_eq!(a.to_string(), "10.0.0.7");
     return 0;
 }
+
+// Nested brace imports: `{client, cookies::{CookieJar}}` — the child module
+// loads AND its named symbol comes into scope bare; all three usage forms.
+import stdlib::http::{cookies::{CookieJar}};
+
+fn test_nested_brace_import() -> i32 {
+    let j1 = cookies::CookieJar::new();
+    assert!(j1 != null);
+    let j2 = CookieJar::new();
+    assert!(j2 != null);
+    return 0;
+}

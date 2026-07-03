@@ -1375,7 +1375,31 @@ fn parse_import(p: *Parser) -> *Stmt {
         if p.at_op("{") {
             p.advance();
             while !p.at_op("}") && !p.at_eof() {
-                collected.push(p.expect_ident());
+                // A brace entry is an ident, optionally continuing as a nested
+                // path (`cookies::CookieJar`) or nested group
+                // (`cookies::{CookieJar, Cookie}`) — flattened to
+                // `cookies::CookieJar` entries; the loader splits them into
+                // the child-module load + the selective symbol.
+                let mut entry: string = p.expect_ident();
+                while p.at_op("::") {
+                    p.advance();
+                    if p.at_op("{") {
+                        p.advance();
+                        while !p.at_op("}") && !p.at_eof() {
+                            collected.push(entry.concat("::").concat(p.expect_ident()));
+                            if !p.eat_op(",") {
+                                break;
+                            }
+                        }
+                        p.expect_op("}");
+                        entry = "";
+                        break;
+                    }
+                    entry = entry.concat("::").concat(p.expect_ident());
+                }
+                if !entry.eq("") {
+                    collected.push(entry);
+                }
                 if !p.eat_op(",") {
                     break;
                 }
