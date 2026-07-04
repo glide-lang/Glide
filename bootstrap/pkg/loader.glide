@@ -866,6 +866,15 @@ pub fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
         if s.kind == ST_IMPORT && s.import_is_module && s.import_short != null && !s.import_short.eq("") {
             t.module_imports.insert(s.origin.concat("::").concat(s.import_short), true);
         }
+        // A SELECTIVE import (`import alelo::{Penis};`) also grants the module
+        // qualifier — `alelo::other()` works without a separate module line,
+        // so the auto-import can collapse both into one selective statement.
+        if s.kind == ST_IMPORT && !s.import_is_module && s.imported_items != null && s.imported_items.len() > 0 && s.import_path != null && !s.import_path.eq("") && s.line > 0 {
+            let selq: string = last_path_segment(s.import_path);
+            if !selq.eq("") {
+                t.module_imports.insert(s.origin.concat("::").concat(selq), true);
+            }
+        }
     }
     // Step 1: for every Stmt with a known origin, collect the set of names
     // it defines. Stored as `<origin>::<name>` keys. Also harvest struct

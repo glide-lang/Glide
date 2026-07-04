@@ -1943,9 +1943,11 @@ _pi = next((it for r in _rs2 if r.get("id")==2 for it in (r.get("result") or [])
 check("`pinto` before existing `()` inserts the plain name",
       _pi is not None and _pi.get("insertText")=="pinto" and _pi.get("insertTextFormat")==1,
       f"got {(_pi or {}).get('insertText')!r} fmt {(_pi or {}).get('insertTextFormat')}")
-check("`pinto` carries the selective import edit",
-      _pi is not None and any("import alelo::{pinto};" in (e.get("newText") or "") for e in (_pi.get("additionalTextEdits") or [])),
-      f"got {[(e.get('newText')) for e in ((_pi or {}).get('additionalTextEdits') or [])]}")
+check("`pinto` upgrades the module line to a selective import in place",
+      _pi is not None and any((e.get("newText") or "") == "import alelo::{pinto};\n"
+          and e["range"]["start"]["line"] == 0 and e["range"]["end"]["line"] == 1
+          for e in (_pi.get("additionalTextEdits") or [])),
+      f"got {[(e.get('newText'), e['range']) for e in ((_pi or {}).get('additionalTextEdits') or [])]}")
 _sh2.rmtree(_d2, ignore_errors=True)
 
 # Editing a sibling file updates the project index live: a fn deleted from

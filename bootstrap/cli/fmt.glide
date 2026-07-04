@@ -1553,7 +1553,18 @@ fn _fmt_prune_unused_imports(stmts: *Vector<Stmt>) -> *HashMap<bool> {
             }
         }
         if kept.len() == 0 {
-            drop.insert(int_to_str(i), true);
+            // All named items are dead — but a selective import also grants
+            // the module qualifier, so if `mod::` is still used, degrade to a
+            // plain module import instead of deleting the line.
+            let mut qual: string = last_path_segment(s.import_path);
+            if !qual.eq("") && used.contains(qual) {
+                let mut sm: Stmt = s;
+                let none_items: *Vector<string> = null;
+                sm.imported_items = none_items;
+                stmts.set(i, sm);
+            } else {
+                drop.insert(int_to_str(i), true);
+            }
         } else {
             if kept.len() < s.imported_items.len() {
                 let mut sm: Stmt = s;

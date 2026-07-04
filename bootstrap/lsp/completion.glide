@@ -213,9 +213,10 @@ fn build_import_edit(name: string, module: string, existing: *ImportInfo, fallba
         }
         if existing.kind == IMP_BARE {
             // A plain module import grants QUALIFIED access only; accepting a
-            // bare symbol still needs a selective import. Keep the module line
-            // (its qualifier may be in use) and add `import mod::{name};` right
-            // below it. Module items themselves are covered by the bare line.
+            // bare symbol upgrades the line IN PLACE to a selective import —
+            // `import alelo;` becomes `import alelo::{name};`. Nothing is
+            // lost: a selective import still grants the `alelo::` qualifier.
+            // Module items themselves are covered by the bare line.
             if is_module {
                 return null;
             }
@@ -223,7 +224,7 @@ fn build_import_edit(name: string, module: string, existing: *ImportInfo, fallba
             let brange: *JsonValue = json_object();
             let bs: *JsonValue = json_object();
             let be: *JsonValue = json_object();
-            json_obj_set(bs, "line", json_int(existing.line + 1));
+            json_obj_set(bs, "line", json_int(existing.line));
             json_obj_set(bs, "character", json_int(0));
             json_obj_set(be, "line", json_int(existing.line + 1));
             json_obj_set(be, "character", json_int(0));
