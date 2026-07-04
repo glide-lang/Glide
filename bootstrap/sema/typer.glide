@@ -2951,6 +2951,16 @@ fn check_call_aliasing(t: *Typer, call: *Expr) {
             muts.push(a.op_code == UN_ADDR_MUT);
         }
     }
+    // The method receiver is itself an access path to its object: `s.m(&mut s)`
+    // passes `s` as the receiver AND `&mut s` as an argument. Since a `&mut`
+    // argument is lowered to a `restrict` pointer, any other access to the same
+    // object in the call — including through the receiver — is undefined. Fold
+    // the receiver ident into the alias set as a (non-mut) access path so the
+    // overlap check below catches it.
+    if call.lhs != null && call.lhs.kind == EX_MEMBER && call.lhs.lhs != null && call.lhs.lhs.kind == EX_IDENT {
+        names.push(call.lhs.lhs.str_val);
+        muts.push(false);
+    }
     let n: i32 = names.len();
     for let i: i32 = 0; i < n; i++ {
         for let j: i32 = i + 1; j < n; j++ {
@@ -2958,7 +2968,7 @@ fn check_call_aliasing(t: *Typer, call: *Expr) {
                 let im: bool = muts.get(i);
                 let jm: bool = muts.get(j);
                 if im || jm {
-                    t.err_code(call.line, call.column, "borrow-alias-in-call", "cannot pass `".concat(names.get(i)).concat("` aliased through both shared and mutable borrow in same call"));
+                    t.err_code(call.line, call.column, "borrow-alias-in-call", "cannot pass `".concat(names.get(i)).concat("` as a mutable borrow while it is also borrowed or received in the same call (aliasing)"));
                 }
             }
         }

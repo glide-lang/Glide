@@ -1,0 +1,30 @@
+// `&mut` params lower to `restrict` pointers, so the borrow checker must reject
+// any call that aliases a `&mut` argument (with another borrow OR the receiver)
+// — otherwise the restrict contract would be violated. These confirm the
+// aliasing guard, and that ordinary (non-aliased) `&mut` calls still work.
+struct Cell { v: i32 }
+
+fn bump(c: &mut Cell, by: i32) {
+    c.v = c.v + by;
+}
+
+impl Cell {
+    fn add(&mut self, o: &Cell) {
+        self.v = self.v + o.v;
+    }
+}
+
+fn test_mut_param_ok() -> i32 {
+    let mut c: Cell = Cell { v: 10 };
+    bump(&mut c, 5);
+    assert!(c.v == 15);
+    return 0;
+}
+
+fn test_mut_self_ok() -> i32 {
+    let mut a: Cell = Cell { v: 3 };
+    let b: Cell = Cell { v: 4 };
+    a.add(&b);
+    assert!(a.v == 7);
+    return 0;
+}

@@ -183,7 +183,7 @@ fn emit_fn_signature(s: *Stmt) {
                 print!(", ");
             }
             let p: Param = s.fn_params.get(i);
-            print!(type_to_c(p.ty), " ", c_safe_ident(p.name));
+            print!(param_c_decl(p.ty, c_safe_ident(p.name)));
         }
         if s.is_variadic {
             print!(", ...");
@@ -918,7 +918,7 @@ fn emit_impl(g: *CG, s: *Stmt) {
                     print!(", ");
                 }
                 let p: Param = m.fn_params.get(j);
-                print!(type_to_c(p.ty), " ", c_safe_ident(p.name));
+                print!(param_c_decl(p.ty, c_safe_ident(p.name)));
             }
         }
         println!(") {");
@@ -1001,7 +1001,7 @@ fn emit_impl_fwd_decls(_g: *CG, s: *Stmt) {
                     print!(", ");
                 }
                 let p: Param = m.fn_params.get(j);
-                print!(type_to_c(p.ty), " ", c_safe_ident(p.name));
+                print!(param_c_decl(p.ty, c_safe_ident(p.name)));
             }
         }
         println!(");");
@@ -2214,7 +2214,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
                     print!(", ");
                 }
                 let p: Param = af.params.get(j);
-                print!(type_to_c(p.ty), " ", c_safe_ident(p.name));
+                print!(param_c_decl(p.ty, c_safe_ident(p.name)));
             }
         }
         println!(");");
@@ -2300,7 +2300,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
                     print!(", ");
                 }
                 let p: Param = new_params_v.get(j);
-                print!(type_to_c(p.ty), " ", c_safe_ident(p.name));
+                print!(param_c_decl(p.ty, c_safe_ident(p.name)));
             }
         }
         println!(") {");
@@ -2354,7 +2354,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
                     print!(", ");
                 }
                 let p: Param = af.params.get(j);
-                print!(type_to_c(p.ty), " ", c_safe_ident(p.name));
+                print!(param_c_decl(p.ty, c_safe_ident(p.name)));
             }
         }
         println!(") {");

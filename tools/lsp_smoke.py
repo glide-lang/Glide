@@ -2037,6 +2037,15 @@ check("after the edit, `ale` is gone and `Arroz` appears",
       "ale" not in _after and "Arroz" in _after, f"got {_after}")
 _sh.rmtree(_d, ignore_errors=True)
 
+# `&mut` args lower to `restrict` pointers, so passing an object as a `&mut`
+# arg while it is also the receiver (`s.m(&mut s)`) must be rejected — else the
+# restrict no-alias contract would be violated (silent UB).
+case_diagnostics("aliased &mut through the receiver is rejected",
+    'struct S { v: i32 }\n'
+    'impl S { fn m(&mut self, o: &mut S) { self.v = 1; o.v = 2; } }\n'
+    'fn main() -> i32 {\n    let mut s: S = S { v: 0 };\n    s.m(&mut s);\n    return 0;\n}',
+    expect_codes_present=["borrow-alias-in-call"])
+
 # A typo'd / nonexistent macro is a hard error instead of silently emitting
 # nothing; real builtins and stdlib macros never false-positive.
 case_diagnostics("unknown macro is flagged",

@@ -1291,6 +1291,21 @@ impl CG {
 // importing codegen (which would be a heavy circular dep).
 
 // ---- type to C name ------------------------------------------------------
+// A C parameter declarator, adding `restrict` on an exclusive `&mut` borrow
+// (TY_BORROW_MUT) so the optimizer may assume it doesn't alias other pointers
+// in the function body — the one place Glide can beat C (like Rust's noalias).
+// Sound because the borrow checker rejects aliased `&mut` at the call site
+// (including the receiver, `s.m(&mut s)`); shared `&T` may legally alias and is
+// never restrict-qualified. `restrict` is a declarator qualifier, so it lives
+// here (between the `*` and the name), never inside `type_to_c` (whose output
+// is reused in casts where `restrict` is illegal).
+pub fn param_c_decl(ty: *Type, name: string) -> string {
+    if ty != null && ty.kind == TY_BORROW_MUT {
+        return type_to_c(ty).concat(" restrict ").concat(name);
+    }
+    return type_to_c(ty).concat(" ").concat(name);
+}
+
 pub fn type_to_c(t: *Type) -> string {
     if t == null {
         return "void";
