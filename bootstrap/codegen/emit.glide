@@ -4388,8 +4388,6 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                         fn_name = prefix.concat("_").concat(method);
                     }
                 }
-                print!(fn_name);
-                print!("(");
                 // Whether to insert an auto-`&` on the receiver depends on
                 // the resolved method's first param: pointer-ish param + value
                 // receiver -> add `&`; everything else stays as-is. Default to
@@ -4411,6 +4409,29 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                     // Unknown signature: fall back to the legacy heuristic.
                     needs_addr = !is_prim && !r_is_ptr;
                 }
+                // `&<literal>` / `&<call()>` is not valid C (rvalue). Spill the
+                // receiver into a statement-expression temp so a borrowed
+                // receiver works on `"".method()` and friends. Lvalues keep
+                // the direct `&x` (no behavior change).
+                let recv_rvalue: bool = recv.kind != EX_IDENT && recv.kind != EX_MEMBER && recv.kind != EX_INDEX && recv.kind != EX_UNARY;
+                if needs_addr && recv_rvalue {
+                    print!("({ __auto_type __glide_rcv = ");
+                    emit_expr(g, recv);
+                    print!("; ");
+                    print!(fn_name);
+                    print!("(&__glide_rcv");
+                    if e.args != null {
+                        for let i: i32 = 0; i < e.args.len(); i++ {
+                            print!(", ");
+                            let a: Expr = e.args.get(i);
+                            emit_expr(g, &a);
+                        }
+                    }
+                    print!("); })");
+                    return;
+                }
+                print!(fn_name);
+                print!("(");
                 if needs_addr {
                     print!("&");
                 }

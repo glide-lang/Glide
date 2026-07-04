@@ -1978,6 +1978,19 @@ check("after the edit, `ale` is gone and `Arroz` appears",
       "ale" not in _after and "Arroz" in _after, f"got {_after}")
 _sh.rmtree(_d, ignore_errors=True)
 
+# Dot-calling a trait method that has no `self` (an associated function) gives
+# a clear error, not a baffling arity mismatch.
+case_diagnostics("dot-calling a self-less method is a clear error",
+    'trait Greet { fn hello(name: string) -> string; }\n'
+    'impl Greet for string {\n'
+    '    pub fn hello(name: string) -> string { return name; }\n'
+    '}\n'
+    'fn main() -> i32 {\n'
+    '    let a = "".hello("x");\n'
+    '    return 0;\n'
+    '}',
+    expect_codes_present=["assoc-fn-dot-call"])
+
 # A selective member used ONLY in qualified form is flagged (the qualifier
 # ships with any import of the module — the brace member is dead weight).
 case_diagnostics_project("qualified-only selective member is flagged",

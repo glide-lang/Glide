@@ -115,3 +115,22 @@ fn test_dyn_trait_param() -> i32 {
     assert_eq!(_take_qual(v), 7);
     return 0;
 }
+
+// A trait method with `&self` implemented for `string` is dot-callable on a
+// string rvalue (`"".m()`), which lowers a borrowed receiver — the codegen
+// must spill the literal to a temp, not emit `&"..."`.
+trait Shout {
+    fn shout(&self) -> string;
+}
+
+impl Shout for string {
+    pub fn shout(&self) -> string {
+        return self.concat("!");
+    }
+}
+
+fn test_trait_method_on_string_literal() -> i32 {
+    let s = "hi".shout();
+    assert!(s.eq("hi!"));
+    return 0;
+}

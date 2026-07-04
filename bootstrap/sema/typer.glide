@@ -4636,6 +4636,21 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                     if msig.params != null {
                         let m_alen: i32 = if e.args != null { e.args.len() } else { 0 };
                         let m_plen: i32 = msig.params.len();
+                        // A method whose first param is NOT `self` is an
+                        // associated function — dot-calling it would bind the
+                        // receiver to a normal parameter and produce a baffling
+                        // arity error ("expected 0, got 1"). Point at the fix.
+                        let mut m_has_self: bool = false;
+                        if m_plen > 0 {
+                            let mp0: Param = msig.params.get(0);
+                            if mp0.name != null && mp0.name.eq("self") {
+                                m_has_self = true;
+                            }
+                        }
+                        if !m_has_self {
+                            t.err_code_range(_field_pos_line(e.lhs), _field_pos_col(e.lhs), mname.len(), "assoc-fn-dot-call", "`".concat(mname).concat("` has no `self` receiver — it's an associated function; call it as `").concat(stripped.name).concat("::").concat(mname).concat("(…)` or add `&self` to its signature"));
+                            return null;
+                        }
                         let mut m_expected: i32 = 0;
                         if m_plen > 0 {
                             m_expected = m_plen - 1;
