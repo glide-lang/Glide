@@ -1,0 +1,30 @@
+import stdlib::testing::*;
+import stdlib::set::*;
+
+// A `let v* = …` binding is auto-dropped at end of scope. Manually freeing it
+// too must NOT double-free — the manual free consumes the binding and the
+// auto-drop skips it. If this regressed, the test runner would crash here.
+
+fn test_manual_free_of_autodrop_is_single() -> i32 {
+    let s* = StringSet::new();
+    s.insert("a");
+    assert_eq!(s.len(), 1);
+    s.free();   // explicit; auto-drop must not fire again
+    return 0;
+}
+
+fn test_autodrop_only_still_frees() -> i32 {
+    let s* = StringSet::new();
+    s.insert("a");
+    s.insert("b");
+    assert_eq!(s.len(), 2);
+    return 0;   // freed automatically, once
+}
+
+fn test_reassign_owned_frees_old() -> i32 {
+    let mut s* = StringSet::new();
+    s.insert("a");
+    s = StringSet::new();   // old set freed, new one owned
+    assert_eq!(s.len(), 0);
+    return 0;
+}

@@ -983,6 +983,28 @@ fn _auto_drop_subject(ex: *Expr) -> string {
     return "";
 }
 
+// The local a statement explicitly frees, ONLY for a `free`-shaped call:
+// `v.free()` -> "v", `free(v as *void)` / `free(v)` -> "v"; "" otherwise
+// (a plain `v.other()` is not a free and must not mark v moved).
+fn _explicit_free_subject(ex: *Expr) -> string {
+    if ex == null || ex.kind != EX_CALL {
+        return "";
+    }
+    if ex.lhs != null && ex.lhs.kind == EX_MEMBER && ex.lhs.field != null && ex.lhs.field.eq("free") && ex.lhs.lhs != null && ex.lhs.lhs.kind == EX_IDENT {
+        return ex.lhs.lhs.str_val;
+    }
+    if ex.lhs != null && ex.lhs.kind == EX_IDENT && ex.lhs.str_val != null && ex.lhs.str_val.eq("free") && ex.args != null && ex.args.len() > 0 {
+        let a: Expr = ex.args.get(0);
+        if a.kind == EX_CAST && a.lhs != null && a.lhs.kind == EX_IDENT {
+            return a.lhs.str_val;
+        }
+        if a.kind == EX_IDENT {
+            return a.str_val;
+        }
+    }
+    return "";
+}
+
 // True when `st` is an auto-dropped (owned) local: `let v: *T = T { .. }`
 // (rewritten to malloc+init) or the explicit `let v* = ..` form.
 fn _let_is_auto_drop(st: *Stmt) -> bool {
@@ -5577,6 +5599,14 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
         return;
     }
     if s.kind == ST_EXPR {
+        // Manually freeing an owned local (`s.free()` / `free(s as *void)`)
+        // consumes it — its ownership is gone, so the end-of-scope auto-drop
+        // must NOT free it again (double-free). Mark it moved, exactly like
+        // `return s` does, so emit_deferred_reverse / emit_block_drops skip it.
+        let _mf: string = _explicit_free_subject(s.expr_value);
+        if !_mf.eq("") && _is_owned_local(g, _mf) {
+            g.moved_locals.insert(_mf, true);
+        }
         // Field-assign generic mono hint: for `obj.field = Generic::new()`,
         // infer T from the field's declared type and rewrite the call to
         // `Generic_new__T()` before emitting. Lets users skip the let-init
