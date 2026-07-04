@@ -2,10 +2,8 @@ import stdlib::testing::*;
 import stdlib::random::*;
 
 fn test_with_seed_is_reproducible() -> i32 {
-    let r1: *Rng = Rng::with_seed(42);
-    defer r1.free();
-    let r2: *Rng = Rng::with_seed(42);
-    defer r2.free();
+    let r1* = Rng::with_seed(42);
+    let r2* = Rng::with_seed(42);
 
     for let i: i32 = 0; i < 16; i++ {
         assert_eq!(r1.next_int(), r2.next_int());
@@ -14,10 +12,8 @@ fn test_with_seed_is_reproducible() -> i32 {
 }
 
 fn test_different_seeds_diverge() -> i32 {
-    let r1: *Rng = Rng::with_seed(1);
-    defer r1.free();
-    let r2: *Rng = Rng::with_seed(2);
-    defer r2.free();
+    let r1* = Rng::with_seed(1);
+    let r2* = Rng::with_seed(2);
     let mut diff: bool = false;
     for let i: i32 = 0; i < 8; i++ {
         if r1.next_int() != r2.next_int() { diff = true; }
@@ -27,8 +23,7 @@ fn test_different_seeds_diverge() -> i32 {
 }
 
 fn test_seed_zero_does_not_lock() -> i32 {
-    let r: *Rng = Rng::with_seed(0);
-    defer r.free();
+    let r* = Rng::with_seed(0);
     // xorshift from 0 would lock at 0; with_seed rewrites to non-zero.
     let a: i32 = r.next_int();
     let b: i32 = r.next_int();
@@ -37,8 +32,7 @@ fn test_seed_zero_does_not_lock() -> i32 {
 }
 
 fn test_range_bounds() -> i32 {
-    let r: *Rng = Rng::with_seed(123);
-    defer r.free();
+    let r* = Rng::with_seed(123);
     for let i: i32 = 0; i < 200; i++ {
         let n: i32 = r.range(1, 7);
         assert!(n >= 1);
@@ -48,16 +42,14 @@ fn test_range_bounds() -> i32 {
 }
 
 fn test_range_empty_returns_lo() -> i32 {
-    let r: *Rng = Rng::with_seed(7);
-    defer r.free();
+    let r* = Rng::with_seed(7);
     assert_eq!(r.range(5, 5), 5);
     assert_eq!(r.range(10, 3), 10);
     return 0;
 }
 
 fn test_next_int_non_negative() -> i32 {
-    let r: *Rng = Rng::with_seed(99);
-    defer r.free();
+    let r* = Rng::with_seed(99);
     for let i: i32 = 0; i < 100; i++ {
         let n: i32 = r.next_int();
         assert!(n >= 0);
@@ -66,8 +58,7 @@ fn test_next_int_non_negative() -> i32 {
 }
 
 fn test_next_f64_in_unit_interval() -> i32 {
-    let r: *Rng = Rng::with_seed(31);
-    defer r.free();
+    let r* = Rng::with_seed(31);
     for let i: i32 = 0; i < 100; i++ {
         let p: f64 = r.next_f64();
         assert!(p >= 0.0);
@@ -77,8 +68,7 @@ fn test_next_f64_in_unit_interval() -> i32 {
 }
 
 fn test_next_bool_produces_both() -> i32 {
-    let r: *Rng = Rng::with_seed(2024);
-    defer r.free();
+    let r* = Rng::with_seed(2024);
     let mut t: i32 = 0;
     let mut f: i32 = 0;
     for let i: i32 = 0; i < 200; i++ {

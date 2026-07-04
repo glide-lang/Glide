@@ -188,7 +188,7 @@ impl Error {
     /// Error::new("fs","open",ErrorKind::NotFound,"no such file","/tmp/x",2).emit();
     /// // "fs: open: NotFound: no such file [/tmp/x] (os:2)"
     /// ```
-    pub fn emit(self) -> string {
+    pub fn emit(&self) -> string {
         let mut s: string = self.module.concat(": ").concat(self.op).concat(": ")
             .concat(self.kind.to_string()).concat(": ").concat(self.message);
         if !self.path.eq("") {
@@ -249,21 +249,21 @@ impl Error {
     }
 
     /// The kind of the failure. This is the field you normally inspect.
-    pub fn kind(self) -> ErrorKind { return self.kind; }
+    pub fn kind(&self) -> ErrorKind { return self.kind; }
     /// `true` if the failure is of kind `k` — sugar for `self.kind() == k`.
-    pub fn is(self, k: ErrorKind) -> bool { return self.kind == k; }
+    pub fn is(&self, k: ErrorKind) -> bool { return self.kind == k; }
     /// The originating subsystem ("fs", "net", …). "" if unknown.
-    pub fn module(self) -> string { return self.module; }
+    pub fn module(&self) -> string { return self.module; }
     /// The operation that failed ("open", "read", …). "" if unknown.
-    pub fn op(self) -> string { return self.op; }
+    pub fn op(&self) -> string { return self.op; }
     /// The target involved (path). "" when not applicable.
-    pub fn path(self) -> string { return self.path; }
+    pub fn path(&self) -> string { return self.path; }
     /// The OS error code (errno). 0 when not applicable.
-    pub fn os_code(self) -> i32 { return self.os_code; }
+    pub fn os_code(&self) -> i32 { return self.os_code; }
     /// The human detail of the failure (usually the OS message).
-    pub fn message(self) -> string { return self.message; }
+    pub fn message(&self) -> string { return self.message; }
     /// The full canonical string — the same one that arrived in the `!T`.
-    pub fn to_string(self) -> string { return self.emit(); }
+    pub fn to_string(&self) -> string { return self.emit(); }
 
     /// Frees the decoded error.
     pub fn free(self) { free(self as *void); }

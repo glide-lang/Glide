@@ -133,7 +133,7 @@ fn test_error_recognition() -> i32 {
     _setup();
     let r: !*ByteBuffer = fs::read("/nonexistent/file");
     assert!(!r.ok);
-    let e: *Error = Error::of(r.err);
+    let e* = Error::of(r.err);
     assert!(e.kind() == ErrorKind::NotFound);
     assert_str_eq!(e.op(), "open");
     assert_str_eq!(e.path(), "/nonexistent/file");
