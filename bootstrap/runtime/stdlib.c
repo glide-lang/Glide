@@ -40,6 +40,24 @@ static char* __glide_str_alloc(int len) {
     base[4 + len] = 0;
     return base + 4;
 }
+/* Owned variant: same SDS layout but malloc-backed, so it CAN be individually
+   freed by __glide_string_free. The compiler routes a string local here only
+   when it proves the value ephemeral (heap-provenance, never aliased/escaped),
+   so the matching scope-end free is sound. Never used for literals/FFI/params. */
+static char* __glide_str_alloc_owned(int len) {
+    if (len < 0) len = 0;
+    char* base = (char*)malloc((size_t)(4 + len + 1));
+    __glide_str_hdr_set(base, len);
+    base[4 + len] = 0;
+    return base + 4;
+}
+/* Free a string from __glide_str_alloc_owned. The value points at the SDS data;
+   the malloc block starts 4 bytes earlier at the length header. Only ever emitted
+   by the compiler on provably-owned, provably-dead, un-aliased string locals. */
+static void __glide_string_free(const char* s) {
+    if (!s) return;
+    free((void*)(s - 4));
+}
 /* Header length read (unaligned-safe). Used by phase-2 __glide_string_len. */
 static int __glide_str_hdr_len(const char* s) {
     int l; memcpy(&l, s - 4, 4); return l;
