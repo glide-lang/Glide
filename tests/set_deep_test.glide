@@ -7,8 +7,7 @@ import stdlib::set::*;
 // membership at scale, and idempotent inserts.
 
 fn test_reinsert_after_remove_counts_again() -> i32 {
-    let s: *StringSet = StringSet::new();
-    defer s.free();
+    let s* = StringSet::new();
     assert!(s.insert("a"));
     assert!(s.remove("a"));
     assert_eq!(s.len(), 0);
@@ -20,8 +19,7 @@ fn test_reinsert_after_remove_counts_again() -> i32 {
 }
 
 fn test_clear_then_reuse() -> i32 {
-    let s: *StringSet = StringSet::new();
-    defer s.free();
+    let s* = StringSet::new();
     s.insert("x");
     s.insert("y");
     s.clear();
@@ -33,8 +31,7 @@ fn test_clear_then_reuse() -> i32 {
 }
 
 fn test_duplicate_inserts_are_idempotent() -> i32 {
-    let s: *StringSet = StringSet::new();
-    defer s.free();
+    let s* = StringSet::new();
     assert!(s.insert("dup"));
     assert_not!(s.insert("dup"));
     assert_not!(s.insert("dup"));
@@ -43,8 +40,7 @@ fn test_duplicate_inserts_are_idempotent() -> i32 {
 }
 
 fn test_remove_missing_is_false() -> i32 {
-    let s: *StringSet = StringSet::new();
-    defer s.free();
+    let s* = StringSet::new();
     s.insert("here");
     assert_not!(s.remove("nope"));
     assert_eq!(s.len(), 1);
@@ -54,8 +50,7 @@ fn test_remove_missing_is_false() -> i32 {
 }
 
 fn test_scale_with_selective_removal() -> i32 {
-    let s: *StringSet = StringSet::new();
-    defer s.free();
+    let s* = StringSet::new();
     for let i: i32 = 0; i < 300; i++ {
         assert!(s.insert("item${i}"));
     }
@@ -81,8 +76,7 @@ fn test_scale_with_selective_removal() -> i32 {
 }
 
 fn test_empty_string_is_a_valid_key() -> i32 {
-    let s: *StringSet = StringSet::new();
-    defer s.free();
+    let s* = StringSet::new();
     assert!(s.insert(""));
     assert!(s.contains(""));
     assert_eq!(s.len(), 1);
@@ -93,8 +87,7 @@ fn test_empty_string_is_a_valid_key() -> i32 {
 }
 
 fn test_case_sensitive_keys() -> i32 {
-    let s: *StringSet = StringSet::new();
-    defer s.free();
+    let s* = StringSet::new();
     assert!(s.insert("Key"));
     // Different case is a distinct key.
     assert!(s.insert("key"));

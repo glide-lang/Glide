@@ -2,9 +2,12 @@ import stdlib::hashmap::*;
 
 /// A set of strings backed by `HashMap<bool>`.
 ///
+/// Bind it with `let s* = …` so the compiler frees it at end of scope — no
+/// `defer`, no way to leak or double-free. Reads borrow it (`&self`), writes
+/// borrow it mutably (`&mut self`); the owner is never given away.
+///
 /// ```glide
-/// let s: *StringSet = StringSet::new();
-/// defer s.free();
+/// let s* = StringSet::new();
 ///
 /// assert!(s.insert("one"));
 /// assert_not!(s.insert("one"));
@@ -15,11 +18,11 @@ pub struct StringSet {
 }
 
 impl StringSet {
-    /// Create an empty string set.
+    /// Create an empty string set. The returned value is owned by its
+    /// binding; bind with `let s* = StringSet::new()` for automatic cleanup.
     ///
     /// ```glide
-    /// let s: *StringSet = StringSet::new();
-    /// defer s.free();
+    /// let s* = StringSet::new();
     /// ```
     fn new() -> *StringSet {
         let s: *StringSet = malloc(sizeof(StringSet)) as *StringSet;
@@ -34,7 +37,7 @@ impl StringSet {
     /// s.insert("apple");    // true
     /// s.insert("apple");    // false (already there)
     /// ```
-    fn insert(self, k: string) -> bool {
+    fn insert(&mut self, k: string) -> bool {
         if self.m.contains(k) {
             return false;
         }
@@ -49,7 +52,7 @@ impl StringSet {
     /// s.contains("ready");   // true
     /// s.contains("nope");    // false
     /// ```
-    fn contains(self, k: string) -> bool {
+    fn contains(&self, k: string) -> bool {
         return self.m.contains(k);
     }
 
@@ -60,7 +63,7 @@ impl StringSet {
     /// s.remove("a");    // true
     /// s.remove("a");    // false (already gone)
     /// ```
-    fn remove(self, k: string) -> bool {
+    fn remove(&mut self, k: string) -> bool {
         return self.m.remove(k);
     }
 
@@ -70,7 +73,7 @@ impl StringSet {
     /// s.insert("a"); s.insert("b");
     /// s.len();   // 2
     /// ```
-    fn len(self) -> i32 {
+    fn len(&self) -> i32 {
         return self.m.len();
     }
 
@@ -81,17 +84,13 @@ impl StringSet {
     /// s.clear();
     /// s.len();   // 0
     /// ```
-    fn clear(self) {
+    fn clear(&mut self) {
         self.m.clear();
     }
 
-    /// Release the internal map and the set struct itself. Pair with
-    /// `defer` so leaks are impossible.
-    ///
-    /// ```glide
-    /// let s: *StringSet = StringSet::new();
-    /// defer s.free();
-    /// ```
+    /// Release the internal map and the set struct itself. Called
+    /// automatically for a `let s* = …` binding at end of scope, so you
+    /// rarely write it by hand.
     fn free(self) {
         self.m.free();
         free(self as *void);

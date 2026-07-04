@@ -2,8 +2,7 @@ import stdlib::testing::*;
 import stdlib::set::*;
 
 fn test_new_is_empty() -> i32 {
-    let s: *StringSet = StringSet::new();
-    defer s.free();
+    let s* = StringSet::new();
 
     assert_eq!(s.len(), 0);
     assert_not!(s.contains("missing"));
@@ -11,8 +10,7 @@ fn test_new_is_empty() -> i32 {
 }
 
 fn test_insert_returns_new_status_and_len() -> i32 {
-    let s: *StringSet = StringSet::new();
-    defer s.free();
+    let s* = StringSet::new();
 
     assert!(s.insert("a"));
     assert_eq!(s.len(), 1);
@@ -28,8 +26,7 @@ fn test_insert_returns_new_status_and_len() -> i32 {
 }
 
 fn test_remove_returns_status_and_decrements_len() -> i32 {
-    let s: *StringSet = StringSet::new();
-    defer s.free();
+    let s* = StringSet::new();
 
     assert!(s.insert("a"));
     assert!(s.insert("b"));
@@ -47,8 +44,7 @@ fn test_remove_returns_status_and_decrements_len() -> i32 {
 }
 
 fn test_clear_empties_set() -> i32 {
-    let s: *StringSet = StringSet::new();
-    defer s.free();
+    let s* = StringSet::new();
 
     assert!(s.insert("a"));
     assert!(s.insert("b"));
@@ -62,8 +58,7 @@ fn test_clear_empties_set() -> i32 {
 }
 
 fn test_insert_100_keys_all_present() -> i32 {
-    let s: *StringSet = StringSet::new();
-    defer s.free();
+    let s* = StringSet::new();
 
     for let i: i32 = 0; i < 100; i++ {
         let key: string = "k${i}";
