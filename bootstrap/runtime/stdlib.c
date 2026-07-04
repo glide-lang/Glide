@@ -359,14 +359,50 @@ static const char* __glide_bool_to_string(bool b) {
     return b ? bt.d : bf.d;
 }
 #include <stdarg.h>
+static int __glide_fmt_utoa(unsigned long long v, char* buf) {
+    char tmp[24]; int t = 0;
+    if (v == 0) tmp[t++] = '0';
+    while (v > 0) { tmp[t++] = (char)('0' + (int)(v % 10)); v /= 10; }
+    for (int i = 0; i < t; i++) buf[i] = tmp[t - 1 - i];
+    return t;
+}
+static int __glide_fmt_itoa(long long v, char* buf) {
+    if (v < 0) { buf[0] = '-'; return 1 + __glide_fmt_utoa((unsigned long long)(-(v + 1)) + 1, buf + 1); }
+    return __glide_fmt_utoa((unsigned long long)v, buf);
+}
+/* Hand-rolled formatter for the fixed spec set codegen emits: %d %u %lld %llu
+   %s %c go straight to itoa/memcpy (no vsnprintf/locale on the hot path);
+   %g %p fall back to snprintf per-conversion. out=NULL measures, out=buf writes. */
+static int __glide_fmt_run(char* out, const char* fmt, va_list ap) {
+    int len = 0; char nb[24]; const char* p = fmt;
+    while (*p) {
+        if (*p != '%') { if (out) out[len] = *p; len++; p++; continue; }
+        p++;
+        int lc = 0;
+        while (*p == 'l') { lc++; p++; }
+        char cv = *p ? *p++ : 0;
+        if (cv == '%') { if (out) out[len] = '%'; len++; continue; }
+        if (cv == 's') { const char* s = va_arg(ap, const char*); if (!s) s = "(null)"; int sl = (int)strlen(s); if (out) memcpy(out + len, s, (size_t)sl); len += sl; continue; }
+        if (cv == 'c') { int ch = va_arg(ap, int); if (out) out[len] = (char)ch; len++; continue; }
+        if (cv == 'd' || cv == 'i') { long long v = lc ? va_arg(ap, long long) : (long long)va_arg(ap, int); int nl = __glide_fmt_itoa(v, nb); if (out) memcpy(out + len, nb, (size_t)nl); len += nl; continue; }
+        if (cv == 'u') { unsigned long long v = lc ? va_arg(ap, unsigned long long) : (unsigned long long)va_arg(ap, unsigned int); int nl = __glide_fmt_utoa(v, nb); if (out) memcpy(out + len, nb, (size_t)nl); len += nl; continue; }
+        { char sp[8]; char tb[64]; int si = 0; sp[si++] = '%'; if (lc) { sp[si++] = 'l'; sp[si++] = 'l'; } sp[si++] = cv; sp[si] = 0; int wl = 0;
+          if (cv == 'g' || cv == 'f' || cv == 'e') { double d = va_arg(ap, double); wl = snprintf(tb, sizeof(tb), sp, d); }
+          else if (cv == 'p') { void* pv = va_arg(ap, void*); wl = snprintf(tb, sizeof(tb), sp, pv); }
+          else if (cv == 'x' || cv == 'X') { unsigned long long xv = lc ? va_arg(ap, unsigned long long) : (unsigned long long)va_arg(ap, unsigned int); wl = snprintf(tb, sizeof(tb), sp, xv); }
+          if (wl > 0) { if (out) memcpy(out + len, tb, (size_t)wl); len += wl; }
+        }
+    }
+    return len;
+}
 static const char* __glide_format(const char* fmt, ...) {
     va_list ap1, ap2;
     va_start(ap1, fmt);
     va_copy(ap2, ap1);
-    int n = vsnprintf(NULL, 0, fmt, ap1);
+    int n = __glide_fmt_run(NULL, fmt, ap1);
     va_end(ap1);
     char* out = __glide_str_alloc(n);
-    vsnprintf(out, (size_t)n + 1, fmt, ap2);
+    __glide_fmt_run(out, fmt, ap2);
     va_end(ap2);
     return out;
 }

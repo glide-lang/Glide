@@ -1,0 +1,32 @@
+import stdlib::testing::*;
+
+// format! is lowered to the hand-rolled __glide_format (no vsnprintf on the
+// integer/string/char path). These pin every spec the codegen emits.
+fn test_format_basic() -> i32 {
+    assert_str_eq!(format!("row-{}", 42), "row-42");
+    assert_str_eq!(format!("{} + {} = {}", 2, 3, 5), "2 + 3 = 5");
+    return 0;
+}
+fn test_format_i64_and_negatives() -> i32 {
+    assert_str_eq!(format!("{}", -7), "-7");
+    assert_str_eq!(format!("{}", 9999999999), "9999999999");
+    let mn: i64 = -9223372036854775807 - 1;
+    assert_str_eq!(format!("{}", mn), "-9223372036854775808");
+    assert_str_eq!(format!("{}", 0), "0");
+    return 0;
+}
+fn test_format_string_char_pct() -> i32 {
+    assert_str_eq!(format!("s={} c={}", "hi", 'X'), "s=hi c=X");
+    assert_str_eq!(format!("100%% done"), "100%% done");
+    return 0;
+}
+fn test_format_u64() -> i32 {
+    let big: u64 = 18446744073709551615;
+    assert_str_eq!(format!("{}", big), "18446744073709551615");
+    return 0;
+}
+fn test_format_empty_and_adjacent() -> i32 {
+    assert_str_eq!(format!("{}{}{}", 1, 2, 3), "123");
+    assert_str_eq!(format!("[{}]", ""), "[]");
+    return 0;
+}
