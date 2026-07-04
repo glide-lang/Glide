@@ -2735,6 +2735,41 @@ fn _warn_import_whole(t: *Typer, s: *Stmt, source: string, code: string, msg: st
     t.warn_unused_range(s.line, s.column, span, code, msg);
 }
 
+// Is `name` a trait whose contract is exercised in this file? A trait import
+// (`import a::Greet`) never spells `Greet` out — it's live when a method the
+// trait declares is called on some value. `program` already carries the
+// transitively-imported trait decl (and any impl blocks), so we read the
+// method names straight off it and ask whether any lands in `used` (which
+// _ui_collect_expr fills with every member/call field name in the file).
+fn _trait_method_used(program: *Vector<Stmt>, name: string, used: *HashMap<bool>) -> bool {
+    if name == null || name.eq("") {
+        return false;
+    }
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        // Methods come from the trait declaration itself and from every impl
+        // block that names it — either source proves the contract is present.
+        let mut methods: *Vector<Stmt> = null;
+        if s.kind == ST_TRAIT && s.name != null && s.name.eq(name) {
+            methods = s.impl_methods;
+        } else if s.kind == ST_IMPL && s.impl_trait_name != null && s.impl_trait_name.eq(name) {
+            methods = s.impl_methods;
+        }
+        if methods == null {
+            continue;
+        }
+        for let m: i32 = 0; m < methods.len(); m++ {
+            let mm: Stmt = methods.get(m);
+            if mm.kind == ST_FN && mm.name != null && used.contains(mm.name) {
+                return true;
+            }
+        }
+    }
+    // Not a trait, or a trait with no called methods -> falls through to the
+    // caller's "unused" verdict, which is correct.
+    return false;
+}
+
 pub fn analysis_unused_import(t: *Typer, program: *Vector<Stmt>, source: string) {
     // Collect all identifiers referenced anywhere in the file. One
     // pass; we don't separate scopes because imports are top-level.
@@ -2808,6 +2843,12 @@ pub fn analysis_unused_import(t: *Typer, program: *Vector<Stmt>, source: string)
                 leaf = item.substring(cc + 2, item.len());
             }
             if !bare.contains(leaf) {
+                // A trait is used without ever naming it: `import a::Greet` is
+                // live if any method `Greet` declares is called (`x.hello()`).
+                // The method's field name lands in `used` via _ui_collect_expr.
+                if _trait_method_used(program, leaf, used) {
+                    continue;
+                }
                 unused.push(item);
             }
         }

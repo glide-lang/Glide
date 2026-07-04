@@ -1912,6 +1912,28 @@ case_diagnostics_project("unknown qualified struct underlines the name",
     "main.glide",
     msg_at={"unknown struct `Penis`": 19})
 
+# A trait imported only to enable a method call (`x.hello()`, never naming the
+# trait) is NOT unused; a trait imported and never exercised still is.
+case_diagnostics_project("trait import used via a method call is not unused",
+    {"alelo.glide":
+        "pub trait Greet {\n    fn hello(&self) -> string;\n}\n"
+        "impl Greet for string {\n    pub fn hello(&self) -> string { return self; }\n}\n",
+     "main.glide":
+        "import alelo::Greet;\n"
+        "fn main() -> i32 {\n    println!(\"Murillo\".hello());\n    return 0;\n}\n"},
+    "main.glide",
+    absent=["unused-import"])
+
+case_diagnostics_project("trait import never exercised is still unused",
+    {"alelo.glide":
+        "pub trait Greet {\n    fn hello(&self) -> string;\n}\n"
+        "impl Greet for string {\n    pub fn hello(&self) -> string { return self; }\n}\n",
+     "main.glide":
+        "import alelo::Greet;\n"
+        "fn main() -> i32 {\n    return 0;\n}\n"},
+    "main.glide",
+    present=["unused-import"])
+
 # A duplicate definition shows only the error, not a redundant unused warning.
 case_diagnostics_project("duplicate struct shows only the error",
     {"main.glide":
