@@ -1921,6 +1921,33 @@ case_diagnostics_project("duplicate struct shows only the error",
     "main.glide",
     present=["duplicate-definition"], absent=["unused-struct"])
 
+# Accepting a function whose call parens are ALREADY in the buffer inserts the
+# plain name (no `name()()`); without parens the call snippet stays.
+print("\n[project] call-paren dedup on accept")
+import tempfile as _tf2, shutil as _sh2
+_d2 = _tf2.mkdtemp().replace(os.sep, "/")
+with open(_d2 + "/alelo.glide", "w") as _f:
+    _f.write("pub fn pinto() {\n}\n")
+with open(_d2 + "/main.glide", "w") as _f:
+    _f.write("import alelo;\n\nfn main() -> i32 {\n    pinto();\n    return 0;\n}\n")
+_mu2 = _proj_uri(_d2, "main.glide")
+_rs2 = run_session([
+    {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":_proj_uri(_d2),
+        "capabilities":{"textDocument":{"completion":{"completionItem":{"snippetSupport":True}}}}}},
+    {"jsonrpc":"2.0","method":"initialized","params":{}},
+    {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":_mu2,"languageId":"glide","version":1,"text":open(_d2+"/main.glide").read()}}},
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{"textDocument":{"uri":_mu2},"position":{"line":3,"character":8}}},
+    {"jsonrpc":"2.0","method":"exit","params":None},
+])
+_pi = next((it for r in _rs2 if r.get("id")==2 for it in (r.get("result") or []) if it.get("label")=="pinto"), None)
+check("`pinto` before existing `()` inserts the plain name",
+      _pi is not None and _pi.get("insertText")=="pinto" and _pi.get("insertTextFormat")==1,
+      f"got {(_pi or {}).get('insertText')!r} fmt {(_pi or {}).get('insertTextFormat')}")
+check("`pinto` carries the selective import edit",
+      _pi is not None and any("import alelo::{pinto};" in (e.get("newText") or "") for e in (_pi.get("additionalTextEdits") or [])),
+      f"got {[(e.get('newText')) for e in ((_pi or {}).get('additionalTextEdits') or [])]}")
+_sh2.rmtree(_d2, ignore_errors=True)
+
 # Editing a sibling file updates the project index live: a fn deleted from
 # alelo.glide must stop being offered in main.glide's `alelo::` completion,
 # and a struct added must appear — without reopening anything.

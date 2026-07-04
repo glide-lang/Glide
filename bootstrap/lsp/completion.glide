@@ -4424,6 +4424,54 @@ fn _in_impl_body(text: string, line0: i32, col0: i32) -> bool {
     return true;
 }
 
+// If the identifier under the cursor is already followed by `(` in the
+// buffer, downgrade call snippets (`name($0)`) to a plain name insert —
+// otherwise accepting a function over `name()` yields `name()()`.
+fn _strip_call_parens(text: string, line0: i32, col0: i32, items: *JsonValue) {
+    if text == null || items == null {
+        return;
+    }
+    // Walk to the end of the identifier at/after the cursor, then peek.
+    let n: i32 = text.len();
+    let mut ln: i32 = 0;
+    let mut i: i32 = 0;
+    while i < n && ln < line0 {
+        if text.at(i).to_int() == 10 {
+            ln = ln + 1;
+        }
+        i = i + 1;
+    }
+    let mut c: i32 = 0;
+    while i < n && c < col0 && text.at(i).to_int() != 10 {
+        i = i + 1;
+        c = c + 1;
+    }
+    while i < n {
+        let ch: i32 = text.at(i).to_int();
+        if ch >= 65 && ch <= 90 || ch >= 97 && ch <= 122 || ch >= 48 && ch <= 57 || ch == 95 {
+            i = i + 1;
+        } else {
+            break;
+        }
+    }
+    if i >= n || text.at(i).to_int() != 40 {
+        return;
+    }
+    let cnt: i32 = _json_arr_len(items);
+    for let k: i32 = 0; k < cnt; k++ {
+        let it: *JsonValue = json_at(items, k);
+        let ins: string = json_as_string(json_get(it, "insertText"));
+        let lbl: string = json_as_string(json_get(it, "label"));
+        if ins == null || ins.eq("") || lbl == null || lbl.eq("") {
+            continue;
+        }
+        if ins.starts_with(lbl.concat("(")) {
+            json_obj_set(it, "insertText", json_string(lbl));
+            json_obj_set(it, "insertTextFormat", json_int(1));
+        }
+    }
+}
+
 pub fn handle_completion(req: *JsonValue, state: *LspState) {
     let id: *JsonValue = json_get(req, "id");
     let params: *JsonValue = json_get(req, "params");
@@ -4554,6 +4602,7 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
             // user must call a public constructor instead.
             if fpub_only && _struct_has_private_field(slit_sd) {
                 seen.free();
+                _strip_call_parens(doc.text, line0, col0, items);
                 lsp_send_response(id, items);
                 return;
             }
@@ -4565,6 +4614,7 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
             // shadowing a builtin Pair must offer only its own fields.
             _emit_struct_fields(slit_sd, items, seen, fpub_only);
             seen.free();
+            _strip_call_parens(doc.text, line0, col0, items);
             lsp_send_response(id, items);
             return;
         }
@@ -4575,6 +4625,7 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
     // offer, so return an empty list rather than every primitive / type / fn.
     if slit_was_self {
         seen.free();
+        _strip_call_parens(doc.text, line0, col0, items);
         lsp_send_response(id, items);
         return;
     }
@@ -4634,6 +4685,7 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
         let prefix: string = import_path_prefix(doc.text, line0, col0);
         list_import_path_children(state, prefix, items, seen);
         seen.free();
+        _strip_call_parens(doc.text, line0, col0, items);
         lsp_send_response(id, items);
         return;
     }
@@ -4642,6 +4694,7 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
         if !mod_in_brace.eq("") {
             list_module_members(state, mod_in_brace, items, seen, null, -1);
             seen.free();
+            _strip_call_parens(doc.text, line0, col0, items);
             lsp_send_response(id, items);
             return;
         }
@@ -4664,6 +4717,7 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
         let mp_ins: i32 = find_import_insertion_pos(doc.text);
         list_module_members(state, mp_eff, items, seen, mp_imps, mp_ins);
         seen.free();
+        _strip_call_parens(doc.text, line0, col0, items);
         lsp_send_response(id, items);
         return;
     }
@@ -4700,6 +4754,7 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
             }
         }
         seen.free();
+        _strip_call_parens(doc.text, line0, col0, items);
         lsp_send_response(id, items);
         return;
     }
@@ -4727,6 +4782,7 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
             }
         }
         seen.free();
+        _strip_call_parens(doc.text, line0, col0, items);
         lsp_send_response(id, items);
         return;
     }
@@ -4735,6 +4791,7 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
     // the happy path; this is the safety net.
     if _cursor_p >= 2 && doc.text.at(_cursor_p - 1).to_int() == 58 && doc.text.at(_cursor_p - 2).to_int() == 58 {
         seen.free();
+        _strip_call_parens(doc.text, line0, col0, items);
         lsp_send_response(id, items);
         return;
     }
@@ -4753,6 +4810,7 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
             _push_derive_completions(doc, state, items, seen);
         }
         seen.free();
+        _strip_call_parens(doc.text, line0, col0, items);
         lsp_send_response(id, items);
         return;
     }
@@ -4801,6 +4859,7 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
             json_arr_push(items, _ih_item);
         }
         seen.free();
+        _strip_call_parens(doc.text, line0, col0, items);
         lsp_send_response(id, items);
         return;
     }
@@ -4861,6 +4920,7 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
         json_arr_push(items, completion_item("const", 14, "associated constant"));
         json_arr_push(items, completion_item("macro", 14, "type-attached macro"));
         seen.free();
+        _strip_call_parens(doc.text, line0, col0, items);
         lsp_send_response(id, items);
         return;
     }
@@ -4875,6 +4935,7 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
         if _push_match_arm_items(doc.stmts, _marm_end, doc.text, line0, uri_to_path(uri), _marm_covered, state.client_snippets, items, seen) {
             _marm_covered.free();
             seen.free();
+            _strip_call_parens(doc.text, line0, col0, items);
             lsp_send_response(id, items);
             return;
         }
@@ -5310,6 +5371,7 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
     //    these are codegen-level (no import), so surface them explicitly.
     _push_builtin_macros(items, seen);
     seen.free();
+    _strip_call_parens(doc.text, line0, col0, items);
     lsp_send_response(id, items);
 }
 
