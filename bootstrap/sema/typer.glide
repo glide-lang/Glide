@@ -4133,6 +4133,20 @@ fn check_spawn(t: *Typer, s: *Stmt) {
     }
     for let i: i32 = 0; i < call.args.len(); i++ {
         let a: Expr = call.args.get(i);
+        // A spawned task may run after this frame returns, so a borrow of a
+        // local can never cross into one — same family as sending a borrow
+        // through a channel. Both the syntactic `&x` / `&mut x` form and a
+        // borrow-typed value are banned.
+        if a.kind == EX_UNARY && (a.op_code == UN_ADDR || a.op_code == UN_ADDR_MUT) {
+            t.err_code_range(a.line, a.column, _arg_span(&a), "borrow-escape", kind.concat(" may outlive this frame — a borrow cannot cross into a task; pass a value or a `*T` you own"));
+        } else {
+            if a.kind == EX_IDENT && t.scope.contains(a.str_val) {
+                let _sb: Type = t.scope.get(a.str_val);
+                if _sb.kind == TY_BORROW || _sb.kind == TY_BORROW_MUT {
+                    t.err_code_range(a.line, a.column, _arg_span(&a), "borrow-escape", kind.concat(" may outlive this frame — a borrow cannot cross into a task; pass a value or a `*T` you own"));
+                }
+            }
+        }
         let origin: string = _expr_arena_origin(t, &a);
         if origin.eq("") {
             continue;

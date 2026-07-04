@@ -2139,6 +2139,17 @@ case_diagnostics("assigning to a struct while a field borrow lives is rejected",
     '    s = S { v: 2 };\n    return *r;\n}',
     expect_codes_present=["assign-while-borrowed"])
 
+# A spawned task may outlive the frame, so borrows can't cross into one.
+case_diagnostics("borrow into a spawned task is rejected",
+    'fn worker(a: &i32) { println!(*a); }\n'
+    'fn main() -> i32 {\n    let x: i32 = 5;\n    spawn worker(&x);\n    return 0;\n}',
+    expect_codes_present=["borrow-escape"])
+
+case_diagnostics("spawning with a value stays legal",
+    'fn worker(a: i32) { println!(a); }\n'
+    'fn main() -> i32 {\n    let x: i32 = 5;\n    spawn worker(x);\n    return 0;\n}',
+    expect_codes_absent=["borrow-escape"])
+
 # `&mut` args lower to `restrict` pointers, so passing an object as a `&mut`
 # arg while it is also the receiver (`s.m(&mut s)`) must be rejected — else the
 # restrict no-alias contract would be violated (silent UB).
