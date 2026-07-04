@@ -898,6 +898,7 @@ pub struct CG {
     // wide, emitted inner-first so nested tuples precede their containers.
     pub tuple_types: *Vector<Type>,
     pub current_ret_ty: *Type,
+    pub cur_fn_body: *Vector<Stmt>, // body of the function being emitted (ephemeral-string drop scan)
     // Associated-type lookup for `<Trait>::<Concrete>::<Item>`. Populated
     // up front from every `impl Trait for Type { type Item = X; }`.
     pub assoc_table: *HashMap<Type>,
@@ -1020,6 +1021,104 @@ fn _let_is_auto_drop(st: *Stmt) -> bool {
     return false;
 }
 
+// ---- Ephemeral-string drop analysis (opt-in `let s*: string`) -------------
+// A `let s* : string = <disjoint producer>` is freed at scope end IFF every use
+// of the name is a non-string-returning read (len/eq/at/...). Any other use —
+// stored, returned, aliased, passed by value, or fed to a string-returning
+// method (whose result could alias it) — disqualifies. Conservative: any node
+// not proven safe counts as an escape. Scoped to `is_auto_owned` so existing
+// code (which never writes `let s*` on a string) is untouched regardless.
+fn _is_str_read_only(field: string) -> bool {
+    if field == null { return false; }
+    return field.eq("len") || field.eq("byte_len") || field.eq("eq") || field.eq("at")
+        || field.eq("char_at") || field.eq("byte_at") || field.eq("starts_with")
+        || field.eq("ends_with") || field.eq("contains") || field.eq("index_of")
+        || field.eq("is_empty") || field.eq("compare") || field.eq("cmp")
+        || field.eq("hash") || field.eq("count") || field.eq("find");
+}
+// P-predicate: RHS is a single, disjoint allocation (result never aliases an
+// input): format!(...), or s.concat(x) / s.substring(a,b) with non-call operands.
+fn _str_rhs_disjoint_alloc(e: *Expr) -> bool {
+    if e == null { return false; }
+    if e.kind == EX_MACRO && e.str_val != null && e.str_val.eq("format") { return true; }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.field != null {
+        let m: string = e.lhs.field;
+        if m.eq("concat") || m.eq("substring") {
+            let recv: *Expr = e.lhs.lhs;
+            if recv != null && (recv.kind == EX_IDENT || recv.kind == EX_STRING) { return true; }
+        }
+    }
+    return false;
+}
+fn _str_args_escape(name: string, args: *Vector<Expr>) -> bool {
+    if args == null { return false; }
+    for let i: i32 = 0; i < args.len(); i = i + 1 {
+        let a: Expr = args.get(i);
+        if _str_expr_escapes(name, &a) { return true; }
+    }
+    return false;
+}
+fn _str_arms_escape(name: string, arms: *Vector<MatchArm>) -> bool {
+    if arms == null { return false; }
+    for let i: i32 = 0; i < arms.len(); i = i + 1 {
+        let ar: MatchArm = arms.get(i);
+        if _str_expr_escapes(name, ar.lit) { return true; }
+        if _str_stmts_escape(name, ar.body) { return true; }
+    }
+    return false;
+}
+fn _str_expr_escapes(name: string, e: *Expr) -> bool {
+    if e == null { return false; }
+    if e.kind == EX_IDENT { return e.str_val != null && e.str_val.eq(name); }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER
+        && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT && e.lhs.lhs.str_val != null
+        && e.lhs.lhs.str_val.eq(name) && _is_str_read_only(e.lhs.field) {
+        return _str_args_escape(name, e.args);
+    }
+    if _str_expr_escapes(name, e.lhs) { return true; }
+    if _str_expr_escapes(name, e.rhs) { return true; }
+    if _str_expr_escapes(name, e.operand) { return true; }
+    if _str_expr_escapes(name, e.macro_recv) { return true; }
+    if _str_args_escape(name, e.args) { return true; }
+    if _str_stmts_escape(name, e.block_stmts) { return true; }
+    if _str_stmts_escape(name, e.fn_expr_body) { return true; }
+    if _str_arms_escape(name, e.match_arms) { return true; }
+    return false;
+}
+fn _str_stmts_escape(name: string, list: *Vector<Stmt>) -> bool {
+    if list == null { return false; }
+    for let i: i32 = 0; i < list.len(); i = i + 1 {
+        let st: Stmt = list.get(i);
+        if _str_stmt_escapes(name, &st) { return true; }
+    }
+    return false;
+}
+fn _str_stmt_escapes(name: string, st: *Stmt) -> bool {
+    if st == null { return false; }
+    if _str_expr_escapes(name, st.let_value) { return true; }
+    if _str_expr_escapes(name, st.expr_value) { return true; }
+    if _str_expr_escapes(name, st.cond) { return true; }
+    if _str_expr_escapes(name, st.for_step) { return true; }
+    if _str_expr_escapes(name, st.scrutinee) { return true; }
+    if st.for_init != null && _str_stmt_escapes(name, st.for_init) { return true; }
+    if _str_stmts_escape(name, st.then_body) { return true; }
+    if _str_stmts_escape(name, st.else_body) { return true; }
+    if _str_stmts_escape(name, st.fn_body) { return true; }
+    if _str_arms_escape(name, st.arms) { return true; }
+    return false;
+}
+// Droppable IFF opt-in `let s*`, string-typed, disjoint-alloc RHS, and no
+// escaping use anywhere in the enclosing function body.
+fn _str_let_droppable(g: *CG, st: *Stmt) -> bool {
+    if st == null || !st.is_auto_owned { return false; }
+    if st.let_ty == null || st.let_ty.kind != TY_NAMED || st.let_ty.name == null || !st.let_ty.name.eq("string") { return false; }
+    if !_str_rhs_disjoint_alloc(st.let_value) { return false; }
+    if st.name == null || st.name.eq("") { return false; }
+    if g.cur_fn_body == null { return false; }
+    if _str_stmts_escape(st.name, g.cur_fn_body) { return false; }
+    return true;
+}
+
 // True when `fn_stmt` hands an owned value to its caller: it returns one of its
 // own auto-drop locals directly (`let t: *T = T{..}; ...; return t;`). A
 // malloc-based constructor does NOT match (it returns a raw malloc, not an
@@ -1138,6 +1237,7 @@ impl CG {
         let at: *HashMap<Type> = HashMap::new();
         g.assoc_table = at;
         g.current_ret_ty = null;
+        g.cur_fn_body = null;
         g.scope = s;
         g.generic_structs = gs;
         g.generic_fns = gf;
@@ -5216,6 +5316,10 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
             g.moved_locals.insert(s.let_value.str_val, true);
             auto_owned = true;
         }
+        // Ephemeral-string drop: `let s*: string = <disjoint alloc>` with no
+        // escaping use -> route the alloc through malloc and free it at scope end.
+        let str_drop: bool = _str_let_droppable(g, s);
+        let is_string_let: bool = s.let_ty != null && s.let_ty.kind == TY_NAMED && s.let_ty.name != null && s.let_ty.name.eq("string");
         // ---- pre-pass: detect generic fn call BEFORE we emit anything,
         //      since we may need to print a forward decl on its own line.
 
@@ -5330,13 +5434,30 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
                 // can't take literal NULL; emit zero-init.
                 if s.let_value.kind == EX_NULL && _is_dyn_ptr(s.let_ty) {
                     _emit_null_for(s.let_ty);
+                } else if str_drop {
+                    // Route this one allocation through malloc so it is freeable,
+                    // then free it at scope end. Statement-expr keeps the value.
+                    print!("({ __glide_str_own_push(); const char* __sd = ");
+                    emit_expr(g, s.let_value);
+                    print!("; __glide_str_own_pop(); __sd; })");
                 } else {
                     emit_expr(g, s.let_value);
                 }
             }
             println!(";");
         }
-        if auto_owned {
+        if str_drop {
+            // Ephemeral string: free the malloc-backed buffer at scope end.
+            let sfc: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+            sfc.kind = EX_CALL;
+            sfc.line = s.line;
+            sfc.column = s.column;
+            sfc.lhs = expr_ident("__glide_string_free", s.line, s.column);
+            let sfa: *Vector<Expr> = Vector::new();
+            sfa.push(*expr_ident(s.name, s.line, s.column));
+            sfc.args = sfa;
+            g.auto_drop_stack.push(*sfc);
+        } else if auto_owned && !is_string_let {
             // Decide cleanup: prefer `v.free()` method if type defines one
             // (e.g. Vector_free); otherwise libc `free(v as *void)`.
             let inner_ty: *Type = strip_ptr(s.let_ty);

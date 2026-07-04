@@ -815,6 +815,8 @@ fn emit_fn(g: *CG, s: *Stmt) {
     g.scope.clear();
     let saved_ret: *Type = g.current_ret_ty;
     g.current_ret_ty = s.fn_ret_ty;
+    let saved_cfb: *Vector<Stmt> = g.cur_fn_body;
+    g.cur_fn_body = s.fn_body;
     // Reset defer + auto-drop stacks for this fn.
     let saved_defer: *Vector<Expr> = g.defer_stack;
     let saved_err_defer: *Vector<Expr> = g.err_defer_stack;
@@ -867,6 +869,7 @@ fn emit_fn(g: *CG, s: *Stmt) {
     g.err_defer_flags = saved_edflags;
     g.defer_flag_ctr = saved_dctr;
     g.current_ret_ty = saved_ret;
+    g.cur_fn_body = saved_cfb;
     g.current_origin = saved_origin;
     println!("}");
     // Real C `main` wrapper: runs scheduler init/shutdown around the user's
@@ -928,6 +931,8 @@ fn emit_impl(g: *CG, s: *Stmt) {
         // emit_fn does for top-level fns).
         let saved_ret: *Type = g.current_ret_ty;
         g.current_ret_ty = m.fn_ret_ty;
+        let saved_cfb_m: *Vector<Stmt> = g.cur_fn_body;
+        g.cur_fn_body = m.fn_body;
         let saved_defer: *Vector<Expr> = g.defer_stack;
         let saved_err_defer: *Vector<Expr> = g.err_defer_stack;
         let saved_drop: *Vector<Expr> = g.auto_drop_stack;
@@ -966,6 +971,7 @@ fn emit_impl(g: *CG, s: *Stmt) {
         g.defer_flags = saved_df_m;
         g.defer_flag_ctr = saved_dctr_m;
         g.current_ret_ty = saved_ret;
+        g.cur_fn_body = saved_cfb_m;
         println!("}");
         println!("");
     }

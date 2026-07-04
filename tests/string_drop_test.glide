@@ -1,0 +1,47 @@
+// Ephemeral-string drop (opt-in `let s*: string`): a string local the compiler
+// proves heap-allocated (disjoint producer), unaliased, and dead at scope end is
+// freed there — bounding RAM in long-running loops. Any ESCAPING string (returned,
+// stored in a field, aliased) is left untouched, so a wrong free would surface
+// here as garbage or a crash. Each case asserts real values end-to-end.
+struct SBox { name: string }
+
+// s is used only by len() => droppable => malloc-routed + freed each iteration.
+fn droppable_sum() -> i64 {
+    let mut acc: i64 = 0;
+    for i in 0..1000 {
+        let s*: string = format!("item-{}", i);
+        acc = acc + (s.len() as i64);
+    }
+    return acc;
+}
+
+// s escapes via return => the analysis must NOT free it.
+fn escapes_via_return(a: string, b: string) -> string {
+    let s*: string = a.concat(b);
+    return s;
+}
+
+// s escapes into a field => must NOT be freed.
+fn escapes_via_field(bx: *SBox, a: string) {
+    let s*: string = a.concat("!");
+    bx.name = s;
+}
+
+fn test_ephemeral_dropped() -> i32 {
+    // sum of len("item-i") for i in 0..1000: 10*6 + 90*7 + 900*8 = 7890.
+    assert!(droppable_sum() == 7890);
+    return 0;
+}
+
+fn test_return_escape_survives() -> i32 {
+    let r: string = escapes_via_return("foo", "bar");
+    assert!(r.eq("foobar"));
+    return 0;
+}
+
+fn test_field_escape_survives() -> i32 {
+    let bx: *SBox = calloc(1, sizeof(SBox)) as *SBox;
+    escapes_via_field(bx, "x");
+    assert!(bx.name.eq("x!"));
+    return 0;
+}
