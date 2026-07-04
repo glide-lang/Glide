@@ -168,6 +168,7 @@ pub const SYMKIND_MODULE: i32 = -1;
 pub const SYMKIND_PROC_ATTR: i32 = -2; // fn carrying `@proc_attr(Name)`
 pub const SYMKIND_PROC_DERIVE: i32 = -3; // fn carrying `@proc_derive(Name)`
 pub const SYMKIND_PROC_MACRO: i32 = -4; // fn carrying `@proc_macro(Name)` / `@proc_macro_str(Name)`
+pub const SYMKIND_METHOD: i32 = -5; // a trait-impl method, dot-completable on `recv_type`
 
 // One importable symbol from src/stdlib/. Built once at server startup
 // and reused by completion to surface auto-import suggestions. Mirrors
@@ -185,6 +186,11 @@ pub struct ImportableSym {
     pub def_path: string, // file the symbol is declared in (workspace/symbol location)
     pub def_line: i32, // 1-indexed name position; 0 if unknown
     pub def_col: i32,
+    // SYMKIND_METHOD only: the receiver type a trait method dot-completes on
+    // (`string`, `MyStruct`) and the trait to auto-import so it resolves.
+    // Always "" (never null) on non-method entries.
+    pub recv_type: string,
+    pub trait_name: string,
 }
 
 pub struct LspState {
@@ -869,7 +875,7 @@ fn _index_stdlib_subtree(state: *LspState, dir: string, module_prefix: string, t
         // (`sop`) autocompletes it for path navigation (`sop::al::...`) — not
         // just the files inside it. The file entries are added by the
         // recursive call below.
-        let folder_sym: ImportableSym = ImportableSym { name: sub, kind: SYMKIND_MODULE, module: child_pref, signature: "module ".concat(child_pref), label_extra: "", doc: "Glide module folder `".concat(child_pref).concat("`."), snippet: sub.concat("::"), has_snippet: true, def_path: child_dir, def_line: 1, def_col: 1 };
+        let folder_sym: ImportableSym = ImportableSym { name: sub, kind: SYMKIND_MODULE, module: child_pref, signature: "module ".concat(child_pref), label_extra: "", doc: "Glide module folder `".concat(child_pref).concat("`."), snippet: sub.concat("::"), has_snippet: true, def_path: child_dir, def_line: 1, def_col: 1, recv_type: "", trait_name: "" };
         target.push(folder_sym);
         // Sub-dirs aren't the package root, so no entry-file collapse.
         _index_stdlib_subtree(state, child_dir, child_pref, target, "");
@@ -1264,6 +1270,12 @@ fn _index_module_src(_state: *LspState, src: string, path: string, mod_name: str
     let mut count: i32 = 0;
     for let j: i32 = 0; j < stmts.len(); j++ {
         let s: Stmt = stmts.get(j);
+        // Trait-impl methods are indexed (bypassing the pub-gate below — impl
+        // blocks aren't `pub`) so member completion can offer them cross-file.
+        if s.kind == ST_IMPL {
+            _index_impl_methods(&s, module, path, target);
+            continue;
+        }
         // Proc-macro fns register globally via their `@proc_<kind>(Name)`
         // attribute; they don't need to be `pub` (stdlib convention keeps
         // the impl helper private). Other stmts still require pub for
@@ -1368,7 +1380,7 @@ fn _index_module_src(_state: *LspState, src: string, path: string, mod_name: str
                 }
             }
         }
-        let sym: ImportableSym = ImportableSym { name: sym_name, kind: sym_kind, module: module, signature: sig, label_extra: label_extra, doc: s.doc_comment, snippet: snip, has_snippet: has_snip, def_path: path, def_line: s.name_line, def_col: s.name_col };
+        let sym: ImportableSym = ImportableSym { name: sym_name, kind: sym_kind, module: module, signature: sig, label_extra: label_extra, doc: s.doc_comment, snippet: snip, has_snippet: has_snip, def_path: path, def_line: s.name_line, def_col: s.name_col, recv_type: "", trait_name: "" };
         target.push(sym);
         if count < 12 {
             if !summary.eq("") {
@@ -1388,8 +1400,58 @@ fn _index_module_src(_state: *LspState, src: string, path: string, mod_name: str
     if !summary.eq("") {
         mdoc = mdoc.concat("\n\nExports: ").concat(summary).concat(".");
     }
-    let mod_sym: ImportableSym = ImportableSym { name: mod_name, kind: SYMKIND_MODULE, module: module, signature: "module ".concat(mod_name), label_extra: "", doc: mdoc, snippet: mod_name.concat("::"), has_snippet: true, def_path: path, def_line: 1, def_col: 1 };
+    let mod_sym: ImportableSym = ImportableSym { name: mod_name, kind: SYMKIND_MODULE, module: module, signature: "module ".concat(mod_name), label_extra: "", doc: mdoc, snippet: mod_name.concat("::"), has_snippet: true, def_path: path, def_line: 1, def_col: 1, recv_type: "", trait_name: "" };
     target.push(mod_sym);
+}
+
+// Index the instance methods of a trait impl (`impl Trait for Recv`) as
+// SYMKIND_METHOD entries so member completion can offer them on `Recv` from a
+// file that hasn't imported the trait yet, with an auto-import edit. Every
+// field the parser leaves unset on a NESTED impl method is guarded — stmt_fn /
+// parse_impl never run ast_fill_defaults, so doc_comment / attrs /
+// impl_trait_name can all be null (the null doc_comment is what crashed a
+// prior attempt on the many-impl stdlib walk).
+fn _index_impl_methods(im: *Stmt, module: string, path: string, target: *Vector<ImportableSym>) {
+    if im == null {
+        return;
+    }
+    if im.impl_trait_name == null || im.impl_trait_name.eq("") {
+        return;
+    }
+    if im.impl_target == null {
+        return;
+    }
+    let mut rn: string = "";
+    if im.impl_target.kind == TY_NAMED || im.impl_target.kind == TY_GENERIC {
+        rn = im.impl_target.name;
+    }
+    if rn == null || rn.eq("") {
+        return;
+    }
+    if im.impl_methods == null {
+        return;
+    }
+    for let i: i32 = 0; i < im.impl_methods.len(); i++ {
+        let m: Stmt = im.impl_methods.get(i);
+        if m.kind != ST_FN || m.name == null || m.name.eq("") {
+            continue;
+        }
+        // Instance methods only (first param named `self`) — that's what `x.`
+        // completion can call.
+        if m.fn_params == null || m.fn_params.len() == 0 {
+            continue;
+        }
+        let p0n: string = m.fn_params.get(0).name;
+        if p0n == null || !p0n.eq("self") {
+            continue;
+        }
+        let mut mdoc: string = "";
+        if m.doc_comment != null {
+            mdoc = m.doc_comment;
+        }
+        let msym: ImportableSym = ImportableSym { name: m.name, kind: SYMKIND_METHOD, module: module, signature: fn_signature(&m), label_extra: fn_label_extra(&m), doc: mdoc, snippet: fn_snippet(&m), has_snippet: true, def_path: path, def_line: m.name_line, def_col: m.name_col, recv_type: rn, trait_name: im.impl_trait_name };
+        target.push(msym);
+    }
 }
 
 // Compact label suffix for fn items, gopls-style: `(a: int, b: int) -> int`.

@@ -1936,6 +1936,19 @@ case_diagnostics_project("unknown qualified struct underlines the name",
     "main.glide",
     msg_at={"unknown struct `Penis`": 19})
 
+# A trait implemented for a receiver in another, not-yet-imported file is
+# offered on `"".` member completion, carrying an auto-import of the trait.
+case_completion_project("cross-file trait method offered with trait auto-import",
+    {"alelo.glide":
+        "pub trait Greet {\n    fn hello(&self) -> string;\n}\n"
+        "impl Greet for string {\n    pub fn hello(&self) -> string { return self; }\n}\n",
+     "main.glide":
+        'fn main() -> i32 {\n    let x = "".\n    return 0;\n}'},
+    "main.glide",
+    {"line":1,"character":15},
+    present=["hello"],
+    import_edit=("hello", "import alelo::{Greet};\n"))
+
 # A trait imported only to enable a method call (`x.hello()`, never naming the
 # trait) is NOT unused; a trait imported and never exercised still is.
 case_diagnostics_project("trait import used via a method call is not unused",

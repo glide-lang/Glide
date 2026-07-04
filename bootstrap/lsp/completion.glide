@@ -2476,6 +2476,68 @@ pub fn _doc_val_option(inner: string) -> string {
     return "the contained value (`".concat(inner).concat("`).\n\nValid only when `.has` is `true`. Guard with `if x.has { ... }`, or unwrap with `?`.\n\n```glide\nlet n: i32 = maybe_index()?;   // the value, or returns none\n```");
 }
 
+// Offer trait methods implemented for `recv_name` in files not open/imported
+// here. `seen` already holds the locally-visible members, so anything new is a
+// cross-file impl; each item carries an auto-import of its declaring trait so
+// accepting it makes the call resolve. Scans both the project and stdlib index.
+fn _offer_index_trait_methods(state: *LspState, text: string, recv_name: string, items: *JsonValue, seen: *HashMap<bool>) {
+    if state == null || recv_name == null || recv_name.eq("") {
+        return;
+    }
+    let imps: *HashMap<ImportInfo> = current_imports(text);
+    let insert_line: i32 = find_import_insertion_pos(text);
+    _offer_from_index(state.project_index, recv_name, imps, insert_line, items, seen);
+    _offer_from_index(state.stdlib_index, recv_name, imps, insert_line, items, seen);
+}
+
+fn _offer_from_index(idx: *Vector<ImportableSym>, recv_name: string, imps: *HashMap<ImportInfo>, insert_line: i32, items: *JsonValue, seen: *HashMap<bool>) {
+    if idx == null {
+        return;
+    }
+    for let i: i32 = 0; i < idx.len(); i++ {
+        let sym: ImportableSym = idx.get(i);
+        if sym.kind != SYMKIND_METHOD {
+            continue;
+        }
+        if sym.recv_type == null || !sym.recv_type.eq(recv_name) {
+            continue;
+        }
+        if sym.name == null || sym.name.eq("") || seen.contains(sym.name) {
+            continue;
+        }
+        if sym.trait_name == null || sym.trait_name.eq("") || sym.module == null || sym.module.eq("") {
+            continue;
+        }
+        seen.insert(sym.name, true);
+        // Auto-import the trait unless the module is already imported (in which
+        // case the impl is already in `stmts` and was offered above — but guard
+        // anyway; build_import_edit returns null when already covered).
+        let mut edit: *JsonValue = null;
+        if imps == null || !imps.contains(sym.module) {
+            edit = build_import_edit(sym.trait_name, sym.module, null, insert_line, false, imps);
+        }
+        let mut sdoc: string = "";
+        if sym.doc != null {
+            sdoc = sym.doc;
+        }
+        let mut ssig: string = "";
+        if sym.signature != null {
+            ssig = sym.signature;
+        }
+        let mut slex: string = "";
+        if sym.label_extra != null {
+            slex = sym.label_extra;
+        }
+        let mut ssnip: string = sym.name;
+        if sym.snippet != null && !sym.snippet.eq("") {
+            ssnip = sym.snippet;
+        }
+        let detail: string = sym.module.concat(" · impl ").concat(sym.trait_name);
+        let it: *JsonValue = rich_completion_item(sym.name, slex, 2, ssig, sdoc, detail, ssnip, sym.has_snippet, edit);
+        json_arr_push(items, it);
+    }
+}
+
 fn _list_members_for_type_node(ty: *Type, stmts: *Vector<Stmt>, items: *JsonValue, seen: *HashMap<bool>, current_path: string) {
     if ty == null {
         return;
@@ -4863,6 +4925,14 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
             _list_members_for_type_node(recv_ty, doc.stmts, items, seen, uri_to_path(uri));
             if doc.pre_expand_stmts != null {
                 _list_members_for_type_node(recv_ty, doc.pre_expand_stmts, items, seen, uri_to_path(uri));
+            }
+            // Trait methods implemented for this receiver in OTHER, not-yet-
+            // imported files. `seen` already holds the locally-visible members,
+            // so these are the ones a plain listing misses; each carries an
+            // auto-import of its trait.
+            let rx: *Type = _strip_ptr_borrow(recv_ty);
+            if rx != null && (rx.kind == TY_NAMED || rx.kind == TY_GENERIC) && rx.name != null && !rx.name.eq("") {
+                _offer_index_trait_methods(state, doc.text, rx.name, items, seen);
             }
         }
         seen.free();
