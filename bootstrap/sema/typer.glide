@@ -2938,6 +2938,27 @@ fn exit_borrow_scope(t: *Typer, saved: i32) {
 
 // Walk a call's args. Each arg of form `&x` or `&mut x` records (x, is_mut).
 // Then check pairs: two &mut x or & + &mut on the same source is forbidden.
+// The root identifier a borrow expression ultimately reaches into: `x` → x,
+// `s.f.g` → s, `arr[i]` → arr, `*p` → p. Two borrows sharing a root MAY alias
+// (conservative — `&mut s.a` vs `&mut s.b` are disjoint but collide here;
+// place-path tracking refines this later). "" when the base isn't an ident
+// (e.g. a call result), which is skipped like today.
+fn _borrow_root_ident(e: *Expr) -> string {
+    if e == null {
+        return "";
+    }
+    if e.kind == EX_IDENT {
+        return e.str_val;
+    }
+    if e.kind == EX_MEMBER || e.kind == EX_INDEX {
+        return _borrow_root_ident(e.lhs);
+    }
+    if e.kind == EX_UNARY && e.op_code == UN_DEREF {
+        return _borrow_root_ident(e.operand);
+    }
+    return "";
+}
+
 fn check_call_aliasing(t: *Typer, call: *Expr) {
     if call == null || call.kind != EX_CALL || call.args == null {
         return;
@@ -2946,20 +2967,26 @@ fn check_call_aliasing(t: *Typer, call: *Expr) {
     let muts: *Vector<bool> = Vector::new();
     for let i: i32 = 0; i < call.args.len(); i++ {
         let a: Expr = call.args.get(i);
-        if a.kind == EX_UNARY && (a.op_code == UN_ADDR || a.op_code == UN_ADDR_MUT) && a.operand != null && a.operand.kind == EX_IDENT {
-            names.push(a.operand.str_val);
-            muts.push(a.op_code == UN_ADDR_MUT);
+        if a.kind == EX_UNARY && (a.op_code == UN_ADDR || a.op_code == UN_ADDR_MUT) && a.operand != null {
+            let root: string = _borrow_root_ident(a.operand);
+            if !root.eq("") {
+                names.push(root);
+                muts.push(a.op_code == UN_ADDR_MUT);
+            }
         }
     }
     // The method receiver is itself an access path to its object: `s.m(&mut s)`
     // passes `s` as the receiver AND `&mut s` as an argument. Since a `&mut`
     // argument is lowered to a `restrict` pointer, any other access to the same
     // object in the call — including through the receiver — is undefined. Fold
-    // the receiver ident into the alias set as a (non-mut) access path so the
-    // overlap check below catches it.
-    if call.lhs != null && call.lhs.kind == EX_MEMBER && call.lhs.lhs != null && call.lhs.lhs.kind == EX_IDENT {
-        names.push(call.lhs.lhs.str_val);
-        muts.push(false);
+    // the receiver's root ident into the alias set as a (non-mut) access path
+    // so the overlap check below catches it (incl. `s.v.m(&mut s)` chains).
+    if call.lhs != null && call.lhs.kind == EX_MEMBER && call.lhs.lhs != null {
+        let rroot: string = _borrow_root_ident(call.lhs.lhs);
+        if !rroot.eq("") {
+            names.push(rroot);
+            muts.push(false);
+        }
     }
     let n: i32 = names.len();
     for let i: i32 = 0; i < n; i++ {
@@ -4436,10 +4463,17 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             }
             return inner;
         }
-        if e.op_code == UN_ADDR {
-            return ty_pointer(inner);
-        }
-        if e.op_code == UN_ADDR_MUT {
+        if e.op_code == UN_ADDR || e.op_code == UN_ADDR_MUT {
+            // Borrowing a generic-container element (`&mut v[i]` on a
+            // *Vector<T>) has no place to point at — indexing a container
+            // desugars to `.get(i)`, which returns a COPY. Raw pointers and
+            // slices index real memory and stay borrowable.
+            if e.operand != null && e.operand.kind == EX_INDEX && e.operand.lhs != null {
+                let _ib: *Type = strip_ptr(infer_expr(t, e.operand.lhs));
+                if _ib != null && _ib.kind == TY_GENERIC {
+                    t.err_code_range(e.line, e.column, _arg_span(e), "borrow-vector-element", "cannot borrow a container element — indexing yields a copy, not a place; read with `.get(i)`, write back with `.set(i, v)`");
+                }
+            }
             return ty_pointer(inner);
         }
         if e.op_code == UN_TRY {
@@ -4552,6 +4586,17 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                     } else {
                         let a: Expr = e.args.get(0);
                         let at: *Type = infer_expr(t, &a);
+                        // A channel is a store that crosses task lifetimes, so
+                        // a borrow can never go through it — the receiver may
+                        // outlive the borrowed object. Both the syntactic form
+                        // (`c.send(&x)`) and a borrow-typed value are banned.
+                        if a.kind == EX_UNARY && (a.op_code == UN_ADDR || a.op_code == UN_ADDR_MUT) {
+                            t.err_code_range(a.line, a.column, _arg_span(&a), "borrow-escape", "cannot send a borrow through a channel — the receiver may outlive it; send a value or a `*T`");
+                        } else {
+                            if at != null && (at.kind == TY_BORROW || at.kind == TY_BORROW_MUT) {
+                                t.err_code_range(a.line, a.column, _arg_span(&a), "borrow-escape", "cannot send a borrow through a channel — the receiver may outlive it; send a value or a `*T`");
+                            }
+                        }
                         if !types_compat(inner, at) {
                             t.err_code_range(a.line, a.column, _arg_span(&a), "chan-arg-mismatch", "chan.send arg type mismatch: expected ".concat(type_to_string(inner)).concat(", got ").concat(type_to_string(at)));
                         }

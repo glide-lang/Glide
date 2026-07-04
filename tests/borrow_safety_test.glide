@@ -1,0 +1,73 @@
+// Borrows are second-class and now COMPILE for primitives, fields and
+// re-borrows: `&mut i32` write-through was a double-deref ICE before. Each
+// case asserts real values so the emitted C is proven correct end-to-end.
+struct Box2 { v: i32, w: i32 }
+
+fn bump(a: &mut i32) {
+    *a = *a + 1;
+}
+
+fn add5(a: &mut i32) {
+    *a += 5;
+}
+
+fn peek(a: &i32) -> i32 {
+    return *a;
+}
+
+fn set7(p: &mut i32) {
+    *p = 7;
+}
+
+fn slen(s: &string) -> i32 {
+    return s.len();
+}
+
+fn fill(b: &mut Box2) {
+    b.v = 10;
+    b.w = 20;
+}
+
+fn test_mut_borrow_prim_write() -> i32 {
+    let mut n: i32 = 41;
+    bump(&mut n);
+    assert!(n == 42);
+    return 0;
+}
+
+fn test_mut_borrow_prim_compound() -> i32 {
+    let mut n: i32 = 10;
+    add5(&mut n);
+    add5(&mut n);
+    assert!(n == 20);
+    return 0;
+}
+
+fn test_shared_borrow_prim_read() -> i32 {
+    let n: i32 = 33;
+    assert!(peek(&n) == 33);
+    assert!(n == 33);
+    return 0;
+}
+
+fn test_mut_borrow_struct_field() -> i32 {
+    let mut b: Box2 = Box2 { v: 0, w: 0 };
+    set7(&mut b.v);
+    assert!(b.v == 7);
+    assert!(b.w == 0);
+    return 0;
+}
+
+fn test_borrow_string_param() -> i32 {
+    let s: string = "hello";
+    assert!(slen(&s) == 5);
+    return 0;
+}
+
+fn test_mut_borrow_struct_param() -> i32 {
+    let mut b: Box2 = Box2 { v: 1, w: 2 };
+    fill(&mut b);
+    assert!(b.v == 10);
+    assert!(b.w == 20);
+    return 0;
+}

@@ -3926,6 +3926,18 @@ pub fn emit_expr(g: *CG, e: *Expr) {
             }
             return;
         }
+        // Explicit `*a` on a borrowed-primitive binding: emit ONE deref. The
+        // EX_IDENT auto-deref (for a bare `a` used as a value) would fire
+        // under the generic path below and stack a second `*` — `(*(*a))` —
+        // which is invalid C. This is the write-through path for `&mut i32`
+        // params (`*a = 1`), so it must bypass the auto-deref.
+        if e.op_code == UN_DEREF && e.operand != null && e.operand.kind == EX_IDENT && g.scope.contains(e.operand.str_val) {
+            let bt: Type = g.scope.get(e.operand.str_val);
+            if (bt.kind == TY_BORROW || bt.kind == TY_BORROW_MUT) && bt.inner != null && bt.inner.kind == TY_NAMED && is_stdlib_primitive(bt.inner.name) {
+                print!("(*", c_safe_ident(e.operand.str_val), ")");
+                return;
+            }
+        }
         print!("(".concat(unop_to_c(e.op_code)));
         emit_expr(g, e.operand);
         print!(")");
