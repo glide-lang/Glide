@@ -187,7 +187,7 @@ impl<T> Mutex<T> {
     /// m.set(m.get() + 1);
     /// m.unlock();
     /// ```
-    pub fn lock(self) { __glide_mutex_lock(self.handle); }
+    pub fn lock(&mut self) { __glide_mutex_lock(self.handle); }
 
     /// Release the lock. Calling without holding the lock is UB.
     ///
@@ -196,7 +196,7 @@ impl<T> Mutex<T> {
     /// // ...mutate...
     /// m.unlock();
     /// ```
-    pub fn unlock(self) { __glide_mutex_unlock(self.handle); }
+    pub fn unlock(&mut self) { __glide_mutex_unlock(self.handle); }
 
     /// Read the inner value. Caller must hold the lock.
     ///
@@ -205,7 +205,7 @@ impl<T> Mutex<T> {
     /// let v: i32 = m.get();
     /// m.unlock();
     /// ```
-    pub fn get(self) -> T { return self.inner; }
+    pub fn get(&self) -> T { return self.inner; }
 
     /// Write the inner value. Caller must hold the lock.
     ///
@@ -214,7 +214,7 @@ impl<T> Mutex<T> {
     /// m.set(42);
     /// m.unlock();
     /// ```
-    pub fn set(self, v: T) { self.inner = v; }
+    pub fn set(&mut self, v: T) { self.inner = v; }
 
     /// Run `f(&inner)` while holding the lock and return its result.
     /// `f` may read or mutate the inner value via the pointer; the lock
@@ -273,14 +273,14 @@ impl Atomic {
     /// ```glide
     /// let v: i64 = a.load();
     /// ```
-    pub fn load(self) -> i64 { return __glide_atomic_load(self.handle); }
+    pub fn load(&self) -> i64 { return __glide_atomic_load(self.handle); }
 
     /// Store `v`. Sequentially consistent.
     ///
     /// ```glide
     /// a.store(42);
     /// ```
-    pub fn store(self, v: i64) { __glide_atomic_store(self.handle, v); }
+    pub fn store(&mut self, v: i64) { __glide_atomic_store(self.handle, v); }
 
     /// Add `delta` and return the *previous* value. Use with `delta=1`
     /// for a counter increment that also surfaces the prior count.
@@ -300,7 +300,7 @@ impl Atomic {
     /// // Take a one-shot lock: only the first caller succeeds.
     /// if a.cas(0, 1) { /* I won the race, do init work */ }
     /// ```
-    pub fn cas(self, expected: i64, desired: i64) -> bool {
+    pub fn cas(&mut self, expected: i64, desired: i64) -> bool {
         return __glide_atomic_cas(self.handle, expected, desired) != 0;
     }
 
@@ -361,7 +361,7 @@ impl WaitGroup {
     ///     // ...do work...
     /// }
     /// ```
-    pub fn done(self) { __glide_wg_add(self.handle, 0 - 1); }
+    pub fn done(&mut self) { __glide_wg_add(self.handle, 0 - 1); }
 
     /// Block until the counter reaches zero. Returns immediately if it
     /// already is.
@@ -369,7 +369,7 @@ impl WaitGroup {
     /// ```glide
     /// wg.wait();   // all spawned workers have finished
     /// ```
-    pub fn wait(self) { __glide_wg_wait(self.handle); }
+    pub fn wait(&mut self) { __glide_wg_wait(self.handle); }
 
     /// Free the wrapper. Pointer is dangling afterwards.
     ///

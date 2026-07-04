@@ -64,7 +64,7 @@ impl Multipart {
     /// mp.add_field("user", "alice");
     /// mp.add_field("note", "hello world");
     /// ```
-    pub fn add_field(self, name: string, value: string) {
+    pub fn add_field(&mut self, name: string, value: string) {
         let mut p: string = "Content-Disposition: form-data; name=\"";
         p = p.concat(name).concat("\"\r\n\r\n");
         p = p.concat(value);
@@ -78,7 +78,7 @@ impl Multipart {
     /// let bytes: string = fs_read("avatar.png");
     /// mp.add_file("avatar", "avatar.png", "image/png", bytes);
     /// ```
-    pub fn add_file(self, name: string, filename: string,
+    pub fn add_file(&mut self, name: string, filename: string,
                     content_type: string, data: string) {
         let mut p: string = "Content-Disposition: form-data; name=\"";
         p = p.concat(name).concat("\"; filename=\"").concat(filename).concat("\"\r\n");
@@ -94,7 +94,7 @@ impl Multipart {
     /// let r: !*HttpResponse = HttpClient::new()
     ///     .post(url, mp.body(), mp.content_type());
     /// ```
-    pub fn content_type(self) -> string {
+    pub fn content_type(&self) -> string {
         return "multipart/form-data; boundary=".concat(self.boundary);
     }
 
@@ -104,7 +104,7 @@ impl Multipart {
     /// let body: string = mp.body();
     /// // hand body + mp.content_type() to the HTTP client
     /// ```
-    pub fn body(self) -> string {
+    pub fn body(&self) -> string {
         let mut out: string = "";
         for let i: i32 = 0; i < self.parts.len(); i++ {
             out = out.concat("--").concat(self.boundary).concat("\r\n");

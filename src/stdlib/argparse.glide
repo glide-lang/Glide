@@ -90,7 +90,7 @@ impl ArgParser {
         return p;
     }
 
-    fn _register(self, long: string, short: string, ty: string, help: string) {
+    fn _register(&mut self, long: string, short: string, ty: string, help: string) {
         self.order.push(long);
         self.types.insert(long, ty);
         self.helps.insert(long, help);
@@ -105,7 +105,7 @@ impl ArgParser {
     /// p.add_string("name", "n", "world", "who to greet");
     /// // accepts: --name=alice  --name alice  -n alice
     /// ```
-    pub fn add_string(self, long: string, short: string,
+    pub fn add_string(&mut self, long: string, short: string,
                       default_value: string, help: string) {
         let f: *StrFlag = malloc(sizeof(StrFlag)) as *StrFlag;
         f.default_value = default_value;
@@ -120,7 +120,7 @@ impl ArgParser {
     /// p.add_int("count", "c", 1, "number of greetings");
     /// // --count=5    --count 5    -c 5
     /// ```
-    pub fn add_int(self, long: string, short: string,
+    pub fn add_int(&mut self, long: string, short: string,
                    default_value: i32, help: string) {
         let f: *IntFlag = malloc(sizeof(IntFlag)) as *IntFlag;
         f.default_value = default_value;
@@ -137,7 +137,7 @@ impl ArgParser {
     /// p.add_bool("verbose", "v", false, "extra output");
     /// // --verbose / -v sets it to true
     /// ```
-    pub fn add_bool(self, long: string, short: string,
+    pub fn add_bool(&mut self, long: string, short: string,
                     default_value: bool, help: string) {
         let f: *BoolFlag = malloc(sizeof(BoolFlag)) as *BoolFlag;
         f.default_value = default_value;
@@ -152,7 +152,7 @@ impl ArgParser {
     /// p.parse_argv();
     /// let who: string = p.get_string("name");
     /// ```
-    pub fn get_string(self, long: string) -> string {
+    pub fn get_string(&self, long: string) -> string {
         return self.str_flags.get(long).value;
     }
 
@@ -161,7 +161,7 @@ impl ArgParser {
     /// ```glide
     /// let n: i32 = p.get_int("count");
     /// ```
-    pub fn get_int(self, long: string) -> i32 {
+    pub fn get_int(&self, long: string) -> i32 {
         return self.int_flags.get(long).value;
     }
 
@@ -170,7 +170,7 @@ impl ArgParser {
     /// ```glide
     /// if p.get_bool("verbose") { eprintln("verbose mode on"); }
     /// ```
-    pub fn get_bool(self, long: string) -> bool {
+    pub fn get_bool(&self, long: string) -> bool {
         return self.bool_flags.get(long).value;
     }
 
@@ -181,7 +181,7 @@ impl ArgParser {
     /// let files: *Vector<string> = p.positional();
     /// for let i: i32 = 0; i < files.len(); i++ { fs_read(files.get(i)); }
     /// ```
-    pub fn positional(self) -> *Vector<string> {
+    pub fn positional(&self) -> *Vector<string> {
         return self.positional;
     }
 
@@ -191,11 +191,11 @@ impl ArgParser {
     /// ```glide
     /// if p.help_requested() { p.print_help(); env_exit(0); }
     /// ```
-    pub fn help_requested(self) -> bool {
+    pub fn help_requested(&self) -> bool {
         return self.help_seen;
     }
 
-    fn _set_value(self, long: string, val: string) -> !i32 {
+    fn _set_value(&mut self, long: string, val: string) -> !i32 {
         if !self.types.contains(long) {
             return err("unknown flag: --".concat(long));
         }
@@ -230,7 +230,7 @@ impl ArgParser {
     /// let r: !i32 = p.parse_argv();
     /// if !r.ok { eprintln(r.err); env_exit(2); }
     /// ```
-    pub fn parse_argv(self) -> !i32 {
+    pub fn parse_argv(&mut self) -> !i32 {
         let tokens: *Vector<string> = Vector::new();
         for let i: i32 = 1; i < args_count(); i++ {
             tokens.push(args_at(i));
@@ -247,7 +247,7 @@ impl ArgParser {
     /// p.parse_tokens(toks);
     /// p.get_string("name");   // "alice"
     /// ```
-    pub fn parse_tokens(self, tokens: *Vector<string>) -> !i32 {
+    pub fn parse_tokens(&mut self, tokens: *Vector<string>) -> !i32 {
         let n: i32 = tokens.len();
         let mut i: i32 = 0;
         let mut all_positional: bool = false;
@@ -332,7 +332,7 @@ impl ArgParser {
     /// let txt: string = p.format_help();
     /// // either print or write to a file
     /// ```
-    pub fn format_help(self) -> string {
+    pub fn format_help(&self) -> string {
         let mut out: string = "usage: ".concat(self.prog).concat(" [flags] [positional...]\n");
         if !self.desc.eq("") {
             out = out.concat("\n").concat(self.desc).concat("\n");
@@ -373,7 +373,7 @@ impl ArgParser {
     /// ```glide
     /// if p.help_requested() { p.print_help(); env_exit(0); }
     /// ```
-    pub fn print_help(self) {
+    pub fn print_help(&self) {
         print!(self.format_help());
     }
 

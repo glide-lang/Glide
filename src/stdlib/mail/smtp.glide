@@ -85,7 +85,7 @@ impl SmtpClient {
     /// let r: !i32 = c.send(m);
     /// if !r.ok { eprintln(r.err); }
     /// ```
-    pub fn send(self, mail: *Mail) -> !i32 {
+    pub fn send(&self, mail: *Mail) -> !i32 {
         let sr: !*SmtpSession = self.connect();
         if !sr.ok { return err(sr.err); }
         let s: *SmtpSession = sr.val;
@@ -109,7 +109,7 @@ impl SmtpClient {
     ///     r.val.close();
     /// }
     /// ```
-    pub fn connect(self) -> !*SmtpSession {
+    pub fn connect(&self) -> !*SmtpSession {
         let s: *SmtpSession = malloc(sizeof(SmtpSession)) as *SmtpSession;
         s.tls = null as *TlsStream;
         s.tcp = null as *TcpStream;
@@ -201,7 +201,7 @@ impl SmtpSession {
     /// let r: !i32 = session.send_mail(mail);
     /// if r.ok { println!("delivered"); }
     /// ```
-    pub fn send_mail(self, mail: *Mail) -> !i32 {
+    pub fn send_mail(&self, mail: *Mail) -> !i32 {
         // MAIL FROM
         let mr: !i32 = self._cmd_check("MAIL FROM:<".concat(mail.from).concat(">\r\n"), 250);
         if !mr.ok { return err(mr.err); }
@@ -241,7 +241,7 @@ impl SmtpSession {
     /// session.quit();
     /// session.close();
     /// ```
-    pub fn quit(self) -> !i32 {
+    pub fn quit(&self) -> !i32 {
         return self._cmd_check("QUIT\r\n", 221);
     }
 
@@ -257,17 +257,17 @@ impl SmtpSession {
         free(self as *void);
     }
 
-    fn _write(self, data: string) -> !i32 {
+    fn _write(&self, data: string) -> !i32 {
         if self.is_tls { return self.tls.write_all(data); }
         return self.tcp.write_all(data);
     }
 
-    fn _read(self, max: i32) -> !string {
+    fn _read(&self, max: i32) -> !string {
         if self.is_tls { return self.tls.read(max); }
         return self.tcp.read_str(max);
     }
 
-    fn _read_reply(self) -> !*SmtpReply {
+    fn _read_reply(&self) -> !*SmtpReply {
         // Multi-line replies: each line "ddd-text" until "ddd text" (space).
         let mut acc: string = "";
         let mut last_text: string = "";
@@ -299,7 +299,7 @@ impl SmtpSession {
         return ok(r);
     }
 
-    fn _cmd_check(self, cmd: string, want: i32) -> !i32 {
+    fn _cmd_check(&self, cmd: string, want: i32) -> !i32 {
         let _: !i32 = self._write(cmd);
         let r: !*SmtpReply = self._read_reply();
         if !r.ok { return err(r.err); }
@@ -314,7 +314,7 @@ impl SmtpSession {
     /// Send EHLO and walk every continuation line, recording any
     /// `AUTH ...` extension into `self.auth_mechs` so a later
     /// `_auth_dispatch` can pick the right mechanism.
-    fn _ehlo(self) -> !i32 {
+    fn _ehlo(&mut self) -> !i32 {
         self.auth_mechs = "";
         let _w: !i32 = self._write("EHLO ".concat(_local_hostname()).concat("\r\n"));
         let mut last_code: i32 = 0;
@@ -355,7 +355,7 @@ impl SmtpSession {
         return ok(0);
     }
 
-    fn _auth_dispatch(self, user: string, pass: string,
+    fn _auth_dispatch(&self, user: string, pass: string,
                       pref: string) -> !i32 {
         let p: string = pref.to_lower();
         if p.eq("plain") { return self._auth_plain(user, pass); }
@@ -370,7 +370,7 @@ impl SmtpSession {
         return self._auth_plain(user, pass);
     }
 
-    fn _auth_plain(self, user: string, pass: string) -> !i32 {
+    fn _auth_plain(&self, user: string, pass: string) -> !i32 {
         // PLAIN: base64(\0 user \0 pass) — RFC 4616
         let nul: string = (0 as char).to_string();
         let raw: string = nul.concat(user).concat(nul).concat(pass);
@@ -382,7 +382,7 @@ impl SmtpSession {
     /// 334 server prompts (typically containing base64 "Username:"
     /// and "Password:"); we ignore the prompt content and just send
     /// our base64-encoded user / pass in turn.
-    fn _auth_login(self, user: string, pass: string) -> !i32 {
+    fn _auth_login(&self, user: string, pass: string) -> !i32 {
         let r1: !i32 = self._cmd_check("AUTH LOGIN\r\n", 334);
         if !r1.ok { return err(r1.err); }
         let user_b64: string = b64_encode(user);

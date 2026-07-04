@@ -68,7 +68,7 @@ impl TcpListener {
     ///     spawn handle(conn);
     /// }
     /// ```
-    pub fn accept(self) -> !*TcpStream {
+    pub fn accept(&self) -> !*TcpStream {
         let mut f: i32 = 0;
         let mut v4: i64 = 0;
         let mut hi: i64 = 0;

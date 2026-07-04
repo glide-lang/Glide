@@ -83,7 +83,7 @@ impl Pop3Session {
     /// let r: !i32 = session.login("me@example.com", "app-password");
     /// if !r.ok { eprintln(r.err); }
     /// ```
-    pub fn login(self, user: string, pass: string) -> !i32 {
+    pub fn login(&mut self, user: string, pass: string) -> !i32 {
         let _u: !string = self._cmd("USER ".concat(user));
         if !_u.ok { return err(_u.err); }
         let _p: !string = self._cmd("PASS ".concat(pass));
@@ -97,7 +97,7 @@ impl Pop3Session {
     /// let r: !*Pop3MsgInfo = session.stat();
     /// if r.ok { println!(r.val.idx, "msgs,", r.val.size, "bytes"); }
     /// ```
-    pub fn stat(self) -> !*Pop3MsgInfo {
+    pub fn stat(&mut self) -> !*Pop3MsgInfo {
         let r: !string = self._cmd("STAT");
         if !r.ok { return err(r.err); }
         // "+OK n octets"
@@ -124,7 +124,7 @@ impl Pop3Session {
     ///     }
     /// }
     /// ```
-    pub fn list(self) -> !*Vector<*Pop3MsgInfo> {
+    pub fn list(&mut self) -> !*Vector<*Pop3MsgInfo> {
         let _w: !i32 = self._write("LIST\r\n");
         let head: !string = self._read_line();
         if !head.ok { return err(head.err); }
@@ -160,7 +160,7 @@ impl Pop3Session {
     ///     if m.ok { println!("subject:", m.val.subject); }
     /// }
     /// ```
-    pub fn retrieve(self, n: i32) -> !string {
+    pub fn retrieve(&mut self, n: i32) -> !string {
         let _w: !i32 = self._write("RETR ".concat(_pop3_itos(n)).concat("\r\n"));
         let head: !string = self._read_line();
         if !head.ok { return err(head.err); }
@@ -176,7 +176,7 @@ impl Pop3Session {
     /// session.delete(1);
     /// session.quit();   // server now removes it
     /// ```
-    pub fn delete(self, n: i32) -> !i32 {
+    pub fn delete(&mut self, n: i32) -> !i32 {
         let r: !string = self._cmd("DELE ".concat(_pop3_itos(n)));
         if !r.ok { return err(r.err); }
         return ok(0);
@@ -188,7 +188,7 @@ impl Pop3Session {
     /// ```glide
     /// session.noop();
     /// ```
-    pub fn noop(self) -> !i32 {
+    pub fn noop(&mut self) -> !i32 {
         let r: !string = self._cmd("NOOP");
         if !r.ok { return err(r.err); }
         return ok(0);
@@ -201,7 +201,7 @@ impl Pop3Session {
     /// session.quit();
     /// session.close();
     /// ```
-    pub fn quit(self) -> !i32 {
+    pub fn quit(&mut self) -> !i32 {
         let r: !string = self._cmd("QUIT");
         if !r.ok { return err(r.err); }
         return ok(0);
@@ -220,17 +220,17 @@ impl Pop3Session {
 
     // ---- transport helpers ----
 
-    fn _write(self, data: string) -> !i32 {
+    fn _write(&self, data: string) -> !i32 {
         if self.is_tls { return self.tls.write_all(data); }
         return self.tcp.write_all(data);
     }
 
-    fn _read(self, max: i32) -> !string {
+    fn _read(&self, max: i32) -> !string {
         if self.is_tls { return self.tls.read(max); }
         return self.tcp.read_str(max);
     }
 
-    fn _read_line(self) -> !string {
+    fn _read_line(&mut self) -> !string {
         while self.rx_buf.index_of("\r\n") < 0 {
             let r: !string = self._read(4096);
             if !r.ok { return err(r.err); }
@@ -245,7 +245,7 @@ impl Pop3Session {
 
     /// Read until a line consisting solely of "." appears. Strip the
     /// terminator and unescape leading-double-dot lines.
-    fn _read_multiline(self) -> !string {
+    fn _read_multiline(&mut self) -> !string {
         let mut out: string = "";
         while true {
             let lr: !string = self._read_line();
@@ -261,7 +261,7 @@ impl Pop3Session {
         return ok(out);
     }
 
-    fn _cmd(self, cmd: string) -> !string {
+    fn _cmd(&mut self, cmd: string) -> !string {
         let _w: !i32 = self._write(cmd.concat("\r\n"));
         let r: !string = self._read_line();
         if !r.ok { return err(r.err); }

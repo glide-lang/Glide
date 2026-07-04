@@ -268,12 +268,12 @@ impl LogSink {
     }
 
     /// Set minimum level for this sink (rejects below). Returns self for chaining.
-    pub fn min_level(self, lvl: i32) -> *LogSink {
+    pub fn min_level(&mut self, lvl: i32) -> *LogSink {
         self.level = lvl;
         return self;
     }
 
-    fn write_line(self, line: string, level: i32) {
+    fn write_line(&mut self, line: string, level: i32) {
         if level < self.level { return; }
         if self.kind == SINK_STDOUT || self.kind == SINK_STDERR || self.kind == SINK_FILE {
             __glide_log_write_fd(self.fd, line);
@@ -303,7 +303,7 @@ impl LogSink {
         }
     }
 
-    fn rotate(self) {
+    fn rotate(&mut self) {
         __glide_log_close_fd(self.fd);
         // Shift .N-1 -> .N, .N-2 -> .N-1, ..., .1 -> .2, base -> .1
         let mut i: i32 = self.max_files;
@@ -403,7 +403,7 @@ impl Logger {
 
     /// Return a child logger that inherits sinks/level/format but adds a
     /// bound field. Calls on the child include the field on every entry.
-    pub fn with(self, key: string, value: string) -> *Logger {
+    pub fn with(&self, key: string, value: string) -> *Logger {
         let child: *Logger = malloc(sizeof(Logger)) as *Logger;
         child.level = self.level;
         child.format = self.format;
@@ -420,13 +420,13 @@ impl Logger {
         return child;
     }
 
-    fn enabled(self, lvl: i32) -> bool {
+    fn enabled(&self, lvl: i32) -> bool {
         return lvl >= self.level;
     }
 
     /// Emit `msg` (plus any bound + extra fields) at `lvl`. `extras`
     /// is a flat list of key, value, key, value...
-    pub fn logv(self, lvl: i32, msg: string, extras: *Vector<string>) {
+    pub fn logv(&self, lvl: i32, msg: string, extras: *Vector<string>) {
         if !self.enabled(lvl) { return; }
         let entry: *LogEntry = malloc(sizeof(LogEntry)) as *LogEntry;
         entry.level = lvl;
@@ -450,7 +450,7 @@ impl Logger {
     }
 
     /// Same as logv but with caller-supplied file:line.
-    pub fn logv_at(self, lvl: i32, msg: string, file: string, line: i32,
+    pub fn logv_at(&self, lvl: i32, msg: string, file: string, line: i32,
                     extras: *Vector<string>) {
         if !self.enabled(lvl) { return; }
         let entry: *LogEntry = malloc(sizeof(LogEntry)) as *LogEntry;
@@ -481,7 +481,7 @@ impl Logger {
         }
     }
 
-    fn render(self, entry: *LogEntry) -> string {
+    fn render(&self, entry: *LogEntry) -> string {
         if self.format == LOG_FMT_JSON {
             return _render_json(entry, self.ts_format, self.time_start_ns);
         }
@@ -492,7 +492,7 @@ impl Logger {
                             self.color_for(entry.level));
     }
 
-    fn color_for(self, _lvl: i32) -> bool {
+    fn color_for(&self, _lvl: i32) -> bool {
         if self.sinks.len() == 0 { return false; }
         let s: *LogSink = self.sinks.get(0);
         return s.color;
@@ -500,12 +500,12 @@ impl Logger {
 
     // Direct-call shortcuts. These don't capture file:line; use the
     // `log_<level>!` macros for that.
-    pub fn trace(self, msg: string) { let e: *Vector<string> = Vector::new(); self.logv(LOG_TRACE, msg, e); }
-    pub fn debug(self, msg: string) { let e: *Vector<string> = Vector::new(); self.logv(LOG_DEBUG, msg, e); }
+    pub fn trace(&self, msg: string) { let e: *Vector<string> = Vector::new(); self.logv(LOG_TRACE, msg, e); }
+    pub fn debug(&self, msg: string) { let e: *Vector<string> = Vector::new(); self.logv(LOG_DEBUG, msg, e); }
     pub fn info (self, msg: string) { let e: *Vector<string> = Vector::new(); self.logv(LOG_INFO,  msg, e); }
     pub fn warn (self, msg: string) { let e: *Vector<string> = Vector::new(); self.logv(LOG_WARN,  msg, e); }
-    pub fn error(self, msg: string) { let e: *Vector<string> = Vector::new(); self.logv(LOG_ERROR, msg, e); }
-    pub fn fatal(self, msg: string) { let e: *Vector<string> = Vector::new(); self.logv(LOG_FATAL, msg, e); }
+    pub fn error(&self, msg: string) { let e: *Vector<string> = Vector::new(); self.logv(LOG_ERROR, msg, e); }
+    pub fn fatal(&self, msg: string) { let e: *Vector<string> = Vector::new(); self.logv(LOG_FATAL, msg, e); }
 }
 
 // ============================================================================
@@ -531,13 +531,13 @@ impl LoggerBuilder {
         b.do_async = false;
         return b;
     }
-    pub fn level(self, lvl: i32) -> *LoggerBuilder { self.level = lvl; return self; }
-    pub fn format(self, fmt: i32) -> *LoggerBuilder { self.format = fmt; return self; }
-    pub fn timestamps(self, ts: i32) -> *LoggerBuilder { self.ts_format = ts; return self; }
-    pub fn add_sink(self, s: *LogSink) -> *LoggerBuilder { self.sinks.push(s); return self; }
-    pub fn async_writer(self, on: bool) -> *LoggerBuilder { self.do_async = on; return self; }
+    pub fn level(&mut self, lvl: i32) -> *LoggerBuilder { self.level = lvl; return self; }
+    pub fn format(&mut self, fmt: i32) -> *LoggerBuilder { self.format = fmt; return self; }
+    pub fn timestamps(&mut self, ts: i32) -> *LoggerBuilder { self.ts_format = ts; return self; }
+    pub fn add_sink(&mut self, s: *LogSink) -> *LoggerBuilder { self.sinks.push(s); return self; }
+    pub fn async_writer(&mut self, on: bool) -> *LoggerBuilder { self.do_async = on; return self; }
 
-    pub fn build(self) -> *Logger {
+    pub fn build(&mut self) -> *Logger {
         let l: *Logger = malloc(sizeof(Logger)) as *Logger;
         l.level = self.level;
         l.format = self.format;
@@ -819,7 +819,7 @@ impl LogLine {
     }
 
     /// Attach a key=value field. Chainable.
-    pub fn kv(self, k: string, v: string) -> *LogLine {
+    pub fn kv(&mut self, k: string, v: string) -> *LogLine {
         self.kvs.push(k); self.kvs.push(v);
         return self;
     }
@@ -830,7 +830,7 @@ impl LogLine {
     }
 
     /// Send through `lg` (not the global).
-    pub fn emit_to(self, lg: *Logger) {
+    pub fn emit_to(&self, lg: *Logger) {
         lg.logv(self.level, self.msg, self.kvs);
     }
 }

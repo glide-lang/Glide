@@ -92,7 +92,7 @@ impl ImapSession {
     /// let r: !i32 = session.login("me@gmail.com", "abcd-efgh-ijkl-mnop");
     /// if !r.ok { eprintln(r.err); }
     /// ```
-    pub fn login(self, user: string, pass: string) -> !i32 {
+    pub fn login(&mut self, user: string, pass: string) -> !i32 {
         // Tag user/pass as quoted strings. RFC 3501 allows astring or
         // literal — we use the simpler astring since user/pass shouldn't
         // contain CR/LF.
@@ -110,7 +110,7 @@ impl ImapSession {
     /// let r: !i32 = session.select("INBOX");
     /// if r.ok { println!(r.val, "messages"); }
     /// ```
-    pub fn select(self, mailbox: string) -> !i32 {
+    pub fn select(&mut self, mailbox: string) -> !i32 {
         let cmd: string = "SELECT \"".concat(mailbox).concat("\"");
         let r: !*ImapResponse = self._cmd(cmd);
         if !r.ok { return err(r.err); }
@@ -141,7 +141,7 @@ impl ImapSession {
     ///     if m.ok { println!(m.val.subject); }
     /// }
     /// ```
-    pub fn fetch(self, seq: i32) -> !string {
+    pub fn fetch(&mut self, seq: i32) -> !string {
         let cmd: string = "FETCH ".concat(_imap_itos(seq)).concat(" BODY[]");
         let r: !*ImapResponse = self._cmd_capture_literal(cmd);
         if !r.ok { return err(r.err); }
@@ -156,7 +156,7 @@ impl ImapSession {
     /// session.store_flag(2, "\\Flagged", true);  // star it
     /// session.store_flag(3, "\\Deleted", true);  // mark for expunge
     /// ```
-    pub fn store_flag(self, seq: i32, flag: string,
+    pub fn store_flag(&mut self, seq: i32, flag: string,
                       add: bool) -> !i32 {
         let mut op: string = "+FLAGS";
         if !add { op = "-FLAGS"; }
@@ -185,7 +185,7 @@ impl ImapSession {
     ///     println!("msg #", r.val.get(i));
     /// }}
     /// ```
-    pub fn search(self, criteria: string) -> !*Vector<i32> {
+    pub fn search(&mut self, criteria: string) -> !*Vector<i32> {
         let cmd: string = "SEARCH ".concat(criteria);
         let r: !*ImapResponse = self._cmd(cmd);
         if !r.ok { return err(r.err); }
@@ -213,7 +213,7 @@ impl ImapSession {
     /// let r: !*Vector<i32> = session.search_unseen();
     /// if r.ok { println!(r.val.len(), "unread"); }
     /// ```
-    pub fn search_unseen(self) -> !*Vector<i32> {
+    pub fn search_unseen(&mut self) -> !*Vector<i32> {
         return self.search("UNSEEN");
     }
 
@@ -225,7 +225,7 @@ impl ImapSession {
     /// let r: !*Vector<i32> = session.search_from("alice@example.com");
     /// if r.ok { println!("from alice:", r.val.len()); }
     /// ```
-    pub fn search_from(self, addr: string) -> !*Vector<i32> {
+    pub fn search_from(&mut self, addr: string) -> !*Vector<i32> {
         return self.search("FROM \"".concat(addr).concat("\""));
     }
 
@@ -241,7 +241,7 @@ impl ImapSession {
     /// m.subject = "draft"; m.body = "WIP";
     /// session.append("Drafts", "\\Seen", m.to_rfc5322());
     /// ```
-    pub fn append(self, mailbox: string, flags: string,
+    pub fn append(&mut self, mailbox: string, flags: string,
                   message: string) -> !i32 {
         let mut head: string = "APPEND \"".concat(mailbox).concat("\"");
         if flags.len() > 0 {
@@ -290,7 +290,7 @@ impl ImapSession {
     /// }
     /// session.idle_stop();
     /// ```
-    pub fn idle_start(self) -> !i32 {
+    pub fn idle_start(&mut self) -> !i32 {
         let tag: string = self._next_tag();
         self.idle_tag = tag;
         let _w: !i32 = self._write(tag.concat(" IDLE\r\n"));
@@ -312,7 +312,7 @@ impl ImapSession {
     /// let l: !string = session.idle_next();
     /// if l.ok && l.val.contains("EXISTS") { /* new mail arrived */ }
     /// ```
-    pub fn idle_next(self) -> !string {
+    pub fn idle_next(&mut self) -> !string {
         return self._read_line();
     }
 
@@ -327,7 +327,7 @@ impl ImapSession {
     /// session.idle_stop();
     /// session.fetch(latest_seq);   // session is back in command mode
     /// ```
-    pub fn idle_stop(self) -> !i32 {
+    pub fn idle_stop(&mut self) -> !i32 {
         let tag: string = self.idle_tag;
         if tag.eq("") { return err("imap: idle_stop without idle_start"); }
         let _w: !i32 = self._write("DONE\r\n");
@@ -354,7 +354,7 @@ impl ImapSession {
     /// session.logout();
     /// session.close();
     /// ```
-    pub fn logout(self) -> !i32 {
+    pub fn logout(&mut self) -> !i32 {
         let _r: !*ImapResponse = self._cmd("LOGOUT");
         if !_r.ok { return err(_r.err); }
         return ok(0);
@@ -374,17 +374,17 @@ impl ImapSession {
 
     // ---- transport ----
 
-    fn _write(self, data: string) -> !i32 {
+    fn _write(&self, data: string) -> !i32 {
         if self.is_tls { return self.tls.write_all(data); }
         return self.tcp.write_all(data);
     }
 
-    fn _read(self, max: i32) -> !string {
+    fn _read(&self, max: i32) -> !string {
         if self.is_tls { return self.tls.read(max); }
         return self.tcp.read_str(max);
     }
 
-    fn _read_line(self) -> !string {
+    fn _read_line(&mut self) -> !string {
         while self.rx_buf.index_of("\r\n") < 0 {
             let r: !string = self._read(4096);
             if !r.ok { return err(r.err); }
@@ -397,7 +397,7 @@ impl ImapSession {
         return ok(line);
     }
 
-    fn _read_exact(self, n: i32) -> !string {
+    fn _read_exact(&mut self, n: i32) -> !string {
         while self.rx_buf.len() < n {
             let r: !string = self._read(4096);
             if !r.ok { return err(r.err); }
@@ -409,14 +409,14 @@ impl ImapSession {
         return ok(chunk);
     }
 
-    fn _next_tag(self) -> string {
+    fn _next_tag(&mut self) -> string {
         self.tag_counter = self.tag_counter + 1;
         return "A".concat(_imap_itos(self.tag_counter));
     }
 
     /// Run a command without literal handling. Returns all untagged
     /// lines plus the tagged final line.
-    fn _cmd(self, cmd: string) -> !*ImapResponse {
+    fn _cmd(&mut self, cmd: string) -> !*ImapResponse {
         let tag: string = self._next_tag();
         let _w: !i32 = self._write(tag.concat(" ").concat(cmd).concat("\r\n"));
         let resp: *ImapResponse = malloc(sizeof(ImapResponse)) as *ImapResponse;
@@ -443,7 +443,7 @@ impl ImapSession {
     /// (FETCH BODY[] returns the message body as a literal). The
     /// captured literal is stored on the response via the `literal`
     /// field. Only one literal per command is supported.
-    fn _cmd_capture_literal(self, cmd: string) -> !*ImapResponse {
+    fn _cmd_capture_literal(&mut self, cmd: string) -> !*ImapResponse {
         let tag: string = self._next_tag();
         let _w: !i32 = self._write(tag.concat(" ").concat(cmd).concat("\r\n"));
         let resp: *ImapResponse = malloc(sizeof(ImapResponse)) as *ImapResponse;

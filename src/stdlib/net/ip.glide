@@ -104,14 +104,14 @@ impl IpAddr {
     /// ```glide
     /// IpAddr::v4(8, 8, 8, 8).is_v4();   // true
     /// ```
-    pub fn is_v4(self) -> bool { return self.kind == 4; }
+    pub fn is_v4(&self) -> bool { return self.kind == 4; }
 
     /// `true` if this is a v6 address.
     ///
     /// ```glide
     /// IpAddr::loopback_v6().is_v6();   // true
     /// ```
-    pub fn is_v6(self) -> bool { return self.kind == 6; }
+    pub fn is_v6(&self) -> bool { return self.kind == 6; }
 
     /// `true` for `127.0.0.0/8` (v4) or `::1` (v6).
     ///
@@ -119,7 +119,7 @@ impl IpAddr {
     /// IpAddr::v4(127, 0, 0, 1).is_loopback();   // true
     /// IpAddr::v4(8, 8, 8, 8).is_loopback();     // false
     /// ```
-    pub fn is_loopback(self) -> bool {
+    pub fn is_loopback(&self) -> bool {
         if self.kind == 4 {
             return ((self.v4 >> 24) & 255) == 127;
         }
@@ -131,7 +131,7 @@ impl IpAddr {
     /// ```glide
     /// IpAddr::v4(0, 0, 0, 0).is_unspecified();   // true
     /// ```
-    pub fn is_unspecified(self) -> bool {
+    pub fn is_unspecified(&self) -> bool {
         if self.kind == 4 { return self.v4 == 0; }
         return self.v6_hi == 0 && self.v6_lo == 0;
     }
@@ -143,7 +143,7 @@ impl IpAddr {
     /// IpAddr::v4(192, 168, 1, 5).is_private();   // true
     /// IpAddr::v4(8, 8, 8, 8).is_private();       // false
     /// ```
-    pub fn is_private(self) -> bool {
+    pub fn is_private(&self) -> bool {
         if self.kind == 4 {
             let a: i32 = (self.v4 >> 24) & 255;
             let b: i32 = (self.v4 >> 16) & 255;

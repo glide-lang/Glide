@@ -172,7 +172,7 @@ impl SseChannel {
 }
 
 impl ChunkSource for SseChannel {
-    fn next_chunk(self) -> ?string {
+    fn next_chunk(&mut self) -> ?string {
         let ev: SseEvent = self.ch.recv();
         if ev.event.eq(SSE_END) { return none(); }
         return some(sse_format(ev));

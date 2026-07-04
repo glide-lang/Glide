@@ -147,15 +147,15 @@ impl WebSocket {
         return ok(ws);
     }
 
-    fn _write_all(self, data: string) -> !i32 {
+    fn _write_all(&mut self, data: string) -> !i32 {
         return stream_write_all(self.stream, data);
     }
 
-    fn _read(self, max: i32) -> !string {
+    fn _read(&mut self, max: i32) -> !string {
         return stream_read(self.stream, max);
     }
 
-    fn _read_exact(self, n: i32) -> !string {
+    fn _read_exact(&mut self, n: i32) -> !string {
         let mut buf: string = "";
         while buf.len() < n {
             let want: i32 = n - buf.len();
@@ -167,7 +167,7 @@ impl WebSocket {
         return ok(buf);
     }
 
-    fn _read_until_blank_line(self) -> !string {
+    fn _read_until_blank_line(&mut self) -> !string {
         let mut acc: string = "";
         while acc.index_of("\r\n\r\n") < 0 {
             let r: !string = self._read(1024);
@@ -179,7 +179,7 @@ impl WebSocket {
         return ok(acc);
     }
 
-    fn _close_transport(self) {
+    fn _close_transport(&mut self) {
         if self.stream != null { self.stream.close(); }
     }
 
@@ -189,7 +189,7 @@ impl WebSocket {
     /// ```glide
     /// ws.send_text("{\"type\":\"hello\"}");
     /// ```
-    pub fn send_text(self, msg: string) -> !i32 {
+    pub fn send_text(&mut self, msg: string) -> !i32 {
         return self._send_frame(1, msg);
     }
 
@@ -198,7 +198,7 @@ impl WebSocket {
     /// ```glide
     /// ws.send_binary(hex_decode("deadbeef").val);
     /// ```
-    pub fn send_binary(self, data: string) -> !i32 {
+    pub fn send_binary(&mut self, data: string) -> !i32 {
         return self._send_frame(2, data);
     }
 
@@ -211,11 +211,11 @@ impl WebSocket {
     ///     ws.pong(m.val.text);   // echo the ping payload
     /// }
     /// ```
-    pub fn pong(self, payload: string) -> !i32 {
+    pub fn pong(&mut self, payload: string) -> !i32 {
         return self._send_frame(10, payload);
     }
 
-    fn _send_frame(self, opcode: i32, payload: string) -> !i32 {
+    fn _send_frame(&mut self, opcode: i32, payload: string) -> !i32 {
         let plen: i32 = payload.len();
         let mut frame: string = "";
         // First byte: FIN=1 + opcode (single-frame messages only).
@@ -276,7 +276,7 @@ impl WebSocket {
     ///     }
     /// }
     /// ```
-    pub fn recv(self) -> !*WsMessage {
+    pub fn recv(&mut self) -> !*WsMessage {
         let h2: !string = self._read_exact(2);
         if !h2.ok { return err(h2.err); }
         let head: string = h2.val;
@@ -368,7 +368,7 @@ impl WsParsedUrl {
     /// let u: *WsParsedUrl = _ws_parse_url("wss://example.com:8443/").val;
     /// u.host_header();   // "example.com:8443"
     /// ```
-    pub fn host_header(self) -> string {
+    pub fn host_header(&self) -> string {
         let mut def: i32 = 80;
         if self.is_wss { def = 443; }
         if self.port == def { return self.host; }

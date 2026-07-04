@@ -58,7 +58,7 @@ impl HttpClientRequest {
     /// req.set("Authorization", "Bearer xyz");
     /// req.set("Accept", "application/json");
     /// ```
-    pub fn set(self, name: string, value: string) {
+    pub fn set(&mut self, name: string, value: string) {
         self.headers = self.headers.concat(name).concat(": ").concat(value).concat("\r\n");
     }
 
@@ -68,7 +68,7 @@ impl HttpClientRequest {
     /// req.set("Content-Type", "application/json");
     /// req.body_str("{\"name\":\"alice\"}");
     /// ```
-    pub fn body_str(self, s: string) {
+    pub fn body_str(&mut self, s: string) {
         self.body = s;
         self.set("Content-Length", _hcli_itos(s.len()));
     }
@@ -139,7 +139,7 @@ impl HttpClient {
     /// let r: !*HttpResponse = client.do(req);
     /// if r.ok { println!(r.val.status, r.val.body); }
     /// ```
-    pub fn do(self, req: *HttpClientRequest) -> !*HttpResponse {
+    pub fn do(&mut self, req: *HttpClientRequest) -> !*HttpResponse {
         let mut current_url: string = req.url;
         let mut current_method: string = req.method;
         let mut current_body: string = req.body;
@@ -186,11 +186,11 @@ impl HttpClient {
     /// Send one request and return the response without following
     /// redirects. Useful for reverse proxies and crawlers that need to
     /// preserve 30x responses exactly as the upstream emitted them.
-    pub fn do_once(self, req: *HttpClientRequest) -> !*HttpResponse {
+    pub fn do_once(&mut self, req: *HttpClientRequest) -> !*HttpResponse {
         return self._do_once(req.method, req.url, req.headers, req.body);
     }
 
-    fn _do_h2(self, stream: *TlsStream, method: string,
+    fn _do_h2(&mut self, stream: *TlsStream, method: string,
               url: *ParsedUrl, extra_headers: string,
               body: string) -> !*HttpResponse {
         let cr: !*H2Conn = H2Conn::over(stream);
@@ -261,7 +261,7 @@ impl HttpClient {
         return ok(resp);
     }
 
-    fn _do_once(self, method: string, url_s: string,
+    fn _do_once(&mut self, method: string, url_s: string,
                 extra_headers: string, body: string) -> !*HttpResponse {
         let u: !*ParsedUrl = _hcli_parse_url(url_s);
         if !u.ok { return err(u.err); }
@@ -369,7 +369,7 @@ impl HttpClient {
     /// let r: !*HttpResponse = client.get("https://example.com/");
     /// if r.ok && r.val.status == 200 { print!(r.val.body); }
     /// ```
-    pub fn get(self, url: string) -> !*HttpResponse {
+    pub fn get(&mut self, url: string) -> !*HttpResponse {
         let req: *HttpClientRequest = HttpClientRequest::new("GET", url);
         let r: !*HttpResponse = self.do(req);
         free(req as *void);
@@ -383,7 +383,7 @@ impl HttpClient {
     /// let r: !*HttpResponse = client.post(
     ///     "https://api/upload", "raw=text", "application/x-www-form-urlencoded");
     /// ```
-    pub fn post(self, url: string, body: string,
+    pub fn post(&mut self, url: string, body: string,
                 content_type: string) -> !*HttpResponse {
         let req: *HttpClientRequest = HttpClientRequest::new("POST", url);
         req.set("Content-Type", content_type);
@@ -400,7 +400,7 @@ impl HttpClient {
     /// let r: !*HttpResponse = client.post_json("https://api/users",
     ///                                          "{\"name\":\"alice\"}");
     /// ```
-    pub fn post_json(self, url: string, body: string) -> !*HttpResponse {
+    pub fn post_json(&mut self, url: string, body: string) -> !*HttpResponse {
         return self.post(url, body, "application/json");
     }
 
@@ -411,7 +411,7 @@ impl HttpClient {
     ///                                    "{\"name\":\"new\"}",
     ///                                    "application/json");
     /// ```
-    pub fn put(self, url: string, body: string,
+    pub fn put(&mut self, url: string, body: string,
                content_type: string) -> !*HttpResponse {
         let req: *HttpClientRequest = HttpClientRequest::new("PUT", url);
         req.set("Content-Type", content_type);
@@ -427,7 +427,7 @@ impl HttpClient {
     /// let r: !*HttpResponse = client.delete("https://api/items/42");
     /// if r.ok { println!("status:", r.val.status); }
     /// ```
-    pub fn delete(self, url: string) -> !*HttpResponse {
+    pub fn delete(&mut self, url: string) -> !*HttpResponse {
         let req: *HttpClientRequest = HttpClientRequest::new("DELETE", url);
         let r: !*HttpResponse = self.do(req);
         free(req as *void);
@@ -487,7 +487,7 @@ impl ParsedUrl {
     /// // For an https URL on port 443: returns just "example.com"
     /// // For "https://example.com:8443/foo": returns "example.com:8443"
     /// ```
-    pub fn host_header(self) -> string {
+    pub fn host_header(&self) -> string {
         let mut default_port: i32 = 80;
         if self.scheme.eq("https") { default_port = 443; }
         if self.port == default_port { return self.host; }

@@ -314,7 +314,7 @@ impl H2Conn {
     ///     println!("body bytes:", r.val.body.len());
     /// }
     /// ```
-    pub fn request(self, method: string, path: string,
+    pub fn request(&mut self, method: string, path: string,
                    authority: string, scheme: string,
                    extra_headers: *Vector<*HpackHeader>,
                    body: string) -> !*H2Response {
@@ -351,7 +351,7 @@ impl H2Conn {
         return self._read_response(stream_id);
     }
 
-    fn _read_response(self, stream_id: i32) -> !*H2Response {
+    fn _read_response(&mut self, stream_id: i32) -> !*H2Response {
         let mut headers_done: bool = false;
         let header_block: *ByteBuffer = ByteBuffer::new();
         let body: *ByteBuffer = ByteBuffer::new();
@@ -478,14 +478,14 @@ impl H2Conn {
         return ok(resp);
     }
 
-    fn _rx_avail(self) -> i32 {
+    fn _rx_avail(&self) -> i32 {
         return self.rx_buf.len - self.rx_offset;
     }
 
     /// Read up to 16 KiB more bytes into the rx ring. Returns the
     /// count appended (0 = peer closed cleanly). Compacts the ring
     /// when offset gets large to avoid unbounded growth.
-    fn _fill_rx(self) -> !i32 {
+    fn _fill_rx(&mut self) -> !i32 {
         // Compact when consumed past 4 KiB.
         if self.rx_offset > 4096 {
             let nb: *ByteBuffer = ByteBuffer::new();
@@ -506,7 +506,7 @@ impl H2Conn {
 
     /// Copy bytes [`from`, `to`) of the rx ring into a fresh
     /// ByteBuffer. Used so frame payloads survive ring compaction.
-    fn _rx_slice(self, from: i32, to: i32) -> *ByteBuffer {
+    fn _rx_slice(&self, from: i32, to: i32) -> *ByteBuffer {
         let out: *ByteBuffer = ByteBuffer::new();
         for let i: i32 = from; i < to; i++ { out.push(self.rx_buf.at(i)); }
         return out;

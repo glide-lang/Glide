@@ -77,7 +77,7 @@ impl CookieJar {
     /// let cookies: *Vector<string> = resp.headers("Set-Cookie");
     /// jar.ingest("example.com", cookies);
     /// ```
-    pub fn ingest(self, request_host: string,
+    pub fn ingest(&mut self, request_host: string,
                   set_cookie_lines: *Vector<string>) {
         for let i: i32 = 0; i < set_cookie_lines.len(); i++ {
             let line: string = set_cookie_lines.get(i);
@@ -86,7 +86,7 @@ impl CookieJar {
         }
     }
 
-    fn _add(self, c: *Cookie) {
+    fn _add(&mut self, c: *Cookie) {
         // Replace any existing cookie with the same (name, domain, path).
         for let i: i32 = 0; i < self.cookies.len(); i++ {
             let ex: *Cookie = self.cookies.get(i);
@@ -106,7 +106,7 @@ impl CookieJar {
     /// let h: string = jar.header_value("example.com", "/api", true);
     /// // h might be "session=abc123; pref=dark"
     /// ```
-    pub fn header_value(self, host: string, path: string,
+    pub fn header_value(&self, host: string, path: string,
                         is_secure: bool) -> string {
         let mut out: string = "";
         for let i: i32 = 0; i < self.cookies.len(); i++ {
@@ -129,14 +129,14 @@ impl CookieJar {
     ///     println!(c.name, "=", c.value);
     /// }
     /// ```
-    pub fn all(self) -> *Vector<*Cookie> { return self.cookies; }
+    pub fn all(&self) -> *Vector<*Cookie> { return self.cookies; }
 
     /// Forget every cookie. Useful for logout flows.
     ///
     /// ```glide
     /// jar.clear();   // log everyone out
     /// ```
-    pub fn clear(self) { self.cookies.clear(); }
+    pub fn clear(&mut self) { self.cookies.clear(); }
 }
 
 // ---- parsing ----
