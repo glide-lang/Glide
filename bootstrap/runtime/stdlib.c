@@ -126,10 +126,15 @@ static long long __glide_int_abs(long long n) { return n < 0 ? -n : n; }
 static int __glide_int_to_int(long long n) { return (int)n; }
 static int __glide_uint_to_int(unsigned long long n) { return (int)n; }
 static const char* __glide_int_to_string(long long n) {
-    char buf[32];
-    int len = snprintf(buf, sizeof(buf), "%lld", n);
-    char* out = __glide_str_alloc(len);
-    memcpy(out, buf, (size_t)len);
+    char tmp[24]; unsigned long long m; int neg = 0;
+    if (n < 0) { neg = 1; m = (unsigned long long)(-(n + 1)) + 1; } else { m = (unsigned long long)n; }
+    int t = 0;
+    if (m == 0) { tmp[t++] = '0'; }
+    while (m > 0) { tmp[t++] = (char)('0' + (int)(m % 10)); m /= 10; }
+    char* out = __glide_str_alloc(t + neg);
+    int p = 0;
+    if (neg) out[p++] = '-';
+    for (int i = 0; i < t; i++) out[p++] = tmp[t - 1 - i];
     return out;
 }
 /* 128-bit helpers. printf has no length modifier for __int128, so to_string
@@ -338,10 +343,11 @@ static __glide_u256 __glide_i256_min(void) { __glide_u256 r; r.d[0]=0; r.d[1]=0;
 /* Unsigned <=64-bit to_string: the signed __glide_int_to_string truncates
    values above i64 max (u64::MAX would print as -1). */
 static const char* __glide_uint_to_string(unsigned long long n) {
-    char buf[32];
-    int len = snprintf(buf, sizeof(buf), "%llu", n);
-    char* out = __glide_str_alloc(len);
-    memcpy(out, buf, (size_t)len);
+    char tmp[24]; int t = 0;
+    if (n == 0) { tmp[t++] = '0'; }
+    while (n > 0) { tmp[t++] = (char)('0' + (int)(n % 10)); n /= 10; }
+    char* out = __glide_str_alloc(t);
+    for (int i = 0; i < t; i++) out[i] = tmp[t - 1 - i];
     return out;
 }
 static unsigned long long __glide_uint_abs(unsigned long long n) { return n; }
