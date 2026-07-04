@@ -33,9 +33,18 @@ static void __glide_str_hdr_set(char* base, int len) {
     base[2] = (char)((len >> 16) & 0xff);
     base[3] = (char)((len >> 24) & 0xff);
 }
+/* Owned-allocation flag: while > 0, string allocations use malloc (individually
+   freeable) instead of the never-freed bump arena. The compiler pushes it only
+   around the RHS of a `let` it proved ephemeral+unaliased (single-allocation
+   producer), so exactly that one result is malloc-backed and freed at scope end. */
+static _Thread_local int g_str_own = 0;
+void __glide_str_own_push(void) { g_str_own++; }
+void __glide_str_own_pop(void)  { if (g_str_own > 0) g_str_own--; }
 static char* __glide_str_alloc(int len) {
     if (len < 0) len = 0;
-    char* base = (char*)__glide_palloc(4 + len + 1);
+    char* base = (g_str_own > 0)
+        ? (char*)malloc((size_t)(4 + len + 1))
+        : (char*)__glide_palloc(4 + len + 1);
     __glide_str_hdr_set(base, len);
     base[4 + len] = 0;
     return base + 4;
