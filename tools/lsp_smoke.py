@@ -1921,6 +1921,34 @@ case_diagnostics_project("duplicate struct shows only the error",
     "main.glide",
     present=["duplicate-definition"], absent=["unused-struct"])
 
+# Editing a sibling file updates the project index live: a fn deleted from
+# alelo.glide must stop being offered in main.glide's `alelo::` completion,
+# and a struct added must appear — without reopening anything.
+print("\n[project] sibling edit updates cross-file completion")
+import tempfile as _tf, shutil as _sh
+_d = _tf.mkdtemp().replace(os.sep, "/")
+with open(_d + "/alelo.glide", "w") as _f:
+    _f.write("pub fn ale() -> i32 { return 1; }\n")
+with open(_d + "/main.glide", "w") as _f:
+    _f.write("import alelo;\nfn main() -> i32 {\n    alelo::\n    return 0;\n}\n")
+_mu = _proj_uri(_d, "main.glide"); _au = _proj_uri(_d, "alelo.glide")
+_rs = run_session([
+    {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":_proj_uri(_d)}},
+    {"jsonrpc":"2.0","method":"initialized","params":{}},
+    {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":_au,"languageId":"glide","version":1,"text":open(_d+"/alelo.glide").read()}}},
+    {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":_mu,"languageId":"glide","version":1,"text":open(_d+"/main.glide").read()}}},
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{"textDocument":{"uri":_mu},"position":{"line":2,"character":11}}},
+    {"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":_au,"version":2},"contentChanges":[{"text":"pub struct Arroz {}\n"}]}},
+    {"jsonrpc":"2.0","id":3,"method":"textDocument/completion","params":{"textDocument":{"uri":_mu},"position":{"line":2,"character":11}}},
+    {"jsonrpc":"2.0","method":"exit","params":None},
+])
+_before = [it.get("label") for r in _rs if r.get("id")==2 for it in (r.get("result") or [])]
+_after  = [it.get("label") for r in _rs if r.get("id")==3 for it in (r.get("result") or [])]
+check("before the edit, `ale` is offered", "ale" in _before, f"got {_before}")
+check("after the edit, `ale` is gone and `Arroz` appears",
+      "ale" not in _after and "Arroz" in _after, f"got {_after}")
+_sh.rmtree(_d, ignore_errors=True)
+
 # A plain module import that is never used (neither `mod::` nor a bare name it
 # exports) is flagged.
 case_diagnostics_project("unused module import is flagged",

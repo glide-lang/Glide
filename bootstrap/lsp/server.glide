@@ -238,6 +238,10 @@ pub struct LspState {
     // `initialize`. When false, completion must emit plain, valid text — a
     // naive client otherwise mangles `${1:v}` into a bare `1`.
     pub client_snippets: bool,
+    // Per-path arenas for the single-file project_index reindex (didChange).
+    // Rotated per edit, mirroring parse_cache_arenas, so live re-indexing
+    // doesn't leak an AST per keystroke.
+    pub reindex_arenas: *HashMap<*void>,
     // True when the client negotiated UTF-8 positions; then byte columns pass
     // through unchanged. False (default) means UTF-16 — convert at the boundary.
     pub pos_utf8: bool,
@@ -263,6 +267,8 @@ pub fn lsp_state_new() -> *LspState {
     let fa: *HashMap<bool> = HashMap::new();
     s.fetch_attempted = fa;
     s.client_snippets = false;
+    let ria: *HashMap<*void> = HashMap::new();
+    s.reindex_arenas = ria;
     s.pos_utf8 = false;
     populate_stdlib_index(s);
     return s;
@@ -945,6 +951,85 @@ fn _index_flat_glide_dir(state: *LspState, dir: string, target: *Vector<Importab
     }
 }
 
+// Replace the project_index entries of ONE edited file with symbols parsed
+// from its live text, so cross-file completion tracks edits immediately —
+// the full rebuild only runs on didOpen (fingerprint-gated), which left the
+// index stale while a sibling file was being edited (a deleted fn kept being
+// offered). In-place: survivors compact down, then the fresh symbols append.
+fn _lsp_reindex_project_doc(state: *LspState, path: string, text: string) {
+    if state.project_index == null || path.eq("") || text.eq("") {
+        return;
+    }
+    let idx: *Vector<ImportableSym> = state.project_index;
+    // The module string comes from the entries being replaced (keeps dep
+    // prefixes intact). A file not yet indexed falls back to its bare name,
+    // but only when it sits in the project root or src/ (dep layouts need
+    // the prefix we can't derive here).
+    let mut module: string = "";
+    let mut mod_name: string = "";
+    let mut had: bool = false;
+    for let i: i32 = 0; i < idx.len(); i++ {
+        let sym: ImportableSym = idx.get(i);
+        if sym.def_path != null && sym.def_path.eq(path) {
+            module = sym.module;
+            had = true;
+            break;
+        }
+    }
+    if !had {
+        if state.project_root.eq("") {
+            return;
+        }
+        let dir: string = parent_dir(path);
+        if !dir.eq(state.project_root) && !dir.eq(state.project_root.concat("/src")) {
+            return;
+        }
+        module = drop_glide_ext(last_path_segment(path));
+    }
+    mod_name = module;
+    let mut mcc: i32 = -1;
+    for let k: i32 = 0; k + 1 < module.len(); k++ {
+        if module.at(k).to_int() == 58 && module.at(k + 1).to_int() == 58 {
+            mcc = k;
+        }
+    }
+    if mcc >= 0 {
+        mod_name = module.substring(mcc + 2, module.len());
+    }
+    // Compact out the old entries in place (no fresh vector per keystroke).
+    let mut w: i32 = 0;
+    for let i: i32 = 0; i < idx.len(); i++ {
+        let sym: ImportableSym = idx.get(i);
+        if sym.def_path != null && sym.def_path.eq(path) {
+            continue;
+        }
+        if w != i {
+            idx.set(w, sym);
+        }
+        w = w + 1;
+    }
+    idx.truncate(w);
+    // Rotate this path's reindex arena (old entries are already out of the
+    // index, so freeing their backing memory is safe) and parse+index the
+    // live text inside the new one. The libc-heap map key outlives arenas.
+    let saved: *void = __glide_palloc_get();
+    __glide_palloc_set(null);
+    let heap_key: string = path.concat("");
+    __glide_palloc_set(saved);
+    if state.reindex_arenas.contains(heap_key) {
+        let old: *void = state.reindex_arenas.get(heap_key);
+        if old != null {
+            __glide_palloc_free(old);
+        }
+    }
+    __glide_palloc_set(__glide_palloc_make());
+    let heap_src: string = text.concat("");
+    _index_module_src(state, heap_src, heap_key, mod_name, module, idx);
+    let final_arena: *void = __glide_palloc_get();
+    __glide_palloc_set(saved);
+    state.reindex_arenas.insert(heap_key, final_arena);
+}
+
 fn _refresh_project_index(state: *LspState, uri: string) {
     let path: string = uri_to_path(uri);
     if path.eq("") {
@@ -1161,6 +1246,12 @@ fn _index_one_module(_state: *LspState, path: string, mod_name: string, module: 
     if src.eq("") {
         return;
     }
+    _index_module_src(_state, src, path, mod_name, module, target);
+}
+
+// Same as _index_one_module but over an in-memory source string — used by the
+// per-keystroke reindex so cross-file completion sees live (unsaved) edits.
+fn _index_module_src(_state: *LspState, src: string, path: string, mod_name: string, module: string, target: *Vector<ImportableSym>) {
     let lex: *Lexer = Lexer::new(src);
     let par: *Parser = Parser::new(lex);
     let stmts: *Vector<Stmt> = parse_program(par);
@@ -1798,6 +1889,7 @@ fn handle_did_change(req: *JsonValue, state: *LspState) {
     // Pass the libc-owned copies: _reanalyze re-inserts the doc keyed by this
     // uri, so it must outlive the request arena that the original leaf is in.
     _lsp_cache_doc(state, uri_to_path(uri_l), text_l);
+    _lsp_reindex_project_doc(state, uri_to_path(uri_l), text_l);
     _reanalyze_open_docs(state, uri_l, text_l);
 }
 
