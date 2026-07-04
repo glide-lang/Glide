@@ -4352,6 +4352,10 @@ fn main() -> i32 {
     }
     // `lsp` takes no positional file arg.
     if cmd.eq("lsp") {
+        // The LSP resets its analysis arena every keystroke; the string bump
+        // arena (process-lifetime) must not shadow the a==NULL calloc path it
+        // depends on, so turn it off for the server.
+        __glide_disable_run_bump();
         return lsp_main();
     }
     // `openapi <file.glide>` — emit OpenAPI 3.0.3 YAML for every
