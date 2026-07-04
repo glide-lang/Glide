@@ -2037,6 +2037,17 @@ check("after the edit, `ale` is gone and `Arroz` appears",
       "ale" not in _after and "Arroz" in _after, f"got {_after}")
 _sh.rmtree(_d, ignore_errors=True)
 
+# A typo'd / nonexistent macro is a hard error instead of silently emitting
+# nothing; real builtins and stdlib macros never false-positive.
+case_diagnostics("unknown macro is flagged",
+    'fn main() -> i32 {\n    eprintln!("x");\n    return 0;\n}',
+    expect_codes_present=["unknown-macro"])
+
+case_diagnostics("valid builtin + stdlib macros are not flagged",
+    'fn main() -> i32 {\n    println!("hi");\n    let s = format!("{}", 1);\n'
+    '    let v = vec_of!(1, 2, 3);\n    assert!(v.len() == 3);\n    return 0;\n}',
+    expect_codes_absent=["unknown-macro"])
+
 # Dot-calling a trait method that has no `self` (an associated function) gives
 # a clear error, not a baffling arity mismatch.
 case_diagnostics("dot-calling a self-less method is a clear error",

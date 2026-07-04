@@ -4036,6 +4036,19 @@ fn chan_inner(t: *Type) -> *Type {
     return p;
 }
 
+// Bare macros that legitimately survive expansion to the typer/codegen. The
+// list is deliberately generous (includes the pre-pass builtins that are
+// normally rewritten away earlier) so it never flags a real macro in an edge
+// path; anything outside it is a genuine typo. User `macro` defs + proc macros
+// are already expanded and their defs stripped, so they never reach here.
+fn _is_surviving_builtin_macro(name: string) -> bool {
+    return name.eq("println") || name.eq("print") || name.eq("format") || name.eq("dbg") || name.eq("vec_of")
+        || name.eq("panic") || name.eq("assert") || name.eq("assert_eq") || name.eq("assert_str_eq")
+        || name.eq("todo") || name.eq("unimplemented") || name.eq("unreachable")
+        || name.eq("file") || name.eq("line") || name.eq("column") || name.eq("function")
+        || name.eq("pkg") || name.eq("cfg") || name.eq("env") || name.eq("stringify");
+}
+
 pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
     if e == null {
         return null;
@@ -5174,6 +5187,17 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         return null;
     }
     if e.kind == EX_MACRO {
+        // A bare macro call that survived expansion is unknown — a typo like
+        // `eprintln!(...)` that otherwise emits nothing. User `macro` defs and
+        // proc macros are expanded (and their defs stripped) before the typer,
+        // so the only bare macros that legitimately reach here are compiler
+        // builtins. Receiver / typed macros (`v.push_all!`, `T::m!`) that
+        // didn't expand are a separate concern and left alone.
+        let _bare_macro: bool = e.macro_recv == null && (e.macro_owner == null || e.macro_owner.eq(""));
+        if _bare_macro && e.str_val != null && !e.str_val.eq("") && !_is_surviving_builtin_macro(e.str_val) {
+            t.err_code_range(e.line, e.column, e.str_val.len(), "unknown-macro", "unknown macro `".concat(e.str_val).concat("!`; no such builtin or `macro` definition in scope"));
+            return null;
+        }
         // `format!("…{}…", args)` — the `{}` placeholders must match the
         // argument count (codegen consumes one arg per `{}`; a shortfall
         // reads a missing printf arg = UB). Only checked when the format is
