@@ -1978,6 +1978,20 @@ check("after the edit, `ale` is gone and `Arroz` appears",
       "ale" not in _after and "Arroz" in _after, f"got {_after}")
 _sh.rmtree(_d, ignore_errors=True)
 
+# A selective member used ONLY in qualified form is flagged (the qualifier
+# ships with any import of the module — the brace member is dead weight).
+case_diagnostics_project("qualified-only selective member is flagged",
+    {"alelo.glide": "pub fn pinto() {\n}\n",
+     "main.glide": "import alelo::{pinto};\nfn main() -> i32 {\n    alelo::pinto();\n    return 0;\n}\n"},
+    "main.glide",
+    present=["unused-import"])
+
+case_diagnostics_project("bare-used selective member is not flagged",
+    {"alelo.glide": "pub fn pinto() {\n}\n",
+     "main.glide": "import alelo::{pinto};\nfn main() -> i32 {\n    pinto();\n    return 0;\n}\n"},
+    "main.glide",
+    absent=["unused-import"])
+
 # A plain module import that is never used (neither `mod::` nor a bare name it
 # exports) is flagged.
 case_diagnostics_project("unused module import is flagged",

@@ -2739,12 +2739,14 @@ pub fn analysis_unused_import(t: *Typer, program: *Vector<Stmt>, source: string)
     // Collect all identifiers referenced anywhere in the file. One
     // pass; we don't separate scopes because imports are top-level.
     let used: *HashMap<bool> = HashMap::new();
+    let bare: *HashMap<bool> = HashMap::new();
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_IMPORT {
             continue;
         }
         _ui_collect_stmt(&s, used);
+        _uib_collect_stmt(&s, bare);
     }
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
@@ -2805,7 +2807,7 @@ pub fn analysis_unused_import(t: *Typer, program: *Vector<Stmt>, source: string)
             if cc >= 0 {
                 leaf = item.substring(cc + 2, item.len());
             }
-            if !used.contains(leaf) {
+            if !bare.contains(leaf) {
                 unused.push(item);
             }
         }
@@ -2853,7 +2855,11 @@ pub fn analysis_unused_import(t: *Typer, program: *Vector<Stmt>, source: string)
                     leaf = item.substring(cc + 2, item.len());
                 }
                 let at: i32 = _word_index(line_txt, leaf);
-                let msg: string = "`".concat(leaf).concat("` is imported but never used — remove it from the group");
+                let mut msg: string = "`".concat(leaf).concat("` is imported but never used — remove it from the group");
+                if used.contains(leaf) {
+                    // It IS referenced, but only in qualified form.
+                    msg = "`".concat(leaf).concat("` is only used qualified — drop it from the braces (the qualifier comes with the import either way)");
+                }
                 if at >= 0 {
                     t.warn_unused_range(s.line, at + 1, leaf.len(), "unused-import", msg);
                 } else {

@@ -3097,6 +3097,196 @@ fn _bf_ty_tag_for_free(ty: *Type) -> string {
 // Walk every fn / impl method, invoking `cb` with each one paired with
 // the inferred origin file. `cb` is responsible for the body analysis.
 // Centralizes the boilerplate every per-fn lint repeats.
+// ---- BARE-only reference collector -------------------------------------
+// Mirror of _ui_collect_* that counts only UNQUALIFIED uses: the field of
+// `mod::name` and the type of a qualified literal don't count. Feeds the
+// unused-import member check, so `import alelo::{x};` used only as
+// `alelo::x` still flags the brace member (the qualifier alone would be
+// served by `import alelo;`).
+pub fn _uib_collect_stmt(s: *Stmt, used: *HashMap<bool>) {
+    if s == null {
+        return;
+    }
+    if s.let_value != null {
+        _uib_collect_expr(s.let_value, used);
+    }
+    if s.expr_value != null {
+        _uib_collect_expr(s.expr_value, used);
+    }
+    if s.cond != null {
+        _uib_collect_expr(s.cond, used);
+    }
+    if s.for_step != null {
+        _uib_collect_expr(s.for_step, used);
+    }
+    if s.for_init != null {
+        _uib_collect_stmt(s.for_init, used);
+    }
+    if s.scrutinee != null {
+        _uib_collect_expr(s.scrutinee, used);
+    }
+    // Attribute args: `@derive(JsonBind)`, `@expect("code")`, `@allow("x")`,
+    // procedural macro use sites. Each arg expression's idents count as
+    // uses of the corresponding import.
+    if s.attrs != null {
+        for let i: i32 = 0; i < s.attrs.len(); i++ {
+            let a: Attr = s.attrs.get(i);
+            if a.args == null {
+                continue;
+            }
+            for let j: i32 = 0; j < a.args.len(); j++ {
+                let ae: Expr = a.args.get(j);
+                _uib_collect_expr(&ae, used);
+            }
+        }
+    }
+    // Types appearing in annotations / signatures / fields count as uses.
+    // Without this, `fn(req: *HttpRequest)` and `let r: *Router = ...` look
+    // like the imports `HttpRequest` / `Router` are dead code.
+    _uib_collect_type(s.let_ty, used);
+    _uib_collect_type(s.fn_ret_ty, used);
+    _uib_collect_type(s.impl_target, used);
+    if s.fn_params != null {
+        for let i: i32 = 0; i < s.fn_params.len(); i++ {
+            let p: Param = s.fn_params.get(i);
+            _uib_collect_type(p.ty, used);
+        }
+    }
+    if s.struct_fields != null {
+        for let i: i32 = 0; i < s.struct_fields.len(); i++ {
+            let f: Field = s.struct_fields.get(i);
+            _uib_collect_type(f.ty, used);
+        }
+    }
+    if s.then_body != null {
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
+            let c: Stmt = s.then_body.get(i);
+            _uib_collect_stmt(&c, used);
+        }
+    }
+    if s.else_body != null {
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
+            let c: Stmt = s.else_body.get(i);
+            _uib_collect_stmt(&c, used);
+        }
+    }
+    if s.fn_body != null {
+        for let i: i32 = 0; i < s.fn_body.len(); i++ {
+            let c: Stmt = s.fn_body.get(i);
+            _uib_collect_stmt(&c, used);
+        }
+    }
+    if s.impl_methods != null {
+        for let i: i32 = 0; i < s.impl_methods.len(); i++ {
+            let c: Stmt = s.impl_methods.get(i);
+            _uib_collect_stmt(&c, used);
+        }
+    }
+    if s.arms != null {
+        for let i: i32 = 0; i < s.arms.len(); i++ {
+            let a: MatchArm = s.arms.get(i);
+            if a.body != null {
+                for let j: i32 = 0; j < a.body.len(); j++ {
+                    let c: Stmt = a.body.get(j);
+                    _uib_collect_stmt(&c, used);
+                }
+            }
+        }
+    }
+}
+
+fn _uib_collect_expr(e: *Expr, used: *HashMap<bool>) {
+    if e == null {
+        return;
+    }
+    if e.kind == EX_IDENT {
+        used.insert(e.str_val, true);
+    }
+    if e.kind == EX_MEMBER && e.field != null {
+        used.insert(e.field, true);
+    }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT {
+        used.insert(e.lhs.str_val, true);
+    }
+    // `Type::method(...)` — both the type and the method count as a use of
+    // the imported `Type` / `method` name. Without this `Router::new()`
+    // looks like Router was imported and abandoned.
+    if e.kind == EX_PATH {
+        // BARE-only: the field of `mod::name` is a QUALIFIED use — skip it.
+        if e.str_val != null {
+            used.insert(e.str_val, true);
+        }
+    }
+    // Anonymous fns can hold params + return-type annotations that name
+    // imported types. Walk those before descending into the body.
+    if e.kind == EX_FNEXPR {
+        if e.fn_expr_params != null {
+            for let i: i32 = 0; i < e.fn_expr_params.len(); i++ {
+                let p: Param = e.fn_expr_params.get(i);
+                _uib_collect_type(p.ty, used);
+            }
+        }
+        _uib_collect_type(e.cast_to, used);
+        if e.fn_expr_body != null {
+            for let i: i32 = 0; i < e.fn_expr_body.len(); i++ {
+                let bs: Stmt = e.fn_expr_body.get(i);
+                _uib_collect_stmt(&bs, used);
+            }
+        }
+    }
+    // Cast targets (`expr as *Foo`) and sizeof(Type) usages.
+    if e.kind == EX_CAST || e.kind == EX_SIZEOF {
+        _uib_collect_type(e.cast_to, used);
+    }
+    // Struct literal names the type explicitly.
+    if e.kind == EX_STRUCT_LIT && e.str_val != null {
+        // Qualified literal (`mod::Type {}`) is not a BARE use of Type.
+        if e.field == null || e.field.eq("") {
+            used.insert(e.str_val, true);
+        }
+    }
+    if e.lhs != null {
+        _uib_collect_expr(e.lhs, used);
+    }
+    if e.rhs != null {
+        _uib_collect_expr(e.rhs, used);
+    }
+    if e.operand != null {
+        _uib_collect_expr(e.operand, used);
+    }
+    if e.args != null {
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            _uib_collect_expr(&a, used);
+        }
+    }
+}
+
+fn _uib_collect_type(t: *Type, used: *HashMap<bool>) {
+    if t == null {
+        return;
+    }
+    if t.kind == TY_NAMED && t.name != null {
+        used.insert(t.name, true);
+    }
+    if t.kind == TY_GENERIC && t.name != null {
+        used.insert(t.name, true);
+    }
+    if t.inner != null {
+        _uib_collect_type(t.inner, used);
+    }
+    if t.args != null {
+        for let i: i32 = 0; i < t.args.len(); i++ {
+            let a: Type = t.args.get(i);
+            _uib_collect_type(&a, used);
+        }
+    }
+    // For TY_FNPTR `args` carries the param types and `fnptr_ret` the ret.
+    if t.fnptr_ret != null {
+        _uib_collect_type(t.fnptr_ret, used);
+    }
+}
+
 pub fn _ui_collect_stmt(s: *Stmt, used: *HashMap<bool>) {
     if s == null {
         return;

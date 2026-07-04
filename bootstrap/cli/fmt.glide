@@ -1519,13 +1519,18 @@ fn fmt_match(s: *Stmt, depth: i32) -> string {
 // surviving imports in place to keep only their used members.
 fn _fmt_prune_unused_imports(stmts: *Vector<Stmt>) -> *HashMap<bool> {
     let drop: *HashMap<bool> = HashMap::new();
+    // BARE-only uses decide selective members (a member referenced only in
+    // qualified form is dead weight — the qualifier ships with any import of
+    // the module); the full set still answers "is the qualifier used".
     let used: *HashMap<bool> = HashMap::new();
+    let bare: *HashMap<bool> = HashMap::new();
     for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         if s.kind == ST_IMPORT {
             continue;
         }
         _ui_collect_stmt(&s, used);
+        _uib_collect_stmt(&s, bare);
     }
     for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
@@ -1548,7 +1553,7 @@ fn _fmt_prune_unused_imports(stmts: *Vector<Stmt>) -> *HashMap<bool> {
             if cc >= 0 {
                 leaf = item.substring(cc + 2, item.len());
             }
-            if used.contains(leaf) {
+            if bare.contains(leaf) {
                 kept.push(item);
             }
         }
