@@ -817,6 +817,7 @@ fn emit_fn(g: *CG, s: *Stmt) {
     g.current_ret_ty = s.fn_ret_ty;
     let saved_cfb: *Vector<Stmt> = g.cur_fn_body;
     g.cur_fn_body = s.fn_body;
+    g.str_acc.clear();
     // Reset defer + auto-drop stacks for this fn.
     let saved_defer: *Vector<Expr> = g.defer_stack;
     let saved_err_defer: *Vector<Expr> = g.err_defer_stack;
@@ -933,6 +934,7 @@ fn emit_impl(g: *CG, s: *Stmt) {
         g.current_ret_ty = m.fn_ret_ty;
         let saved_cfb_m: *Vector<Stmt> = g.cur_fn_body;
         g.cur_fn_body = m.fn_body;
+        g.str_acc.clear();
         let saved_defer: *Vector<Expr> = g.defer_stack;
         let saved_err_defer: *Vector<Expr> = g.err_defer_stack;
         let saved_drop: *Vector<Expr> = g.auto_drop_stack;

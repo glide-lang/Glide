@@ -45,3 +45,32 @@ fn test_field_escape_survives() -> i32 {
     assert!(bx.name.eq("x!"));
     return 0;
 }
+
+// Phase 2: accumulator free-on-overwrite. Each `out = out.concat(..)` frees the
+// previous buffer; the returned final survives. 50k iters stays ~O(len), not O(n^2).
+fn accumulate(n: i32) -> string {
+    let mut out*: string = "";
+    for i in 0..n { out = out.concat("x"); }
+    return out;
+}
+
+// Storing an intermediate must DISQUALIFY the accumulator (else the stored
+// pointer would be freed on the next overwrite -> UAF). Here the field must
+// still read back correctly.
+fn accumulate_store(bx: *SBox, n: i32) {
+    let mut out*: string = "";
+    for i in 0..n { out = out.concat("y"); bx.name = out; }
+}
+
+fn test_accumulator_builds() -> i32 {
+    assert!(accumulate(5).eq("xxxxx"));
+    assert!(accumulate(50000).len() == 50000);
+    return 0;
+}
+
+fn test_accumulator_store_disqualified() -> i32 {
+    let bx: *SBox = calloc(1, sizeof(SBox)) as *SBox;
+    accumulate_store(bx, 100);
+    assert!(bx.name.len() == 100);
+    return 0;
+}

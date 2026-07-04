@@ -899,6 +899,8 @@ pub struct CG {
     pub tuple_types: *Vector<Type>,
     pub current_ret_ty: *Type,
     pub cur_fn_body: *Vector<Stmt>, // body of the function being emitted (ephemeral-string drop scan)
+    pub str_acc: *HashMap<string>,  // accumulator string local name -> its owned-shadow C var
+    pub str_acc_ctr: i32,           // unique suffix for shadow vars
     // Associated-type lookup for `<Trait>::<Concrete>::<Item>`. Populated
     // up front from every `impl Trait for Type { type Item = X; }`.
     pub assoc_table: *HashMap<Type>,
@@ -1119,6 +1121,93 @@ fn _str_let_droppable(g: *CG, st: *Stmt) -> bool {
     return true;
 }
 
+// ---- Phase 2: accumulator free-on-overwrite (`let mut out*: string = "")` ----
+// `out` is an accumulator IFF every use is a reassignment `out = <disjoint
+// producer>`, a read (out.<reader|concat|substring>()), or a bare `return out`.
+// Each overwrite frees the previous owned buffer via a NULL-seeded shadow (so the
+// initial "" literal is never freed); the final value is returned or leaked-by-one.
+// Any store/pass/alias of out disqualifies (an intermediate could be retained).
+fn _str_acc_reader(field: string) -> bool {
+    if field == null { return false; }
+    return _is_str_read_only(field) || field.eq("concat") || field.eq("substring");
+}
+fn _str_acc_args_bad(name: string, args: *Vector<Expr>) -> bool {
+    if args == null { return false; }
+    for let i: i32 = 0; i < args.len(); i = i + 1 {
+        let a: Expr = args.get(i);
+        if _str_acc_use_bad(name, &a) { return true; }
+    }
+    return false;
+}
+fn _str_acc_arms_bad(name: string, arms: *Vector<MatchArm>) -> bool {
+    if arms == null { return false; }
+    for let i: i32 = 0; i < arms.len(); i = i + 1 {
+        let ar: MatchArm = arms.get(i);
+        if _str_acc_use_bad(name, ar.lit) { return true; }
+        if _str_acc_stmts_bad(name, ar.body) { return true; }
+    }
+    return false;
+}
+fn _str_acc_use_bad(name: string, e: *Expr) -> bool {
+    if e == null { return false; }
+    if e.kind == EX_IDENT { return e.str_val != null && e.str_val.eq(name); }
+    // accumulator reassign: `out = <disjoint producer>` (producer may read out)
+    if e.kind == EX_ASSIGN && e.lhs != null && e.lhs.kind == EX_IDENT && e.lhs.str_val != null && e.lhs.str_val.eq(name) {
+        if !op_to_c(e.op_code).eq("=") { return true; }
+        if !_str_rhs_disjoint_alloc(e.rhs) { return true; }
+        return _str_acc_use_bad(name, e.rhs);
+    }
+    // read / disjoint-producer receiver: `out.<reader|concat|substring>(args)`
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER
+        && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT && e.lhs.lhs.str_val != null
+        && e.lhs.lhs.str_val.eq(name) && _str_acc_reader(e.lhs.field) {
+        return _str_acc_args_bad(name, e.args);
+    }
+    if _str_acc_use_bad(name, e.lhs) { return true; }
+    if _str_acc_use_bad(name, e.rhs) { return true; }
+    if _str_acc_use_bad(name, e.operand) { return true; }
+    if _str_acc_use_bad(name, e.macro_recv) { return true; }
+    if _str_acc_args_bad(name, e.args) { return true; }
+    if _str_acc_stmts_bad(name, e.block_stmts) { return true; }
+    if _str_acc_stmts_bad(name, e.fn_expr_body) { return true; }
+    if _str_acc_arms_bad(name, e.match_arms) { return true; }
+    return false;
+}
+fn _str_acc_stmts_bad(name: string, list: *Vector<Stmt>) -> bool {
+    if list == null { return false; }
+    for let i: i32 = 0; i < list.len(); i = i + 1 {
+        let st: Stmt = list.get(i);
+        if _str_acc_stmt_bad(name, &st) { return true; }
+    }
+    return false;
+}
+fn _str_acc_stmt_bad(name: string, st: *Stmt) -> bool {
+    if st == null { return false; }
+    // bare `return out` is allowed: the final value is never freed.
+    if st.kind == ST_RETURN && st.expr_value != null && st.expr_value.kind == EX_IDENT && st.expr_value.str_val != null && st.expr_value.str_val.eq(name) { return false; }
+    if _str_acc_use_bad(name, st.let_value) { return true; }
+    if _str_acc_use_bad(name, st.expr_value) { return true; }
+    if _str_acc_use_bad(name, st.cond) { return true; }
+    if _str_acc_use_bad(name, st.for_step) { return true; }
+    if _str_acc_use_bad(name, st.scrutinee) { return true; }
+    if st.for_init != null && _str_acc_stmt_bad(name, st.for_init) { return true; }
+    if _str_acc_stmts_bad(name, st.then_body) { return true; }
+    if _str_acc_stmts_bad(name, st.else_body) { return true; }
+    if _str_acc_stmts_bad(name, st.fn_body) { return true; }
+    if _str_acc_arms_bad(name, st.arms) { return true; }
+    return false;
+}
+// Recognize `let mut out*: string = <literal>` whose every use is accumulator-safe.
+fn _str_acc_ok(g: *CG, st: *Stmt) -> bool {
+    if st == null || !st.is_auto_owned || !st.is_mut { return false; }
+    if st.let_ty == null || st.let_ty.kind != TY_NAMED || st.let_ty.name == null || !st.let_ty.name.eq("string") { return false; }
+    if st.let_value == null || st.let_value.kind != EX_STRING { return false; }
+    if st.name == null || st.name.eq("") { return false; }
+    if g.cur_fn_body == null { return false; }
+    if _str_acc_stmts_bad(st.name, g.cur_fn_body) { return false; }
+    return true;
+}
+
 // True when `fn_stmt` hands an owned value to its caller: it returns one of its
 // own auto-drop locals directly (`let t: *T = T{..}; ...; return t;`). A
 // malloc-based constructor does NOT match (it returns a raw malloc, not an
@@ -1238,6 +1327,9 @@ impl CG {
         g.assoc_table = at;
         g.current_ret_ty = null;
         g.cur_fn_body = null;
+        let sacc: *HashMap<string> = HashMap::new();
+        g.str_acc = sacc;
+        g.str_acc_ctr = 0;
         g.scope = s;
         g.generic_structs = gs;
         g.generic_fns = gf;
@@ -4066,6 +4158,26 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         return;
     }
     if e.kind == EX_ASSIGN {
+        // Accumulator free-on-overwrite: `out = <disjoint producer>` where out is
+        // a tracked accumulator. Compute the new (malloc-routed) value first (so a
+        // self-read like out.concat(x) sees the live old value), free the previous
+        // owned buffer via the shadow (NULL on the first pass => the "" seed is
+        // never freed), then update the shadow and out.
+        if e.lhs != null && e.lhs.kind == EX_IDENT && e.lhs.str_val != null
+            && op_to_c(e.op_code).eq("=") && g.str_acc.contains(e.lhs.str_val)
+            && _str_rhs_disjoint_alloc(e.rhs) {
+            let shadow: string = g.str_acc.get(e.lhs.str_val);
+            print!("({ const char* __ovnew = ({ __glide_str_own_push(); const char* __sd = (");
+            emit_expr(g, e.rhs);
+            print!("); __glide_str_own_pop(); __sd; }); __glide_string_free(");
+            print!(shadow);
+            print!("); ");
+            print!(shadow);
+            print!(" = __ovnew; ");
+            emit_expr(g, e.lhs);
+            print!(" = __ovnew; })");
+            return;
+        }
         // Compound arithmetic assignment on a struct: `a += b` -> `a = a.add(b)`.
         // Re-enters the plain-assign path below, which evaluates the RHS into a
         // temp before freeing the old `a`, so reading `a` in `a.add(b)` is safe.
@@ -5445,6 +5557,18 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
                 }
             }
             println!(";");
+        }
+        // Accumulator (`let mut out*: string = ""`): seed a NULL owned-shadow so
+        // each reassignment can free the previous owned buffer (the literal seed
+        // is never owned, so never freed).
+        if _str_acc_ok(g, s) {
+            let shadow: string = "__acc".concat(g.str_acc_ctr.to_string());
+            g.str_acc_ctr = g.str_acc_ctr + 1;
+            ind(depth);
+            print!("const char* ");
+            print!(shadow);
+            println!(" = ((void*)0);");
+            g.str_acc.insert(s.name, shadow);
         }
         if str_drop {
             // Ephemeral string: free the malloc-backed buffer at scope end.
