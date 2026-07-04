@@ -144,6 +144,26 @@ fn _find_let_in_block(body: *Vector<Stmt>, name: string, before_line: i32) -> *S
                 best = p;
             }
         }
+        // Tuple-destructured binder: `let (a, b) = …`. Return a synthetic decl
+        // anchored on the matching binder name so goto-def lands on `a`/`b`.
+        if s.kind == ST_LET && s.let_names != null && s.let_name_cols != null && s.let_name_lines != null && s.line - 1 <= before_line {
+            for let k: i32 = 0; k < s.let_names.len(); k++ {
+                if k < s.let_name_lines.len() && k < s.let_name_cols.len() && s.let_names.get(k).eq(name) {
+                    let bl: i32 = s.let_name_lines.get(k);
+                    if bl > best_line {
+                        best_line = bl;
+                        let p: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+                        *p = s;
+                        p.name = name;
+                        p.line = bl;
+                        p.name_line = bl;
+                        p.name_col = s.let_name_cols.get(k);
+                        p.name_len = name.len();
+                        best = p;
+                    }
+                }
+            }
+        }
         // for-init's own let (`for let i = 0; ...`).
         if s.kind == ST_FOR && s.for_init != null && s.for_init.kind == ST_LET && s.for_init.name != null && s.for_init.name.eq(name) && s.for_init.line - 1 <= before_line {
             if s.for_init.line > best_line {
@@ -1932,9 +1952,15 @@ fn _infer_let_type_str(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt) -> string {
     }
     let e: *Expr = s.let_value;
     if e.kind == EX_INT {
+        if e.cast_to != null {
+            return type_to_string_pretty(e.cast_to);
+        }
         return "i32";
     }
     if e.kind == EX_FLOAT {
+        if e.cast_to != null {
+            return type_to_string_pretty(e.cast_to);
+        }
         return "f64";
     }
     if e.kind == EX_STRING {
@@ -1977,12 +2003,54 @@ fn _infer_let_type_str(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt) -> string {
             return "";
         }
     }
+    // Fallback: tuples (`let t = (1, 2, 3)`), tuple-index, and anything else the
+    // shared inferencer resolves. Reached only after the guarded cases above,
+    // so it can't override an intentional no-hint.
+    let it: *Type = lsp_infer_expr(stmts, host, e);
+    if it != null {
+        return type_to_string_pretty(it);
+    }
     return "";
 }
 
 // Emit one type-hint InlayHint for an inferred `let`, anchored right after
 // the variable name, if it falls inside the requested line range.
 fn _emit_let_hint(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt, line_start: i32, line_end: i32, hints: *JsonValue, state: *LspState) {
+    // Tuple destructuring: one type hint after each binder name (`let (a, b) =`
+    // → `a: i32`, `b: string`), using the per-element positions the parser saved.
+    if s.let_names != null && s.let_names.len() > 0 {
+        if s.let_ty != null || s.let_value == null || s.let_name_cols == null || s.let_name_lines == null {
+            return;
+        }
+        let rt: *Type = lsp_infer_expr(stmts, host, s.let_value);
+        let xt: *Type = _strip_ptr_borrow(rt);
+        if xt == null || xt.kind != TY_TUPLE || xt.args == null {
+            return;
+        }
+        for let k: i32 = 0; k < s.let_names.len(); k++ {
+            if k >= xt.args.len() || k >= s.let_name_cols.len() || k >= s.let_name_lines.len() {
+                break;
+            }
+            let eline: i32 = s.let_name_lines.get(k) - 1;
+            if eline < line_start || eline > line_end {
+                continue;
+            }
+            let el: Type = xt.args.get(k);
+            let nm: string = s.let_names.get(k);
+            let ecol: i32 = s.let_name_cols.get(k) - 1 + nm.len();
+            let h: *JsonValue = json_object();
+            let posj: *JsonValue = json_object();
+            json_obj_set(posj, "line", json_int(eline));
+            json_obj_set(posj, "character", json_int(ecol));
+            json_obj_set(h, "position", posj);
+            json_obj_set(h, "label", json_string(": ".concat(type_to_string_pretty(&el))));
+            json_obj_set(h, "kind", json_int(1));
+            json_obj_set(h, "paddingLeft", json_bool(false));
+            json_obj_set(h, "paddingRight", json_bool(false));
+            json_arr_push(hints, h);
+        }
+        return;
+    }
     if s.name == null || s.name.eq("") {
         return;
     } // tuple destructuring: skip

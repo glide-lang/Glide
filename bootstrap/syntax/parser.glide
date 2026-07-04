@@ -1846,11 +1846,15 @@ fn parse_let(p: *Parser) -> *Stmt {
     if p.at_op("(") {
         p.advance();
         let names: *Vector<string> = Vector::new();
+        let nlines: *Vector<i32> = Vector::new();
+        let ncols: *Vector<i32> = Vector::new();
         while !p.at_op(")") && !p.at_eof() {
             // Optional per-binding `mut` (`let (mut x, mut y) = …`). Glide
             // treats every local as mutable storage, so it's accepted and
             // discarded — same as `mut` on a fn parameter.
             p.eat_kw("mut");
+            nlines.push(p.current.line);
+            ncols.push(p.current.column);
             names.push(p.expect_ident());
             if !p.eat_op(",") {
                 break;
@@ -1864,6 +1868,8 @@ fn parse_let(p: *Parser) -> *Stmt {
         p.expect_op(";");
         let ds: *Stmt = stmt_let("", null, dval, is_mut, line, col);
         ds.let_names = names;
+        ds.let_name_lines = nlines;
+        ds.let_name_cols = ncols;
         return ds;
     }
     let nline: i32 = p.current.line;

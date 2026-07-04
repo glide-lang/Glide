@@ -298,6 +298,11 @@ pub struct Stmt {
     // non-empty, this is a destructuring binding — `name` is empty and each
     // entry binds the corresponding tuple element (`expr.0`, `expr.1`, ...).
     pub let_names: *Vector<string>,
+    // 1-indexed source position of each binder name in `let_names` (parallel
+    // vectors). Null on non-destructuring lets; lets the LSP anchor hover /
+    // goto / rename / inlay exactly on `a` and `b`.
+    pub let_name_lines: *Vector<i32>,
+    pub let_name_cols: *Vector<i32>,
     // Return / Expr stmt / Defer
     pub expr_value: *Expr,
     // If / While / For

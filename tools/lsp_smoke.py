@@ -1600,6 +1600,30 @@ def case_definition_line(label, body, pos, expect_line):
     check(f"definition jumps to line {expect_line}", line == expect_line, f"got {line}")
 
 # Cursor sits right after `let x: ` so completion is in type position.
+# Tuple LSP: `t.` offers each element index; hover on a destructured binding
+# and on a `.N` index resolves to the element type.
+case_completion_has("tuple member completion offers element indices",
+    'fn main() -> i32 {\n    let t = (1, 2, 3);\n    let y = t.\n    return 0;\n}',
+    {"line":2,"character":14},
+    ["0","1","2"])
+
+case_hover_has("hover on a destructured binding shows its element type",
+    'fn pair() -> (i32, string) { return (7, "hi"); }\n'
+    'fn main() -> i32 {\n    let (a, b) = pair();\n    return 0;\n}',
+    {"line":2,"character":9},
+    "i32")
+
+case_hover_has("hover on a second destructured binding shows string",
+    'fn pair() -> (i32, string) { return (7, "hi"); }\n'
+    'fn main() -> i32 {\n    let (a, b) = pair();\n    return 0;\n}',
+    {"line":2,"character":12},
+    "string")
+
+case_hover_has("hover on a tuple-index binding resolves the element type",
+    'fn main() -> i32 {\n    let t = (1, 2, 3);\n    let x = t.0;\n    return 0;\n}',
+    {"line":2,"character":9},
+    "i32")
+
 case_completion_has("type position offers wide primitives",
     'fn main() -> i32 {\n    let x: \n    return 0;\n}',
     {"line":1,"character":11},

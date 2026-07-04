@@ -1558,10 +1558,33 @@ fn _method_ret_type(stmts: *Vector<Stmt>, recv: *Type, method_name: string) -> *
 }
 
 // Look up a struct field type by struct + field name.
+// The type of a tuple element accessed by index (`t.0`, `t.1`), or null when
+// `x` isn't a tuple or `field` isn't a numeric index. Heap-copies the element
+// so the caller owns it.
+pub fn _tuple_field_type(x: *Type, field: string) -> *Type {
+    if x == null || x.kind != TY_TUPLE || !tuple_field_is_index(field) {
+        return null;
+    }
+    let idx: i32 = tuple_index_value(field);
+    if x.args == null || idx < 0 || idx >= x.args.len() {
+        return null;
+    }
+    let a: Type = x.args.get(idx);
+    let p: *Type = malloc(sizeof(Type)) as *Type;
+    *p = a;
+    return p;
+}
+
 pub fn _struct_field_type(stmts: *Vector<Stmt>, recv: *Type, field_name: string) -> *Type {
     let x: *Type = _strip_ptr_borrow(recv);
     if x == null {
         return null;
+    }
+    // Tuple element access (`t.0`, `t.1`). Handled before the struct lookup so
+    // `let y = t.0` and `t.0.<method>` resolve to the element's type.
+    let tf: *Type = _tuple_field_type(x, field_name);
+    if tf != null {
+        return tf;
     }
     // Virtual fields of `!T` / `?T` / `?!T`: `.val` reaches the payload (so a
     // chain like `r.val.<method>` resolves the inner type), `.ok` / `.has`
@@ -1782,6 +1805,21 @@ fn _scope_var_node(body: *Vector<Stmt>, line0: i32, var: string, root: *Vector<S
             let n: *Type = _let_node_type(&s, root, line0, path, depth);
             if n != null {
                 found = n;
+            }
+        }
+        // Tuple-destructured binding: `let (a, b) = expr;` binds each name to
+        // the matching element type of the RHS tuple. `<=` so hover works on
+        // the declaration line itself (there's no earlier find_local_let pass
+        // for pattern bindings, unlike single-name lets).
+        if s.kind == ST_LET && s.let_names != null && s.let_names.len() > 0 && s.line - 1 <= line0 {
+            for let k: i32 = 0; k < s.let_names.len(); k++ {
+                if s.let_names.get(k).eq(var) {
+                    let rt: *Type = _expr_type_node(s.let_value, root, line0, path, depth);
+                    let et: *Type = _tuple_field_type(_strip_ptr_borrow(rt), k.to_string());
+                    if et != null {
+                        found = et;
+                    }
+                }
             }
         }
         if s.kind == ST_FOR && s.for_init != null && s.for_init.kind == ST_LET && s.for_init.name != null && s.for_init.name.eq(var) && s.for_init.line - 1 <= line0 {
@@ -2018,9 +2056,15 @@ pub fn _expr_type_node(e: *Expr, root: *Vector<Stmt>, line0: i32, path: string, 
         return ty_named("string");
     }
     if e.kind == EX_INT {
+        if e.cast_to != null {
+            return e.cast_to;
+        }
         return ty_named("i32");
     }
     if e.kind == EX_FLOAT {
+        if e.cast_to != null {
+            return e.cast_to;
+        }
         return ty_named("f64");
     }
     if e.kind == EX_BOOL {
@@ -2031,6 +2075,23 @@ pub fn _expr_type_node(e: *Expr, root: *Vector<Stmt>, line0: i32, path: string, 
     }
     if e.kind == EX_STRUCT_LIT && e.str_val != null && !e.str_val.eq("") {
         return ty_named(e.str_val);
+    }
+    // Tuple literal `(a, b, c)` -> `(A, B, C)`; unknown elements become a
+    // placeholder so the arity (and thus `.0`/`.1` completion) still resolves.
+    if e.kind == EX_TUPLE {
+        let els: *Vector<Type> = Vector::new();
+        if e.args != null {
+            for let i: i32 = 0; i < e.args.len(); i++ {
+                let a: Expr = e.args.get(i);
+                let et: *Type = _expr_type_node(&a, root, line0, path, depth + 1);
+                if et != null {
+                    els.push(*et);
+                } else {
+                    els.push(*ty_named("__unknown__"));
+                }
+            }
+        }
+        return ty_tuple(els);
     }
     return null;
 }
@@ -2247,8 +2308,20 @@ pub fn _chain_resolve_type(text: string, end_pos: i32, stmts: *Vector<Stmt>, lin
         let i_start: i32 = _ident_start_back(text, last_i);
         let ident: string = text.substring(i_start, end_pos);
         // Bare integer literal receiver: `43.` → i32, so member completion
-        // offers the int methods directly on a literal.
+        // offers the int methods directly on a literal. But `.0` / `.1`
+        // preceded by a `.` (and not the `..` range op) is a tuple-element
+        // access — resolve the tuple receiver and return the element's type so
+        // `t.0.<method>` chains correctly.
         if _all_digits(ident) {
+            let q: i32 = i_start - 1;
+            if q >= 0 && text.at(q).to_int() == 46 && !(q >= 1 && text.at(q - 1).to_int() == 46) {
+                let recv: *Type = _chain_resolve_type(text, q, stmts, line0, path);
+                let et: *Type = _tuple_field_type(_strip_ptr_borrow(recv), ident);
+                if et != null {
+                    return et;
+                }
+                return null;
+            }
             return ty_named("i32");
         }
         let pre_i: i32 = i_start - 1;
@@ -2433,6 +2506,16 @@ fn _list_members_for_type_node(ty: *Type, stmts: *Vector<Stmt>, items: *JsonValu
         _vfield(items, seen, "ok", "bool", _doc_ok());
         _vfield(items, seen, "val", inner_pretty, _doc_val_result(inner_pretty));
         _vfield(items, seen, "err", "string", _doc_err());
+        return;
+    }
+    // Tuple: each element is reachable by its index (`t.0`, `t.1`, ...).
+    if x.kind == TY_TUPLE {
+        if x.args != null {
+            for let i: i32 = 0; i < x.args.len(); i++ {
+                let a: Type = x.args.get(i);
+                _vfield(items, seen, i.to_string(), type_to_string_pretty(&a), "tuple element ".concat(i.to_string()));
+            }
+        }
         return;
     }
     if x.kind == TY_NAMED || x.kind == TY_GENERIC {
@@ -5661,6 +5744,16 @@ fn collect_uses_in_stmt(s: *Stmt, name: string, out: *Vector<UseSite>) {
         let u: UseSite = UseSite { line: nl, col: nc };
         out.push(u);
     }
+    // Tuple-destructured binder declaration site (`let (a, b) = …`), anchored
+    // on the matching binder name so highlight / rename cover the `let` too.
+    if s.kind == ST_LET && s.let_names != null && s.let_name_lines != null && s.let_name_cols != null {
+        for let k: i32 = 0; k < s.let_names.len(); k++ {
+            if k < s.let_name_lines.len() && k < s.let_name_cols.len() && s.let_names.get(k).eq(name) {
+                let u: UseSite = UseSite { line: s.let_name_lines.get(k), col: s.let_name_cols.get(k) };
+                out.push(u);
+            }
+        }
+    }
     // Type annotations: `let r: *Router`, `fn(req: *HttpRequest) -> Json<Res>`,
     // `struct Foo { f: T }`, `impl Foo`. Anchor at the stmt's own line/col
     // since fields/params/types don't carry their own positions.
@@ -5914,6 +6007,14 @@ fn _body_declares_local(body: *Vector<Stmt>, word: string) -> bool {
         let s: Stmt = body.get(i);
         if (s.kind == ST_LET || s.kind == ST_FOR) && s.name != null && s.name.eq(word) {
             return true;
+        }
+        // A tuple-destructured binder is a local too.
+        if s.kind == ST_LET && s.let_names != null {
+            for let k: i32 = 0; k < s.let_names.len(); k++ {
+                if s.let_names.get(k).eq(word) {
+                    return true;
+                }
+            }
         }
         if _body_declares_local(s.then_body, word) {
             return true;
