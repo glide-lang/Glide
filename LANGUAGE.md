@@ -226,18 +226,34 @@ request-scoped data). `arena.free()` reclaims everything in `O(1)`;
 
 ### borrows
 
-`&T` and `&mut T` are non-null views with function-scoped lifetimes. The borrow
-checker enforces:
+`&T` and `&mut T` are non-null views with function-scoped lifetimes — and they
+are **second-class**: a borrow flows *into* calls (parameters, call args) and
+never *out* (returns, struct fields, generics, tuples, channels, stores). That
+one rule is why Glide needs no lifetime annotations: a borrow can never outlive
+the thing it points at, by construction. The borrow checker enforces:
 
-| Code                    | Description                                                    |
-| ----------------------- | -------------------------------------------------------------- |
-| `borrow-in-field`       | `&T` / `&mut T` can't appear in a struct field (use `*T`)      |
-| `borrow-alias-in-call`  | `f(&x, &mut x)` and `f(&mut x, &mut x)` are rejected           |
-| `dangling-return`       | `return &local` is rejected; pass-through of borrow params OK   |
-| `overlap-borrow`        | conflicting `&` / `&mut` in the same scope is rejected          |
-| `use-after-move`        | reading a value after it was moved is rejected                 |
+| Code                     | Description                                                     |
+| ------------------------ | --------------------------------------------------------------- |
+| `borrow-return-type`     | a fn/method/trait signature can't return `&T` / `&mut T`        |
+| `return-borrow`          | `return &x` is always rejected (no param pass-through)          |
+| `borrow-in-field`        | `&T` / `&mut T` can't appear in a struct field (use `*T`)       |
+| `borrow-in-generic`      | no borrows inside `Vector<…>` / `HashMap<…>` / tuples / `!` `?` |
+| `borrow-escape`          | a borrow-typed value or `&mut x` can't be stored or sent        |
+| `free-borrow`            | can't free through a borrow — only the owner frees              |
+| `borrow-vector-element`  | `&mut v[i]` on a container — indexing copies; use `.get`/`.set` |
+| `borrow-alias-in-call`   | same-root mutable aliasing in one call (`f(&mut s.a, &mut s.b)`, `s.m(&mut s)`) |
+| `overlap-borrow`         | conflicting `&` / `&mut` in the same scope is rejected          |
+| `use-after-move`         | reading a value after it was moved is rejected                  |
 
 You never write lifetime annotations.
+
+**The two-layer safety model.** The safe layer is values (structs are copied),
+borrows (second-class, exclusive), and owned heap (`let v* =` auto-drop with
+move tracking) — no dangling, no aliased mutation, no use-after-free. The
+manual layer is raw `*T` with `malloc`/`free`: the FFI and data-structure
+implementation layer, where `&x` used as a plain address-of is legal and the
+programmer owns the aliasing. Crossing from a borrow to `*T` in a call
+argument is allowed (flow-down); storing one is not.
 
 ## if-as-expression
 
@@ -593,7 +609,9 @@ arguments (e.g. `Vector<i32>` becomes `Vector__i32`). Function pointers fit in a
 
 ## what's intentionally not in the language
 
-- **Lifetimes / generic over lifetimes** — borrows are function-scoped only.
+- **Lifetimes / generic over lifetimes** — borrows are function-scoped only,
+  and second-class: they cannot be returned or stored, so there is nothing a
+  lifetime annotation would need to say.
 - **Reflection** — none. Generics + traits cover the structural cases; macros
   cover the syntactic ones.
 - **Garbage collection** — explicitly excluded; ownership and scope-based drop

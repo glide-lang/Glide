@@ -1923,6 +1923,77 @@ fn _call_owned_return(t: *Typer, call: *Expr, let_ty: *Type) -> bool {
     return sig.owned_return;
 }
 
+// Second-class borrows: a borrow may appear ONLY as a top-level parameter
+// type (flow-down). Nested anywhere a value can be stored or produced —
+// generic args (`Vector<&T>`, `chan<&T>`), tuples, `*&T`, `!&T`, `?&T`, or a
+// fn-pointer's return — it could outlive its owner, so it's rejected.
+// `allow_top` is true only where a bare `&T` is itself legal (params, let
+// annotations); recursion always clears it. Deliberately NOT part of
+// _check_type_known: that one early-returns without enforce_visibility,
+// which would silently disable a safety rule.
+fn _reject_nested_borrow(t: *Typer, ty: *Type, line: i32, col: i32, allow_top: bool) {
+    if ty == null {
+        return;
+    }
+    if ty.kind == TY_BORROW || ty.kind == TY_BORROW_MUT {
+        if !allow_top {
+            t.err_code(line, col, "borrow-in-generic", "borrow `".concat(type_to_string(ty)).concat("` not allowed here — borrows cannot be stored or wrapped; use `*T`"));
+        }
+        _reject_nested_borrow(t, ty.inner, line, col, false);
+        return;
+    }
+    if ty.kind == TY_POINTER || ty.kind == TY_SLICE || ty.kind == TY_RESULT || ty.kind == TY_OPTION || ty.kind == TY_OPT_RESULT {
+        _reject_nested_borrow(t, ty.inner, line, col, false);
+        return;
+    }
+    if ty.kind == TY_GENERIC || ty.kind == TY_TUPLE {
+        if ty.args != null {
+            for let i: i32 = 0; i < ty.args.len(); i++ {
+                let a: Type = ty.args.get(i);
+                _reject_nested_borrow(t, &a, line, col, false);
+            }
+        }
+        return;
+    }
+    if ty.kind == TY_FNPTR {
+        // A callback may RECEIVE borrows (flow-down at its call time), but a
+        // fn pointer that YIELDS a borrow is out-flow.
+        if ty.args != null {
+            for let i: i32 = 0; i < ty.args.len(); i++ {
+                let a: Type = ty.args.get(i);
+                _reject_nested_borrow(t, &a, line, col, true);
+            }
+        }
+        _reject_nested_borrow(t, ty.fnptr_ret, line, col, false);
+        return;
+    }
+}
+
+// A fn/method signature may take borrows but never return one: borrows flow
+// into calls, never out. Also walks each param for nested-borrow violations.
+fn _ban_borrow_signature(t: *Typer, m: *Stmt) {
+    if m == null {
+        return;
+    }
+    let mut nl: i32 = m.name_line;
+    let mut nc: i32 = m.name_col;
+    if nl == 0 {
+        nl = m.line;
+        nc = m.column;
+    }
+    if m.fn_ret_ty != null && (m.fn_ret_ty.kind == TY_BORROW || m.fn_ret_ty.kind == TY_BORROW_MUT) {
+        t.err_code(nl, nc, "borrow-return-type", "cannot return a borrow `".concat(type_to_string(m.fn_ret_ty)).concat("` — borrows flow into calls, never out; return `*T` or a value"));
+    } else {
+        _reject_nested_borrow(t, m.fn_ret_ty, nl, nc, false);
+    }
+    if m.fn_params != null {
+        for let i: i32 = 0; i < m.fn_params.len(); i++ {
+            let p: Param = m.fn_params.get(i);
+            _reject_nested_borrow(t, p.ty, nl, nc, true);
+        }
+    }
+}
+
 pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
     // C-runtime types that aren't declared in any Glide source file but
     // user code expects to call as `Arena::new(...)`, etc. Hardcoded for
@@ -2051,6 +2122,19 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
             let no_owner: *Vector<string> = null;
             let sig: FnSig = FnSig { name: s.name, params: s.fn_params, ret_type: s.fn_ret_ty, owned_return: _fn_returns_owned(&s), is_variadic: s.is_variadic, type_params: s.type_params, type_param_bounds: s.type_param_bounds, owner_type_params: no_owner, decl_origin: s.origin, decl_line: s.name_line, decl_col: s.name_col };
             t.fns.insert(s.name, sig);
+            if !s.is_extern {
+                _ban_borrow_signature(t, &s);
+            }
+        }
+        // Trait method DECLARATIONS carry signatures too — ban borrow
+        // returns there so an impl can't inherit an un-declarable shape.
+        if s.kind == ST_TRAIT && s.impl_methods != null {
+            for let tj: i32 = 0; tj < s.impl_methods.len(); tj++ {
+                let tm: Stmt = s.impl_methods.get(tj);
+                if tm.kind == ST_FN {
+                    _ban_borrow_signature(t, &tm);
+                }
+            }
         }
         if s.kind == ST_ENUM {
             // Enums share the type-name registry with structs so EX_PATH
@@ -2096,6 +2180,10 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
                     }
                     if f.ty != null && (f.ty.kind == TY_BORROW || f.ty.kind == TY_BORROW_MUT) {
                         t.err_code(s.line, s.column, "borrow-in-field", "borrow `".concat(type_to_string(f.ty)).concat("` not allowed in struct field `").concat(f.name).concat("` (use `*T` instead)"));
+                    } else {
+                        // Nested borrow (`Vector<&T>` field, `!&T`, …) is the
+                        // same store-a-borrow hole one level down.
+                        _reject_nested_borrow(t, f.ty, s.line, s.column, false);
                     }
                 }
             }
@@ -2127,6 +2215,7 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
                 for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                     let m: Stmt = s.impl_methods.get(j);
                     if m.kind == ST_FN {
+                        _ban_borrow_signature(t, &m);
                         let fname: string = key_prefix.concat("_").concat(m.name);
                         let sig: FnSig = FnSig { name: fname, params: m.fn_params, ret_type: m.fn_ret_ty, owned_return: _fn_returns_owned(&m), is_variadic: m.is_variadic, type_params: m.type_params, type_param_bounds: m.type_param_bounds, owner_type_params: s.type_params, decl_origin: s.origin, decl_line: m.name_line, decl_col: m.name_col };
                         t.fns.insert(fname, sig);
@@ -3785,6 +3874,9 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
     // The annotation (if any) must name a real type — catches
     // `let x: NoSuchType = …`.
     _check_type_known(t, s.let_ty, s.line, s.column);
+    // `let r: &T` is a legal short-lived view; a borrow WRAPPED in anything
+    // storable (`*Vector<&T>`, `(&T, …)`, `!&T`) is not.
+    _reject_nested_borrow(t, s.let_ty, s.line, s.column, true);
     // Null safety: borrows can never be null. `let r: &T = null` and friends
     // are rejected. This applies to any borrow-typed binding, regardless of
     // initializer.
@@ -3994,21 +4086,14 @@ fn check_return(t: *Typer, s: *Stmt) {
     // Returning an owned local is a MOVE, not a bug: codegen skips its auto-drop
     // at the `return` (move-out) so the caller receives a live pointer and takes
     // ownership of it. (This was an error before move-out existed.)
-    // Borrow rule: cannot return `&local` / `&mut local`. Pass-through of a
-    // borrow-typed param is allowed since the borrow's lifetime extends
-    // beyond this fn.
+    // Borrow rule: `return &x` / `return &mut x` is ALWAYS rejected — borrows
+    // are second-class and flow into calls, never out. (Param pass-through was
+    // once allowed; the total signature ban `borrow-return-type` made that
+    // shape un-declarable, and this value-site check remains the guard for
+    // returning a fresh address out of a `-> *T` fn.)
     if e.kind == EX_UNARY && (e.op_code == UN_ADDR || e.op_code == UN_ADDR_MUT) && e.operand != null && e.operand.kind == EX_IDENT {
         let n: string = e.operand.str_val;
-        let mut is_param_borrow: bool = false;
-        if t.scope.contains(n) {
-            let st: Type = t.scope.get(n);
-            if st.kind == TY_BORROW || st.kind == TY_BORROW_MUT {
-                is_param_borrow = true;
-            }
-        }
-        if !is_param_borrow {
-            t.err_code_range(e.line, e.column, _arg_span(e), "return-borrow", "cannot return borrow of local `".concat(n).concat("` (would dangle after function returns)"));
-        }
+        t.err_code_range(e.line, e.column, _arg_span(e), "return-borrow", "cannot return a borrow of `".concat(n).concat("` — borrows flow into calls, never out (it would dangle); return `*T` from an allocation, or a value"));
     }
     let vt: *Type = infer_expr(t, e);
     if t.current_ret == null {
@@ -4534,6 +4619,21 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         }
         let lt: *Type = infer_expr(t, e.lhs);
         let rt: *Type = infer_expr(t, e.rhs);
+        // Second-class borrows: storing a borrow into a place that outlives
+        // the statement (field / index / deref target) is an escape. Two forms
+        // are banned: a borrow-TYPED value (`h.p = r` where r: &T) and the
+        // exclusivity-promising `&mut x` (lowered to a restrict pointer).
+        // Plain `&x` into a `*T` place stays legal — that's the raw-pointer
+        // layer's documented address-of.
+        if e.lhs != null && (e.lhs.kind == EX_MEMBER || e.lhs.kind == EX_INDEX || e.lhs.kind == EX_UNARY && e.lhs.op_code == UN_DEREF) {
+            if rt != null && (rt.kind == TY_BORROW || rt.kind == TY_BORROW_MUT) {
+                t.err_code_range(e.rhs.line, e.rhs.column, _arg_span(e.rhs), "borrow-escape", "cannot store a borrow — it may outlive the borrowed value; store a `*T` or a value");
+            } else {
+                if e.rhs != null && e.rhs.kind == EX_UNARY && e.rhs.op_code == UN_ADDR_MUT {
+                    t.err_code_range(e.rhs.line, e.rhs.column, _arg_span(e.rhs), "borrow-escape", "cannot store `&mut x` — an exclusive borrow may not be stored; store `&x as *T` if you own the aliasing, or a value");
+                }
+            }
+        }
         // Move-on-assign: a plain `=` whose RHS is an owned local moves it; later
         // reads of that local are use-after-move (ownership now belongs to the
         // target). Mark AFTER inferring rt so the RHS read here is not flagged.
@@ -4562,6 +4662,19 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         // Borrow check: forbid aliased borrows of the same source within
         // a single call (`&x + &mut x`, `&mut x + &mut x`).
         check_call_aliasing(t, e);
+        // `free(x)` where x is a borrow: a borrow is a view, never the owner.
+        // (The cast form `free(r as *void)` carries the borrow under EX_CAST.)
+        if e.lhs != null && e.lhs.kind == EX_IDENT && e.lhs.str_val != null && e.lhs.str_val.eq("free") && e.args != null && e.args.len() == 1 {
+            let _fa: Expr = e.args.get(0);
+            let mut _fae: *Expr = &_fa;
+            if _fae.kind == EX_CAST && _fae.lhs != null {
+                _fae = _fae.lhs;
+            }
+            let _fat: *Type = infer_expr(t, _fae);
+            if _fat != null && (_fat.kind == TY_BORROW || _fat.kind == TY_BORROW_MUT) {
+                t.err_code_range(_fa.line, _fa.column, _arg_span(&_fa), "free-borrow", "cannot free through a borrow — the owner frees; take `*T` if this function must consume the value");
+            }
+        }
         // ---- chan: `c.send(x)` / `c.recv()` / `c.close()` ------------
         // Check arity + arg-vs-inner type, and surface the inner as the
         // recv() return type so subsequent let-init inferences fire.
@@ -4572,7 +4685,13 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             // Mark AFTER recv_ty was read so the receiver's own EX_IDENT
             // check doesn't fire on this very call.
             if mname.eq("free") && e.lhs.lhs.kind == EX_IDENT {
-                t.consumed_locals.insert(e.lhs.lhs.str_val, true);
+                // Freeing through a borrow: a borrow is a VIEW, never the
+                // owner — only the owner frees.
+                if recv_ty != null && (recv_ty.kind == TY_BORROW || recv_ty.kind == TY_BORROW_MUT) {
+                    t.err_code_range(e.lhs.lhs.line, e.lhs.lhs.column, e.lhs.lhs.str_val.len(), "free-borrow", "cannot free through a borrow — the owner frees; take `*T` if this function must consume the value");
+                } else {
+                    t.consumed_locals.insert(e.lhs.lhs.str_val, true);
+                }
             }
             let inner: *Type = chan_inner(recv_ty);
             if inner != null {
@@ -5330,6 +5449,16 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             for let i: i32 = 0; i < e.args.len(); i++ {
                 let fv: Expr = e.args.get(i);
                 let _vt: *Type = infer_expr(t, &fv);
+                // Second-class borrows: a struct literal is a store, so a
+                // borrow-typed value or a `&mut x` can't be a field value
+                // (mirrors the assignment rule; plain `&x` stays raw-layer).
+                if _vt != null && (_vt.kind == TY_BORROW || _vt.kind == TY_BORROW_MUT) {
+                    t.err_code_range(fv.line, fv.column, _arg_span(&fv), "borrow-escape", "cannot store a borrow in a struct field — it may outlive the borrowed value; store a `*T` or a value");
+                } else {
+                    if fv.kind == EX_UNARY && fv.op_code == UN_ADDR_MUT {
+                        t.err_code_range(fv.line, fv.column, _arg_span(&fv), "borrow-escape", "cannot store `&mut x` in a struct field — an exclusive borrow may not be stored");
+                    }
+                }
                 if _sl_check && e.field_names != null && i < e.field_names.len() {
                     let _fn: string = e.field_names.get(i);
                     let _key: string = _sl_sn.concat("::").concat(_fn);

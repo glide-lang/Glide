@@ -2037,6 +2037,69 @@ check("after the edit, `ale` is gone and `Arroz` appears",
       "ale" not in _after and "Arroz" in _after, f"got {_after}")
 _sh.rmtree(_d, ignore_errors=True)
 
+# Second-class borrows: they flow into calls, never out. Each escape shape is
+# a hard error; the raw-pointer `&x` forms stay legal (manual layer).
+case_diagnostics("borrow return type is rejected (no param passthrough)",
+    'struct S { v: i32 }\n'
+    'fn id(a: &S) -> &S { return a; }\n'
+    'fn main() -> i32 { return 0; }',
+    expect_codes_present=["borrow-return-type"])
+
+case_diagnostics("plain value return type is fine",
+    'fn f(a: &i32) -> i32 { return *a; }\n'
+    'fn main() -> i32 { let n: i32 = 1; return f(&n); }',
+    expect_codes_absent=["borrow-return-type", "borrow-in-generic"])
+
+case_diagnostics("borrow inside a generic arg is rejected",
+    'struct S { v: i32 }\n'
+    'fn main() -> i32 {\n    let v: *Vector<&S> = Vector::new();\n    return 0;\n}',
+    expect_codes_present=["borrow-in-generic"])
+
+case_diagnostics("borrow in a tuple type is rejected",
+    'fn main() -> i32 {\n    let t: (&i32, i32) = (null, 1);\n    return 0;\n}',
+    expect_codes_present=["borrow-in-generic"])
+
+case_diagnostics("storing a borrow-typed value in a field is rejected",
+    'struct S { v: i32 }\n'
+    'struct K { p: *S }\n'
+    'fn stash(k: *K, a: &S) { k.p = a; }\n'
+    'fn main() -> i32 { return 0; }',
+    expect_codes_present=["borrow-escape"])
+
+case_diagnostics("storing plain &x in a *T field stays legal (raw layer)",
+    'struct K { p: *i32 }\n'
+    'fn main() -> i32 {\n'
+    '    let k: *K = malloc(sizeof(K)) as *K;\n'
+    '    let n: i32 = 1;\n    k.p = &n;\n    return 0;\n}',
+    expect_codes_absent=["borrow-escape"])
+
+case_diagnostics("freeing through a borrow is rejected",
+    'struct S { v: i32 }\n'
+    'impl S { fn free(self) { } }\n'
+    'fn f(r: &S) { r.free(); }\n'
+    'fn main() -> i32 { return 0; }',
+    expect_codes_present=["free-borrow"])
+
+case_diagnostics("borrowing a container element is rejected",
+    'fn main() -> i32 {\n'
+    '    let v: *Vector<i32> = Vector::new();\n    v.push(0);\n'
+    '    let r = &mut v[0];\n    return 0;\n}',
+    expect_codes_present=["borrow-vector-element"])
+
+case_diagnostics("same-root mutable aliasing in one call is rejected",
+    'struct S { a: i32, b: i32 }\n'
+    'fn f(x: &mut i32, y: &mut i32) { *x = 1; *y = 2; }\n'
+    'fn main() -> i32 {\n'
+    '    let mut s: S = S { a: 0, b: 0 };\n    f(&mut s.a, &mut s.b);\n    return 0;\n}',
+    expect_codes_present=["borrow-alias-in-call"])
+
+case_diagnostics("shared borrows of the same root are fine",
+    'struct S { a: i32, b: i32 }\n'
+    'fn f(x: &i32, y: &i32) -> i32 { return *x + *y; }\n'
+    'fn main() -> i32 {\n'
+    '    let s: S = S { a: 1, b: 2 };\n    return f(&s.a, &s.b);\n}',
+    expect_codes_absent=["borrow-alias-in-call"])
+
 # `&mut` args lower to `restrict` pointers, so passing an object as a `&mut`
 # arg while it is also the receiver (`s.m(&mut s)`) must be rejected — else the
 # restrict no-alias contract would be violated (silent UB).
