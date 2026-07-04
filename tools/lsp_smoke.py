@@ -2100,6 +2100,45 @@ case_diagnostics("shared borrows of the same root are fine",
     '    let s: S = S { a: 1, b: 2 };\n    return f(&s.a, &s.b);\n}',
     expect_codes_absent=["borrow-alias-in-call"])
 
+# Exclusivity discipline: while a borrow is live (NLL — until its last use),
+# the source can't be written, read (under &mut), or freed; copying a &mut
+# moves it. The legal NLL shapes live in tests/borrow_safety_test.glide.
+case_diagnostics("assigning to a source while borrowed is rejected",
+    'fn main() -> i32 {\n    let mut x: i32 = 1;\n    let r = &mut x;\n'
+    '    x = 99;\n    return *r;\n}',
+    expect_codes_present=["assign-while-borrowed"])
+
+case_diagnostics("NLL: assignment after the borrow dies is fine",
+    'fn main() -> i32 {\n    let mut x: i32 = 1;\n    let r = &mut x;\n'
+    '    let y = *r;\n    x = 99;\n    return x + y;\n}',
+    expect_codes_absent=["assign-while-borrowed", "use-while-mut-borrowed"])
+
+case_diagnostics("reading a source while exclusively borrowed is rejected",
+    'fn main() -> i32 {\n    let mut x: i32 = 1;\n    let r = &mut x;\n'
+    '    let y = x;\n    return *r + y;\n}',
+    expect_codes_present=["use-while-mut-borrowed"])
+
+case_diagnostics("freeing an owner while borrowed is rejected",
+    'struct S { v: i32 }\n'
+    'fn main() -> i32 {\n'
+    '    let p: *S = malloc(sizeof(S)) as *S;\n    p.v = 3;\n'
+    '    let r = &*p;\n    free(p as *void);\n    return r.v;\n}',
+    expect_codes_present=["free-while-borrowed"])
+
+case_diagnostics("using a &mut binder after copying it is use-after-move",
+    'struct S { v: i32 }\n'
+    'fn main() -> i32 {\n'
+    '    let mut s: S = S { v: 1 };\n    let a = &mut s;\n    let b = a;\n'
+    '    a.v = 2;\n    return b.v;\n}',
+    expect_codes_present=["use-after-move"])
+
+case_diagnostics("assigning to a struct while a field borrow lives is rejected",
+    'struct S { v: i32 }\n'
+    'fn main() -> i32 {\n'
+    '    let mut s: S = S { v: 1 };\n    let r = &s.v;\n'
+    '    s = S { v: 2 };\n    return *r;\n}',
+    expect_codes_present=["assign-while-borrowed"])
+
 # `&mut` args lower to `restrict` pointers, so passing an object as a `&mut`
 # arg while it is also the receiver (`s.m(&mut s)`) must be rejected — else the
 # restrict no-alias contract would be violated (silent UB).

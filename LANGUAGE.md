@@ -243,7 +243,10 @@ the thing it points at, by construction. The borrow checker enforces:
 | `borrow-vector-element`  | `&mut v[i]` on a container — indexing copies; use `.get`/`.set` |
 | `borrow-alias-in-call`   | same-root mutable aliasing in one call (`f(&mut s.a, &mut s.b)`, `s.m(&mut s)`) |
 | `overlap-borrow`         | conflicting `&` / `&mut` in the same scope is rejected          |
-| `use-after-move`         | reading a value after it was moved is rejected                  |
+| `assign-while-borrowed`  | writing a place while a live borrow views it (NLL: a borrow dies at its last use) |
+| `use-while-mut-borrowed` | reading a source while a `&mut` of it is live — go through the borrow |
+| `free-while-borrowed`    | freeing an owner while a borrow of it is live (the view would dangle) |
+| `use-after-move`         | reading a value after it was moved is rejected (copying a `&mut` moves it) |
 
 You never write lifetime annotations.
 

@@ -904,6 +904,11 @@ pub struct Typer {
     // Names flagged as duplicate definitions — the unused-* lints skip them so
     // a conflict shows only the error, not a redundant "never used" warning.
     pub dup_flagged: *HashMap<bool>,
+    // >0 while inferring the operand of `&x` / `&mut x` (taking a borrow is
+    // not a "use" of the source — overlap-borrow judges it) and while
+    // inferring an assignment LHS (the write check has its own message).
+    // Suppresses the read-under-&mut check on EX_IDENT.
+    pub addr_ctx: i32,
     // Whether visibility enforcement is active for this run. Off by default
     // so existing files that haven't been migrated keep compiling; the
     // compiler entry point flips it on when the user-facing build runs.
@@ -1434,6 +1439,7 @@ impl Typer {
         t.struct_origin = so;
         let df: *HashMap<bool> = HashMap::new();
         t.dup_flagged = df;
+        t.addr_ctx = 0;
         t.enforce_visibility = false;
         let is: *HashMap<bool> = HashMap::new();
         t.impl_set = is;
@@ -3048,6 +3054,39 @@ fn _borrow_root_ident(e: *Expr) -> string {
     return "";
 }
 
+// Index of a live borrow whose SOURCE is `name`, or -1. `want_mut_only`
+// restricts the scan to exclusive borrows (the read check); the write/free
+// checks pass false to match any live borrow.
+fn _live_borrow_of(t: *Typer, name: string, want_mut_only: bool) -> i32 {
+    if name == null || name.eq("") {
+        return 0 - 1;
+    }
+    for let i: i32 = 0; i < t.borrows.len(); i++ {
+        let ev: BorrowEvent = t.borrows.get(i);
+        if ev.source.eq(name) && (!want_mut_only || ev.is_mut) {
+            return i;
+        }
+    }
+    return 0 - 1;
+}
+
+// Remove every live borrow BOUND to `binder` (rebinding or moving the binder
+// ends its borrow). Swap-remove, order doesn't matter.
+fn _kill_binder_borrows(t: *Typer, binder: string) {
+    let mut i: i32 = t.borrows.len() - 1;
+    while i >= 0 {
+        let ev: BorrowEvent = t.borrows.get(i);
+        if ev.binder.eq(binder) {
+            let last: i32 = t.borrows.len() - 1;
+            if i != last {
+                t.borrows.set(i, t.borrows.get(last));
+            }
+            t.borrows.pop();
+        }
+        i = i - 1;
+    }
+}
+
 fn check_call_aliasing(t: *Typer, call: *Expr) {
     if call == null || call.kind != EX_CALL || call.args == null {
         return;
@@ -3986,13 +4025,55 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
     if s.kind == ST_LET && s.let_value != null && s.let_value.kind == EX_CALL && _call_owned_return(t, s.let_value, final_ty) {
         t.call_owned.insert(s.name, true);
     }
-    // Borrow rule R7: track let-bound `let r = &n` / `let r = &mut n` for
-    // overlapping-borrow detection across statements. Scope is per-block
+    // Borrow rule R7: track let-bound `let r = &<place>` / `&mut <place>` for
+    // overlapping-borrow detection across statements. The place collapses to
+    // its ROOT ident (`&s.f` -> s, `&*p` -> p, `&a[i]` -> a) — conservative
+    // but sound: two borrows sharing a root may alias. Scope is per-block
     // (see enter/exit_borrow_scope around if/while/for/block bodies).
-    if s.kind == ST_LET && s.let_value != null && s.let_value.kind == EX_UNARY && (s.let_value.op_code == UN_ADDR || s.let_value.op_code == UN_ADDR_MUT) && s.let_value.operand != null && s.let_value.operand.kind == EX_IDENT {
-        let src: string = s.let_value.operand.str_val;
-        let is_mut: bool = s.let_value.op_code == UN_ADDR_MUT;
-        record_borrow(t, src, is_mut, s.name, s.line, s.column);
+    if s.kind == ST_LET && s.let_value != null && s.let_value.kind == EX_UNARY && (s.let_value.op_code == UN_ADDR || s.let_value.op_code == UN_ADDR_MUT) && s.let_value.operand != null {
+        let src: string = _borrow_root_ident(s.let_value.operand);
+        if !src.eq("") {
+            let is_mut: bool = s.let_value.op_code == UN_ADDR_MUT;
+            record_borrow(t, src, is_mut, s.name, s.line, s.column);
+        }
+    }
+    // Copying a borrow: `let b = a` where a is borrow-typed. A shared copy is
+    // a second live view (recorded so overlap/NLL survive the chain); copying
+    // a `&mut` MOVES it — the old binder\'s exclusive view ends and later uses
+    // of it are use-after-move.
+    if s.kind == ST_LET && s.let_value != null && s.let_value.kind == EX_IDENT {
+        let _bc_name: string = s.let_value.str_val;
+        // A borrow binding is found two ways: it's the BINDER of a live
+        // tracked borrow (`let a = &mut s; let b = a;` — the expr `&mut s`
+        // infers as a raw pointer, so the scope type can't tell), or it's a
+        // borrow-TYPED name (a `&T` param).
+        let mut _bc_src: string = "";
+        let mut _bc_mut: bool = false;
+        for let bi: i32 = 0; bi < t.borrows.len(); bi++ {
+            let bev: BorrowEvent = t.borrows.get(bi);
+            if bev.binder.eq(_bc_name) {
+                _bc_src = bev.source;
+                _bc_mut = bev.is_mut;
+            }
+        }
+        if _bc_src.eq("") && t.scope.contains(_bc_name) {
+            let _bc_ty: Type = t.scope.get(_bc_name);
+            if _bc_ty.kind == TY_BORROW || _bc_ty.kind == TY_BORROW_MUT {
+                _bc_src = _bc_name;
+                _bc_mut = _bc_ty.kind == TY_BORROW_MUT;
+            }
+        }
+        if !_bc_src.eq("") {
+            // Copying a shared borrow adds a second live view; copying a
+            // `&mut` MOVES it — the old binder's exclusive view ends and
+            // later uses of it are use-after-move.
+            if _bc_mut {
+                _kill_binder_borrows(t, _bc_name);
+                t.consumed_locals.insert(_bc_name, true);
+                t.moved_out.insert(_bc_name, true);
+            }
+            record_borrow(t, _bc_src, _bc_mut, s.name, s.line, s.column);
+        }
     }
     // Arena escape tracking:
     //   `let arena: *Arena = ...`                  -> arena_locals[name]
@@ -4385,6 +4466,19 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 t.err_code_range(e.line, e.column, e.str_val.len(), "use-after-free", "value `".concat(e.str_val).concat("` was freed earlier in this function; subsequent reads touch reclaimed memory"));
             }
         }
+        // Exclusive-borrow discipline: while a `&mut x` is live, the ONLY way
+        // to touch x is through the borrow. A direct read of the source here
+        // would alias the exclusive view (and `&mut` params lower to
+        // `restrict`). Suppressed under `&`-of (a re-borrow, judged by
+        // overlap-borrow) and on assignment LHS (write check owns it).
+        if t.addr_ctx == 0 {
+            let _rb: i32 = _live_borrow_of(t, e.str_val, true);
+            if _rb >= 0 {
+                let _rbe: BorrowEvent = t.borrows.get(_rb);
+                t.err_code_range(e.line, e.column, e.str_val.len(), "use-while-mut-borrowed", "cannot use `".concat(e.str_val).concat("` while `").concat(_rbe.binder).concat("` mutably borrows it — go through the borrow, or stop using the borrow first"));
+                _relate_first_borrow(t, e.str_val, true);
+            }
+        }
         // Locals + parameters always win; visibility check skipped for them.
         if t.scope.contains(e.str_val) {
             let ty: Type = t.scope.get(e.str_val);
@@ -4538,7 +4632,17 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         return lt;
     }
     if e.kind == EX_UNARY {
+        // Taking `&x` / `&mut x` is a fresh BORROW of x, not a use — the
+        // overlap/alias checks judge it. Suppress the read-under-&mut check
+        // while inferring the operand.
+        let _is_addr_of: bool = e.op_code == UN_ADDR || e.op_code == UN_ADDR_MUT;
+        if _is_addr_of {
+            t.addr_ctx = t.addr_ctx + 1;
+        }
         let inner: *Type = infer_expr(t, e.operand);
+        if _is_addr_of {
+            t.addr_ctx = t.addr_ctx - 1;
+        }
         if e.op_code == UN_NOT {
             return ty_named("bool");
         }
@@ -4617,7 +4721,26 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             t.consumed_locals.insert(e.lhs.str_val, false);
             t.moved_out.insert(e.lhs.str_val, false);
         }
+        // Reassigning a borrow binder (`r = &mut y`) ends its old borrow.
+        if e.lhs != null && e.lhs.kind == EX_IDENT {
+            _kill_binder_borrows(t, e.lhs.str_val);
+        }
+        // Writing a place while it is borrowed invalidates the view(s): any
+        // live borrow of the LHS root makes this assignment an error. The LHS
+        // inference below is suppressed from the read check — this write
+        // check owns the diagnostic (and also covers shared borrows).
+        let _aw_root: string = _borrow_root_ident(e.lhs);
+        if !_aw_root.eq("") {
+            let _aw: i32 = _live_borrow_of(t, _aw_root, false);
+            if _aw >= 0 {
+                let _awe: BorrowEvent = t.borrows.get(_aw);
+                t.err_code_range(e.lhs.line, e.lhs.column, _arg_span(e.lhs), "assign-while-borrowed", "cannot assign to `".concat(_aw_root).concat("` while `").concat(_awe.binder).concat("` borrows it — the borrow would observe (or miss) the write"));
+                _relate_first_borrow(t, _aw_root, false);
+            }
+        }
+        t.addr_ctx = t.addr_ctx + 1;
         let lt: *Type = infer_expr(t, e.lhs);
+        t.addr_ctx = t.addr_ctx - 1;
         let rt: *Type = infer_expr(t, e.rhs);
         // Second-class borrows: storing a borrow into a place that outlives
         // the statement (field / index / deref target) is an escape. Two forms
@@ -4673,6 +4796,17 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             let _fat: *Type = infer_expr(t, _fae);
             if _fat != null && (_fat.kind == TY_BORROW || _fat.kind == TY_BORROW_MUT) {
                 t.err_code_range(_fa.line, _fa.column, _arg_span(&_fa), "free-borrow", "cannot free through a borrow — the owner frees; take `*T` if this function must consume the value");
+            } else {
+                // `free(p)` while a borrow rooted at p is live → dangling view.
+                let _fr: string = _borrow_root_ident(_fae);
+                if !_fr.eq("") {
+                    let _frx: i32 = _live_borrow_of(t, _fr, false);
+                    if _frx >= 0 {
+                        let _fre: BorrowEvent = t.borrows.get(_frx);
+                        t.err_code_range(_fa.line, _fa.column, _arg_span(&_fa), "free-while-borrowed", "cannot free `".concat(_fr).concat("` while `").concat(_fre.binder).concat("` borrows it — the borrow would dangle"));
+                        _relate_first_borrow(t, _fr, false);
+                    }
+                }
             }
         }
         // ---- chan: `c.send(x)` / `c.recv()` / `c.close()` ------------
@@ -4690,6 +4824,14 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 if recv_ty != null && (recv_ty.kind == TY_BORROW || recv_ty.kind == TY_BORROW_MUT) {
                     t.err_code_range(e.lhs.lhs.line, e.lhs.lhs.column, e.lhs.lhs.str_val.len(), "free-borrow", "cannot free through a borrow — the owner frees; take `*T` if this function must consume the value");
                 } else {
+                    // Freeing the owner while a borrow of it is live leaves
+                    // the borrow dangling (use-after-free through the view).
+                    let _fw: i32 = _live_borrow_of(t, e.lhs.lhs.str_val, false);
+                    if _fw >= 0 {
+                        let _fwe: BorrowEvent = t.borrows.get(_fw);
+                        t.err_code_range(e.lhs.lhs.line, e.lhs.lhs.column, e.lhs.lhs.str_val.len(), "free-while-borrowed", "cannot free `".concat(e.lhs.lhs.str_val).concat("` while `").concat(_fwe.binder).concat("` borrows it — the borrow would dangle"));
+                        _relate_first_borrow(t, e.lhs.lhs.str_val, false);
+                    }
                     t.consumed_locals.insert(e.lhs.lhs.str_val, true);
                 }
             }
@@ -5428,7 +5570,20 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         return null;
     }
     if e.kind == EX_POSTINC || e.kind == EX_POSTDEC {
-        return infer_expr(t, e.lhs);
+        // `x++` writes x — same rule as assignment while borrowed.
+        let _pw_root: string = _borrow_root_ident(e.lhs);
+        if !_pw_root.eq("") {
+            let _pw: i32 = _live_borrow_of(t, _pw_root, false);
+            if _pw >= 0 {
+                let _pwe: BorrowEvent = t.borrows.get(_pw);
+                t.err_code_range(e.line, e.column, _arg_span(e), "assign-while-borrowed", "cannot modify `".concat(_pw_root).concat("` while `").concat(_pwe.binder).concat("` borrows it"));
+                _relate_first_borrow(t, _pw_root, false);
+            }
+        }
+        t.addr_ctx = t.addr_ctx + 1;
+        let _pt: *Type = infer_expr(t, e.lhs);
+        t.addr_ctx = t.addr_ctx - 1;
+        return _pt;
     }
     if e.kind == EX_STRUCT_LIT {
         // Type-check every field VALUE expression. Without this an unknown name

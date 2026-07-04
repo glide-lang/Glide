@@ -71,3 +71,56 @@ fn test_mut_borrow_struct_param() -> i32 {
     assert!(b.w == 20);
     return 0;
 }
+
+// ---- Phase 3: exclusivity discipline (NLL-shaped) -------------------------
+// A borrow dies at its last use, so these are all LEGAL; the illegal
+// counterparts (use-while-mut-borrowed, assign-while-borrowed,
+// free-while-borrowed, use-after-move on a copied &mut) are compile errors
+// covered by the lsp_smoke diagnostics suite.
+
+fn test_nll_mutation_after_borrow_dies() -> i32 {
+    let mut x: i32 = 1;
+    let r = &mut x;
+    *r = 5;
+    x = 99;
+    assert!(x == 99);
+    return 0;
+}
+
+fn test_nll_shared_then_write() -> i32 {
+    let mut x: i32 = 1;
+    let r = &x;
+    let y = *r;
+    x = 42;
+    assert!(y == 1);
+    assert!(x == 42);
+    return 0;
+}
+
+fn test_shared_borrow_copy() -> i32 {
+    let x: i32 = 7;
+    let a = &x;
+    let b = a;
+    assert!(*a == 7);
+    assert!(*b == 7);
+    return 0;
+}
+
+fn test_mut_borrow_copy_moves() -> i32 {
+    let mut n: i32 = 1;
+    let a = &mut n;
+    let b = a;
+    *b = 9;
+    assert!(n == 9);
+    return 0;
+}
+
+fn test_free_after_borrow_dies() -> i32 {
+    let p: *i32 = malloc(4) as *i32;
+    p[0] = 3;
+    let r = &*p;
+    let n = *r;
+    free(p as *void);
+    assert!(n == 3);
+    return 0;
+}
