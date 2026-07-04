@@ -52,7 +52,7 @@
 // `interp_call(it: *Interp, fn_stmt: *Stmt, args: *Vector<IValue>)`.
 // Returns an IValue. Diagnostics accumulate in `it.diagnostics`.
 import stdlib::hashmap::*;
-import bootstrap::syntax::ast;
+import bootstrap::syntax::ast::*;
 
 // ---- IValue tagged union ----------------------------------------------
 pub const IV_NULL: i32 = 0;

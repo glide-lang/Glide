@@ -2,9 +2,9 @@ import stdlib::hashmap::*;
 import stdlib::fs::*;
 import stdlib::os::*;
 import stdlib::crypto::*;
-import bootstrap::syntax::ast;
-import bootstrap::syntax::lexer;
-import bootstrap::syntax::parser;
+import bootstrap::syntax::ast::*;
+import bootstrap::syntax::lexer::*;
+import bootstrap::syntax::parser::*;
 
 // `glide.glide` is the project manifest. It's Glide source, but the CLI
 // does NOT compile or run it — it just parses with the existing parser

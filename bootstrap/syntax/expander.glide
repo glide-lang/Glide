@@ -1,7 +1,7 @@
 import stdlib::hashmap::*;
-import bootstrap::syntax::ast;
-import bootstrap::syntax::interp;
-import bootstrap::pkg::manifest;
+import bootstrap::syntax::ast::*;
+import bootstrap::syntax::interp::*;
+import bootstrap::pkg::manifest::*;
 
 // Macro expander. Runs after the parser (so the body and call args are
 // already AST), before typer/codegen.

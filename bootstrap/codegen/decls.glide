@@ -1,13 +1,13 @@
 // Extracted from bootstrap/codegen.glide for readability. See that file for the
 // orchestration; shared helpers it owns stay there (pub).
 import stdlib::hashmap::*;
-import bootstrap::syntax::ast;
-import bootstrap::syntax::lexer;
-import bootstrap::syntax::parser;
-import bootstrap::sema::typer;
-import bootstrap::cli::fmt;
-import bootstrap::codegen::emit;
-import bootstrap::codegen::runtime;
+import bootstrap::syntax::ast::*;
+import bootstrap::syntax::lexer::*;
+import bootstrap::syntax::parser::*;
+import bootstrap::sema::typer::*;
+import bootstrap::cli::fmt::*;
+import bootstrap::codegen::emit::*;
+import bootstrap::codegen::runtime::*;
 
 fn emit_mono_forward_decl(g: *CG, mangled: string, template: *Stmt, args: *Vector<Type>) {
     let mut new_ret: *Type = subst_type(template.fn_ret_ty, template.type_params, args);

@@ -14,7 +14,7 @@
 // parameters; monomorphization happens later in codegen. Borrow rules
 // (`&` / `&mut`) are enforced here without lifetime annotations.
 import stdlib::hashmap::*;
-import bootstrap::syntax::ast;
+import bootstrap::syntax::ast::*;
 import bootstrap::syntax::parser; // for ParseDiag (used by merge_parse_diags below)
 
 // ---- type helpers --------------------------------------------------------
@@ -1596,6 +1596,14 @@ impl Typer {
             if ty.inner != null && ty.inner.kind == TY_NAMED && self._is_imported_module(ty.inner.name) {
                 ty.kind = TY_NAMED;
                 ty.inner = null;
+                // The qualifier IS the explicit module reference — a
+                // `time::Duration` annotation is in scope by construction
+                // (Rust allows it with just `use time;`). Record the collapsed
+                // bare name as visible so the type-in-scope gate doesn't flag
+                // the normalized form.
+                if self.current_origin != null && !self.current_origin.eq("") && ty.name != null {
+                    self.visibility.insert(self.current_origin.concat("::").concat(ty.name), true);
+                }
                 return;
             }
             self._canon_type(ty.inner);
@@ -1604,6 +1612,9 @@ impl Typer {
         if ty.kind == TY_NAMED {
             if ty.name != null && ty.name.index_of("::") >= 0 {
                 ty.name = self._strip_mod_prefix(ty.name);
+                if self.current_origin != null && !self.current_origin.eq("") && ty.name != null && ty.name.index_of("::") < 0 {
+                    self.visibility.insert(self.current_origin.concat("::").concat(ty.name), true);
+                }
             }
             return;
         }
@@ -4788,7 +4799,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             let name: string = e.lhs.str_val;
             if t.fns.contains(name) {
                 if !t.is_visible(name) {
-                    t.err_code_range(e.lhs.line, e.lhs.column, name.len(), "", "name `".concat(name).concat("` is not in scope; add an `import` for it"));
+                    t.err_code_range(e.lhs.line, e.lhs.column, name.len(), "unknown-name", "name `".concat(name).concat("` is not in scope; add an `import` for it"));
                     return null;
                 }
                 let sig: FnSig = t.fns.get(name);

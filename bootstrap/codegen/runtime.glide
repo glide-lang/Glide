@@ -1,12 +1,12 @@
 // Extracted from bootstrap/codegen.glide for readability. See that file for the
 // orchestration; shared helpers it owns stay there (pub).
 import stdlib::hashmap::*;
-import bootstrap::syntax::ast;
-import bootstrap::syntax::lexer;
-import bootstrap::syntax::parser;
-import bootstrap::sema::typer;
-import bootstrap::cli::fmt;
-import bootstrap::codegen::emit;
+import bootstrap::syntax::ast::*;
+import bootstrap::syntax::lexer::*;
+import bootstrap::syntax::parser::*;
+import bootstrap::sema::typer::*;
+import bootstrap::cli::fmt::*;
+import bootstrap::codegen::emit::*;
 import bootstrap::codegen::decls; // extracted
 
 fn _cg_replace(s: string, find: string, repl: string) -> string {

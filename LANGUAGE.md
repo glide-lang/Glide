@@ -99,10 +99,15 @@ defer expr;                       // run at fn end / before return (LIFO)
 spawn fn_call(args);              // run fn on the M:N coroutine scheduler
 spawn_thread fn_call(args);       // run fn on a real OS thread (escape hatch)
 
-import a::b::c;                   // module path; resolves to a/b/c.glide
-import a::b::c::*;                // wildcard
-import a::b::c::{X, Y};           // selective
+import a::b::c;                   // module import: QUALIFIED access only (`c::X`)
+import a::b::c::*;                // wildcard: every pub name into bare scope
+import a::b::c::{X, Y};           // selective: X and Y into bare scope
+import a::b::{c, d::{E}};         // nested group: modules c,d (qualified) + E bare
 ```
+
+Module semantics are Rust-style: `import a::b::c;` grants only the qualified
+form (`c::X`); using a name bare requires importing it by name (selective) or
+via a wildcard.
 
 `break` and `continue` work in `while` and `for` loops.
 

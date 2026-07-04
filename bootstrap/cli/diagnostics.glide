@@ -3,10 +3,10 @@
 import stdlib::hashmap::*;
 import stdlib::io::*;
 import stdlib::os::*;
-import bootstrap::syntax::ast;
-import bootstrap::syntax::lexer;
-import bootstrap::sema::typer;
-import bootstrap::cli::fmt;
+import bootstrap::syntax::ast::*;
+import bootstrap::syntax::lexer::*;
+import bootstrap::sema::typer::*;
+import bootstrap::cli::fmt::*;
 
 extern fn __glide_getenv(name: string) -> string;
 

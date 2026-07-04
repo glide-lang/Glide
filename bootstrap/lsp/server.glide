@@ -33,14 +33,14 @@
 //                                       trait method, unsatisfied bound,
 //                                       type mismatch, trait-method-mismatch.
 import stdlib::hashmap::*;
-import bootstrap::syntax::ast;
-import bootstrap::syntax::lexer;
-import bootstrap::syntax::parser;
+import bootstrap::syntax::ast::*;
+import bootstrap::syntax::lexer::*;
+import bootstrap::syntax::parser::*;
 import bootstrap::syntax::expander; // for body_references_self / expand_macros
 import bootstrap::syntax::lower; // for lower_program
 import bootstrap::sema::typer; // for types_compat / merge_parse_diags
-import bootstrap::util::json;
-import bootstrap::cli::fmt;
+import bootstrap::util::json::*;
+import bootstrap::cli::fmt::*;
 import bootstrap::pkg::manifest; // for project-aware completion (Manifest, dep_cache_dir, …)
 import bootstrap::pkg::fetch; // for fetch_all when the user clicks "Fetch missing dep"
 

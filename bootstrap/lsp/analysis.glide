@@ -2,14 +2,14 @@
 // from lsp.glide for readability. run_extra_analyses (in lsp.glide)
 // drives these; boundary helpers it shares live in lsp.glide (pub).
 import stdlib::hashmap::*;
-import bootstrap::syntax::ast;
-import bootstrap::syntax::lexer;
-import bootstrap::syntax::parser;
-import bootstrap::sema::typer;
-import bootstrap::cli::fmt;
-import bootstrap::lsp::server;
+import bootstrap::syntax::ast::*;
+import bootstrap::syntax::lexer::*;
+import bootstrap::syntax::parser::*;
+import bootstrap::sema::typer::*;
+import bootstrap::cli::fmt::*;
+import bootstrap::lsp::server::*;
 import bootstrap::lsp::features; // extracted
-import bootstrap::lsp::completion;
+import bootstrap::lsp::completion::*;
 
 fn _is_int_type_name(n: string) -> bool {
     if n.eq("i8") || n.eq("i16") || n.eq("i32") || n.eq("i64") || n.eq("i128") || n.eq("i256") {
@@ -2780,23 +2780,12 @@ pub fn analysis_unused_import(t: *Typer, program: *Vector<Stmt>, source: string)
                 continue;
             }
             t.current_origin = s.origin;
+            // Module semantics are qualified-only, so the import is used iff
+            // its qualifier appears; bare names no longer come from it.
             if used.contains(short) {
                 continue;
             }
-            let mut mod_used: bool = false;
-            for let k: i32 = 0; k < program.len(); k++ {
-                let d: Stmt = program.get(k);
-                if d.origin == null || !d.origin.eq(s.import_path) {
-                    continue;
-                }
-                if d.name != null && !d.name.eq("") && used.contains(d.name) {
-                    mod_used = true;
-                    break;
-                }
-            }
-            if !mod_used {
-                _warn_import_whole(t, &s, source, "unused-import", "import of `".concat(short).concat("` is never used in this file — remove it"));
-            }
+            _warn_import_whole(t, &s, source, "unused-import", "import of `".concat(short).concat("` is never used in this file — remove it (module imports grant `").concat(short).concat("::…` access)"));
             continue;
         }
         t.current_origin = s.origin;

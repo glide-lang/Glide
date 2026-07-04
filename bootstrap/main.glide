@@ -20,28 +20,31 @@ import stdlib::env::*;
 import stdlib::io::*;
 import stdlib::spinner::*;
 import stdlib::process::*;
-import bootstrap::syntax::lexer;
+import bootstrap::syntax::lexer::*;
 import bootstrap::syntax::ast;
-import bootstrap::syntax::parser;
-import bootstrap::syntax::expander;
+import bootstrap::syntax::ast::*;
+import bootstrap::syntax::parser::*;
+import bootstrap::syntax::expander::*;
 import bootstrap::syntax::interp;
-import bootstrap::syntax::lower;
-import bootstrap::sema::typer;
-import bootstrap::codegen::emit;
+import bootstrap::syntax::interp::*;
+import bootstrap::syntax::lower::*;
+import bootstrap::sema::typer::*;
+import bootstrap::codegen::emit::*;
 import bootstrap::util::json;
-import bootstrap::cli::fmt;
-import bootstrap::lsp::server;
-import bootstrap::cli::openapi;
-import bootstrap::pkg::manifest;
-import bootstrap::pkg::fetch;
-import bootstrap::pkg::download;
-import bootstrap::cli::doc;
-import bootstrap::cli::embed;
+import bootstrap::util::json::*;
+import bootstrap::cli::fmt::*;
+import bootstrap::lsp::server::*;
+import bootstrap::cli::openapi::*;
+import bootstrap::pkg::manifest::*;
+import bootstrap::pkg::fetch::*;
+import bootstrap::pkg::download::*;
+import bootstrap::cli::doc::*;
+import bootstrap::cli::embed::*;
 import stdlib::compress::*;
 import stdlib::tar::*;
 import bootstrap::pkg::loader::*;
-import bootstrap::codegen::decls; // extracted
-import bootstrap::cli::diagnostics; // extracted
+import bootstrap::codegen::decls::*; // extracted
+import bootstrap::cli::diagnostics::*; // extracted
 
 fn print_indent(n: i32) {
     for let i: i32 = 0; i < n; i++ {

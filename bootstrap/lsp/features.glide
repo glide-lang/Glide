@@ -1,15 +1,15 @@
 // Extracted from bootstrap/lsp.glide for readability. See that file for the
 // orchestration; shared helpers it owns stay there (pub).
 import stdlib::hashmap::*;
-import bootstrap::syntax::ast;
-import bootstrap::syntax::lexer;
-import bootstrap::syntax::parser;
-import bootstrap::sema::typer;
-import bootstrap::cli::fmt;
-import bootstrap::util::json;
-import bootstrap::pkg::manifest;
-import bootstrap::lsp::server;
-import bootstrap::lsp::completion;
+import bootstrap::syntax::ast::*;
+import bootstrap::syntax::lexer::*;
+import bootstrap::syntax::parser::*;
+import bootstrap::sema::typer::*;
+import bootstrap::cli::fmt::*;
+import bootstrap::util::json::*;
+import bootstrap::pkg::manifest::*;
+import bootstrap::lsp::server::*;
+import bootstrap::lsp::completion::*;
 
 pub fn type_to_string_pretty(t: *Type) -> string {
     if t == null {

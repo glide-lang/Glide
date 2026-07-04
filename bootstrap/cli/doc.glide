@@ -1,7 +1,7 @@
 import stdlib::fs::*;
-import bootstrap::syntax::ast;
-import bootstrap::syntax::lexer;
-import bootstrap::syntax::parser;
+import bootstrap::syntax::ast::*;
+import bootstrap::syntax::lexer::*;
+import bootstrap::syntax::parser::*;
 import bootstrap::cli::fmt; // for fmt_type signatures
 import bootstrap::pkg::manifest; // for dep discovery (read_manifest, dep_cache_dir, ManifestDep)
 

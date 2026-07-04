@@ -2,6 +2,7 @@
 // functions, path helpers, the path! macro, and error recognition.
 import stdlib::testing::*;
 import stdlib::fs;
+import stdlib::fs::{File, Metadata, ReadDir, DirEntry, OpenOptions, SeekFrom, FileType};
 import stdlib::errors::*;
 import stdlib::bytes::*;
 

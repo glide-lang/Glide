@@ -1972,12 +1972,19 @@ case_diagnostics_project("unused import is tagged Unnecessary",
     "main.glide",
     present=["unused-import"], tag_for={"unused-import": 1})
 
-# A module import used via a bare exported name (bring-all) is NOT flagged.
-case_diagnostics_project("module import used bare is not flagged",
-    {"alelo.glide": "pub struct Penis {}\n",
-     "main.glide": "import alelo;\nfn main() -> i32 { let p = Penis {}; return 0; }\n"},
+# Module semantics are qualified-only (Rust-style): a module import is used
+# via its qualifier; a bare name from it is an error.
+case_diagnostics_project("module import used via qualifier is not flagged",
+    {"alelo.glide": "pub fn helper() -> i32 { return 1; }\n",
+     "main.glide": "import alelo;\nfn main() -> i32 { return alelo::helper(); }\n"},
     "main.glide",
     absent=["unused-import"])
+
+case_diagnostics_project("bare name via module import is an error",
+    {"alelo.glide": "pub fn helper() -> i32 { return 1; }\n",
+     "main.glide": "import alelo;\nfn main() -> i32 { return helper(); }\n"},
+    "main.glide",
+    present=["unknown-name"])
 
 # unused-import names the specific unused member, not just the first.
 case_diagnostics_project("unused import names the unused member",

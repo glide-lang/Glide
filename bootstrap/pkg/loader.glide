@@ -4,12 +4,12 @@
 // manifest depends on nothing here.
 import stdlib::hashmap::*;
 import stdlib::fs::*;
-import bootstrap::syntax::ast;
-import bootstrap::syntax::lexer;
-import bootstrap::syntax::parser;
-import bootstrap::syntax::lower;
-import bootstrap::sema::typer;
-import bootstrap::pkg::manifest;
+import bootstrap::syntax::ast::*;
+import bootstrap::syntax::lexer::*;
+import bootstrap::syntax::parser::*;
+import bootstrap::syntax::lower::*;
+import bootstrap::sema::typer::*;
+import bootstrap::pkg::manifest::*;
 
 extern fn __glide_list_dir(path: string, suffix: string) -> string;
 
@@ -121,6 +121,14 @@ pub fn load_into_str(stmts: *Vector<Stmt>, src: string, origin: string, loaded: 
                 s.import_short = last_path_segment(unq);
                 let nocache: *HashMap<*Vector<Stmt>> = null;
                 load_referenced_pkg_children(stmts, src, origin, unq, s.import_short, resolved, loaded, pdiags, nocache);
+            }
+            // Single-segment module syntax (`import alelo;`) is a module import
+            // too — same qualified-only semantics as the multi-segment form.
+            // The quoted form (`import "file.glide";`) stays a file include.
+            let was_quoted: bool = s.import_path.len() > 0 && s.import_path.at(0).to_int() == 34;
+            if !multi_seg && !was_quoted && s.imported_items == null && !s.import_wildcard && __glide_file_exists(resolved) {
+                s.import_is_module = true;
+                s.import_short = last_path_segment(unq);
             }
             load_into(stmts, resolved, loaded, pdiags);
             s.import_path = resolved;
@@ -451,6 +459,14 @@ pub fn cached_resolve_and_push(stmts: *Vector<Stmt>, parsed: *Vector<Stmt>, orig
                 s.import_is_module = true;
                 s.import_short = last_path_segment(unq);
                 load_referenced_pkg_children(stmts, "", origin, unq, s.import_short, resolved, loaded, pdiags, cache);
+            }
+            // Single-segment module syntax (`import alelo;`) — same
+            // qualified-only semantics as the multi-segment form (mirrors the
+            // uncached loader above).
+            let was_quoted_c: bool = s.import_path.len() > 0 && s.import_path.at(0).to_int() == 34;
+            if !multi_seg && !was_quoted_c && s.imported_items == null && !s.import_wildcard && __glide_file_exists(resolved) {
+                s.import_is_module = true;
+                s.import_short = last_path_segment(unq);
             }
             load_into_with_cache(stmts, resolved, loaded, pdiags, cache);
             s.import_path = resolved;
@@ -1034,11 +1050,13 @@ pub fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
                     // actually existing before flagging it unresolved.
                     t.push_diag(s.line, s.column, 1, "unresolved-import", "cannot find module `".concat(module_path_from_path(target)).concat("` to import"));
                 } else {
-                    // Wildcard / sibling: every PUB name from the target file,
-                    // plus anything the target re-exports via `pub import`.
-                    // A qual-only nested import skips the bring — it grants
-                    // `cookies::Name` access, not bare `Name`.
-                    if !s.import_qual_only {
+                    // Rust-style module semantics: a plain module import
+                    // (`import alelo;` / `import a::b;`) grants QUALIFIED
+                    // access only (`alelo::X`) — it must not spill every pub
+                    // name into the file's bare scope. Only a wildcard
+                    // (`::*`) and the quoted file-include form keep the full
+                    // bring; a selective import brings exactly its names.
+                    if !s.import_qual_only && !s.import_is_module {
                         let seen_reexport: *HashMap<bool> = HashMap::new();
                         _bring_exports(t, stmts, target, f, seen_reexport);
                     }

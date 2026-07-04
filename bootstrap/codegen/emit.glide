@@ -15,7 +15,7 @@
 // emitter is a string builder, not an IR — no SSA, no register allocation.
 // The downstream C compiler (zig cc / mingw / cl) does the heavy lifting.
 import stdlib::hashmap::*;
-import bootstrap::syntax::ast;
+import bootstrap::syntax::ast::*;
 import bootstrap::codegen::runtime; // extracted
 import bootstrap::codegen::decls; // extracted
 

@@ -1,18 +1,18 @@
 // Extracted from bootstrap/lsp.glide for readability. See that file for the
 // orchestration; shared helpers it owns stay there (pub).
 import stdlib::hashmap::*;
-import bootstrap::syntax::ast;
-import bootstrap::syntax::lexer;
-import bootstrap::syntax::parser;
-import bootstrap::sema::typer;
-import bootstrap::cli::fmt;
-import bootstrap::util::json;
-import bootstrap::pkg::manifest;
-import bootstrap::lsp::server;
+import bootstrap::syntax::ast::*;
+import bootstrap::syntax::lexer::*;
+import bootstrap::syntax::parser::*;
+import bootstrap::sema::typer::*;
+import bootstrap::cli::fmt::*;
+import bootstrap::util::json::*;
+import bootstrap::pkg::manifest::*;
+import bootstrap::lsp::server::*;
 import bootstrap::lsp::features; // extracted
-import bootstrap::pkg::fetch;
-import bootstrap::pkg::loader;
-import bootstrap::syntax::expander;
+import bootstrap::pkg::fetch::*;
+import bootstrap::pkg::loader::*;
+import bootstrap::syntax::expander::*;
 
 // LSP CompletionItemKind:
 //   3 = Function, 6 = Variable, 5 = Field, 8 = Class (struct), 13 = Enum,
@@ -212,7 +212,26 @@ fn build_import_edit(name: string, module: string, existing: *ImportInfo, fallba
             return null;
         }
         if existing.kind == IMP_BARE {
-            return null;
+            // A plain module import grants QUALIFIED access only; accepting a
+            // bare symbol still needs a selective import. Keep the module line
+            // (its qualifier may be in use) and add `import mod::{name};` right
+            // below it. Module items themselves are covered by the bare line.
+            if is_module {
+                return null;
+            }
+            let bedit: *JsonValue = json_object();
+            let brange: *JsonValue = json_object();
+            let bs: *JsonValue = json_object();
+            let be: *JsonValue = json_object();
+            json_obj_set(bs, "line", json_int(existing.line + 1));
+            json_obj_set(bs, "character", json_int(0));
+            json_obj_set(be, "line", json_int(existing.line + 1));
+            json_obj_set(be, "character", json_int(0));
+            json_obj_set(brange, "start", bs);
+            json_obj_set(brange, "end", be);
+            json_obj_set(bedit, "range", brange);
+            json_obj_set(bedit, "newText", json_string("import ".concat(module).concat("::{").concat(name).concat("};\n")));
+            return bedit;
         }
         if existing.kind == IMP_SELECTIVE {
             if existing.items.contains(name) {
@@ -4636,7 +4655,7 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
         // matching: `client::` with `import stdlib::http::client;` must list
         // that module only — every module whose LAST segment happens to be
         // `client` (stdlib::net::tls12::client…) leaked its symbols here.
-        let mp_res: string = _resolve_qualifier_module(doc.stmts, uri_to_path(uri), mod_path);
+        let mp_res: string = _resolve_qualifier_module(state, doc.stmts, uri_to_path(uri), mod_path);
         let mut mp_eff: string = mod_path;
         if !mp_res.eq("") {
             mp_eff = mp_res;
@@ -4964,6 +4983,12 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
     // carry a proper auto-import edit instead of appearing as an in-scope
     // bare ident the compiler then rejects.
     let _compl_proj_src: string = _proj_src_prefix(_compl_doc_path);
+    // Loose layout (no manifest / file not under src/): siblings in the doc's
+    // own directory are modules by bare file name.
+    let mut _compl_doc_dir: string = parent_dir(_compl_doc_path);
+    if !_compl_doc_dir.eq("") {
+        _compl_doc_dir = _compl_doc_dir.replace("\\", "/").concat("/");
+    }
     if doc.stmts != null {
         for let i: i32 = 0; i < doc.stmts.len(); i++ {
             let s: Stmt = doc.stmts.get(i);
@@ -5043,6 +5068,9 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
             } else {
                 if s.origin != null && !s.origin.eq("") && !s.origin.eq(_compl_doc_path) {
                     edit_mod = _module_under_src(s.origin, _compl_proj_src);
+                    if edit_mod.eq("") {
+                        edit_mod = _module_under_src(s.origin, _compl_doc_dir);
+                    }
                     if module.eq("") {
                         module = edit_mod;
                     }
@@ -7020,7 +7048,32 @@ fn _trait_method_sig(m: *Stmt) -> string {
 // The FULL module path of an imported module whose short name (or `::`-anchored
 // suffix) is `qual` in `path`'s imports — "" when no import pins it (then the
 // caller falls back to index-wide matching, which attaches auto-import edits).
-fn _resolve_qualifier_module(stmts: *Vector<Stmt>, path: string, qual: string) -> string {
+// True when either index has a module entry (or any symbol) under exactly
+// this `::` module path.
+fn _index_knows_module(state: *LspState, path: string) -> bool {
+    if state == null {
+        return false;
+    }
+    if _idx_has_module(state.stdlib_index, path) {
+        return true;
+    }
+    return _idx_has_module(state.project_index, path);
+}
+
+fn _idx_has_module(idx: *Vector<ImportableSym>, path: string) -> bool {
+    if idx == null {
+        return false;
+    }
+    for let i: i32 = 0; i < idx.len(); i++ {
+        let sym: ImportableSym = idx.get(i);
+        if sym.module != null && sym.module.eq(path) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn _resolve_qualifier_module(state_qr: *LspState, stmts: *Vector<Stmt>, path: string, qual: string) -> string {
     if stmts == null || qual == null || qual.eq("") {
         return "";
     }
@@ -7036,11 +7089,12 @@ fn _resolve_qualifier_module(stmts: *Vector<Stmt>, path: string, qual: string) -
         if full.eq("") {
             continue;
         }
-        // Only pin `::`-qualified modules (stdlib/deps, where the short leaf is
-        // ambiguous — `client` in http vs tls12). A loose single-segment module
-        // (`import alelo;`) derives to a bare FS-path leaf with no `::`; leave
-        // it unpinned so the bare qualifier matches the index by leaf.
-        if !full.contains("::") {
+        // Only pin when the derived path names a module the INDEX actually
+        // knows (stdlib/deps under src/, where the FS path maps cleanly to a
+        // `::` module path). A loose file's path derives to garbage
+        // (`tmp::…::alelo`) — leave those unpinned so the bare qualifier
+        // matches the index by leaf.
+        if !_index_knows_module(state_qr, full) {
             return "";
         }
         if s.import_short.eq(qual) {

@@ -11,8 +11,8 @@
 // Unknown stmts get a synth `ST_ERROR` so later passes still receive a
 // well-formed tree.
 import stdlib::hashmap::*;
-import bootstrap::syntax::lexer;
-import bootstrap::syntax::ast;
+import bootstrap::syntax::lexer::*;
+import bootstrap::syntax::ast::*;
 
 // Runtime IO helper used while resolving qualified imports. Declared
 // here so 'glide check bootstrap/parser.glide' resolves it standalone;

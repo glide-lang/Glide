@@ -14,7 +14,7 @@
 // carried through on the token stream (lexer `lead`/`trail`) and re-emitted in
 // place. A comment-bearing operator chain or match-as-expression is broken
 // across lines so the comment keeps its spot.
-import bootstrap::syntax::ast;
+import bootstrap::syntax::ast::*;
 import stdlib::bytes::*; // ByteBuffer — O(n) string building (vs concat folds)
 
 const FMT_INDENT: string = "    ";
