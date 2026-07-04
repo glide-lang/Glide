@@ -62,12 +62,12 @@ impl ByteBuffer {
     /// b.push_str("abc");
     /// b.len();   // 3
     /// ```
-    pub fn len(self) -> i32 { return self.len; }
+    pub fn len(&self) -> i32 { return self.len; }
 
     /// Allocated capacity. Always `>= len()`.
-    pub fn cap(self) -> i32 { return self.cap; }
+    pub fn cap(&self) -> i32 { return self.cap; }
 
-    fn ensure(self, want: i32) {
+    fn ensure(&mut self, want: i32) {
         if want <= self.cap { return; }
         let mut newcap: i32 = self.cap;
         while newcap < want { newcap = newcap * 2; }
@@ -81,7 +81,7 @@ impl ByteBuffer {
     /// ```glide
     /// b.push(65 as u8);   // 'A'
     /// ```
-    pub fn push(self, b: u8) {
+    pub fn push(&mut self, b: u8) {
         self.ensure(self.len + 1);
         self.data[self.len] = b;
         self.len = self.len + 1;
@@ -93,7 +93,7 @@ impl ByteBuffer {
     /// ```glide
     /// b.push_str("HTTP/1.1 200 OK\r\n");
     /// ```
-    pub fn push_str(self, s: string) {
+    pub fn push_str(&mut self, s: string) {
         let n: i32 = s.len();
         self.ensure(self.len + n);
         let mut i: i32 = 0;
@@ -110,7 +110,7 @@ impl ByteBuffer {
     /// ```glide
     /// let first: u8 = b.at(0);
     /// ```
-    pub fn at(self, i: i32) -> u8 { return self.data[i]; }
+    pub fn at(&self, i: i32) -> u8 { return self.data[i]; }
 
     /// Reset `len` to `0`. Capacity is preserved so subsequent pushes
     /// don't reallocate.
@@ -118,7 +118,7 @@ impl ByteBuffer {
     /// ```glide
     /// b.clear();   // ready to reuse for the next request
     /// ```
-    pub fn clear(self) { self.len = 0; }
+    pub fn clear(&mut self) { self.len = 0; }
 
     /// Materialize the buffer as a string (a fresh, independent copy). Alias
     /// for `to_string`. (Historically this aliased `self.data`, but a raw
@@ -133,7 +133,7 @@ impl ByteBuffer {
     /// b.push_str("world");
     /// println!(b.as_string());   // "hello, world"
     /// ```
-    pub fn as_string(self) -> string {
+    pub fn as_string(&self) -> string {
         return __glide_string_from_buf(self.data as *void, self.len);
     }
 
@@ -158,7 +158,7 @@ impl ByteBuffer {
     /// ```glide
     /// b.push_str("count="); b.push_int(42);   // "count=42"
     /// ```
-    pub fn push_int(self, n: i64) {
+    pub fn push_int(&mut self, n: i64) {
         self.push_str(n.to_string());
     }
 
@@ -179,7 +179,7 @@ impl ByteBuffer {
 
     /// Append `n` raw bytes read from `src`. Use when bridging a C-side
     /// buffer (e.g. a socket read) into a managed buffer.
-    pub fn push_bytes(self, src: *u8, n: i32) {
+    pub fn push_bytes(&mut self, src: *u8, n: i32) {
         if n <= 0 { return; }
         self.ensure(self.len + n);
         let mut i: i32 = 0;
@@ -191,7 +191,7 @@ impl ByteBuffer {
     }
 
     /// Append every byte of `other` onto this buffer.
-    pub fn push_buf(self, other: *ByteBuffer) {
+    pub fn push_buf(&mut self, other: *ByteBuffer) {
         self.push_bytes(other.data, other.len);
     }
 
@@ -202,7 +202,7 @@ impl ByteBuffer {
     /// let b: *ByteBuffer = ByteBuffer::new();
     /// b.push_codepoint(128512);   // 😀  -> F0 9F 98 80
     /// ```
-    pub fn push_codepoint(self, cp: i32) {
+    pub fn push_codepoint(&mut self, cp: i32) {
         if cp < 0 { return; }
         if cp < 128 {
             self.push(cp as u8);
