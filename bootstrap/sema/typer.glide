@@ -4041,6 +4041,10 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         return null;
     }
     if e.kind == EX_INT {
+        // An explicit type suffix (`0i32`, `3u8`) pins the type.
+        if e.cast_to != null {
+            return e.cast_to;
+        }
         // Auto-widen literals that don't fit in a 32-bit int. Without
         // this `let n = 19_999_999_998;` infers as `int` and truncates
         // to -1474836482 in codegen, which silently breaks comparisons
@@ -4052,6 +4056,9 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         return ty_named("i32");
     }
     if e.kind == EX_FLOAT {
+        if e.cast_to != null {
+            return e.cast_to;
+        }
         return ty_named("f64");
     }
     if e.kind == EX_STRING {

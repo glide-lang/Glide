@@ -630,6 +630,71 @@ pub fn ty_tuple(args: *Vector<Type>) -> *Type {
     return t;
 }
 
+// Numeric literal type suffixes (`0i32`, `3u8`, `1.5f32`, `2.0f64`). The lexer
+// folds the suffix into the lexeme; these three helpers split it back out.
+pub fn _is_num_suffix(s: string) -> bool {
+    return s.eq("i8") || s.eq("i16") || s.eq("i32") || s.eq("i64") || s.eq("i128")
+        || s.eq("u8") || s.eq("u16") || s.eq("u32") || s.eq("u64") || s.eq("u128")
+        || s.eq("usize") || s.eq("isize") || s.eq("f32") || s.eq("f64");
+}
+
+// The suffix at the end of a numeric lexeme, or "" if none. Hex/binary
+// literals (`0x…`, `0b…`) are never suffixed, so they're left untouched —
+// this stops `0xf32` from being misread as the `f32` suffix.
+fn _num_suffix_of(s: string) -> string {
+    let n: i32 = s.len();
+    if n >= 2 && s.at(0).to_int() == 48 {
+        let p: i32 = s.at(1).to_int();
+        if p == 120 || p == 88 || p == 98 || p == 66 {
+            return "";
+        }
+    }
+    // A suffix is i/u/f followed by digits; scan back over the trailing run.
+    let mut k: i32 = n;
+    while k > 0 {
+        let c: i32 = s.at(k - 1).to_int();
+        if c >= 48 && c <= 57 {
+            k = k - 1;
+        } else {
+            break;
+        }
+    }
+    if k > 0 && k < n {
+        let c: i32 = s.at(k - 1).to_int();
+        if c == 105 || c == 117 || c == 102 || c == 122 || c == 115 || c == 101 {
+            let cand: string = s.substring(k - 1, n);
+            if _is_num_suffix(cand) {
+                return cand;
+            }
+        }
+        // usize / isize end in a letter, not a digit — try the whole tail.
+    }
+    // Broad fallback: check the known letter-terminal suffixes.
+    if s.len() > 5 {
+        let tail5: string = s.substring(s.len() - 5, s.len());
+        if tail5.eq("usize") || tail5.eq("isize") {
+            return tail5;
+        }
+    }
+    return "";
+}
+
+pub fn _num_strip_suffix(s: string) -> string {
+    let sfx: string = _num_suffix_of(s);
+    if sfx.eq("") {
+        return s;
+    }
+    return s.substring(0, s.len() - sfx.len());
+}
+
+pub fn _num_suffix_type(s: string) -> *Type {
+    let sfx: string = _num_suffix_of(s);
+    if sfx.eq("") {
+        return null;
+    }
+    return ty_named(sfx);
+}
+
 pub fn expr_int(n: i64, line: i32, col: i32) -> *Expr {
     let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
     e.kind = EX_INT;
@@ -644,7 +709,10 @@ pub fn expr_float(lexeme: string, line: i32, col: i32) -> *Expr {
     e.kind = EX_FLOAT;
     e.line = line;
     e.column = col;
-    e.float_val = lexeme;
+    // Drop a `f32`/`f64` suffix so the emitted C float literal stays valid,
+    // and remember the suffix type for inference.
+    e.float_val = _num_strip_suffix(lexeme);
+    e.cast_to = _num_suffix_type(lexeme);
     return e;
 }
 

@@ -1847,6 +1847,10 @@ fn parse_let(p: *Parser) -> *Stmt {
         p.advance();
         let names: *Vector<string> = Vector::new();
         while !p.at_op(")") && !p.at_eof() {
+            // Optional per-binding `mut` (`let (mut x, mut y) = …`). Glide
+            // treats every local as mutable storage, so it's accepted and
+            // discarded — same as `mut` on a fn parameter.
+            p.eat_kw("mut");
             names.push(p.expect_ident());
             if !p.eat_op(",") {
                 break;
@@ -3119,7 +3123,9 @@ fn parse_prefix(p: *Parser) -> *Expr {
     }
     if tok.kind == TOK_INT {
         p.advance();
-        return expr_int(parse_int_lexeme(tok.lexeme), line, col);
+        let ie: *Expr = expr_int(parse_int_lexeme(tok.lexeme), line, col);
+        ie.cast_to = _num_suffix_type(tok.lexeme);
+        return ie;
     }
     if tok.kind == TOK_FLOAT {
         p.advance();
@@ -3482,7 +3488,10 @@ fn parse_prefix(p: *Parser) -> *Expr {
 }
 
 // ---- helpers -------------------------------------------------------------
-fn parse_int_lexeme(s: string) -> i64 {
+fn parse_int_lexeme(s0: string) -> i64 {
+    // Drop a trailing type suffix (`100i32`, `3u8`) before decoding the value;
+    // `_num_strip_suffix` leaves hex/binary lexemes untouched.
+    let s: string = _num_strip_suffix(s0);
     let n: i32 = s.len();
     let mut v: i64 = 0;
     // Hex (0x/0X) and binary (0b/0B) literals. The lexer captures the whole

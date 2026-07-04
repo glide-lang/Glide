@@ -1,0 +1,46 @@
+// Rust-style flexibility: tuple destructuring with per-binding `mut`, numeric
+// literal type suffixes, and compound assignment — all in one place.
+
+fn test_destructure_with_mut() -> i32 {
+    let (mut a, mut b) = (10, 20);
+    a = a + 1;
+    b += 5;
+    assert!(a == 11);
+    assert!(b == 25);
+    return 0;
+}
+
+fn test_mixed_mut_destructure() -> i32 {
+    let (mut x, y) = (1, 2);
+    x += y;
+    assert!(x == 3);
+    assert!(y == 2);
+    return 0;
+}
+
+fn test_int_suffixes() -> i32 {
+    let a = 200u8;
+    let b = 5000000000i64;
+    let c = 42i32;
+    assert!(a == 200);
+    assert!(b == 5000000000);
+    assert!(c == 42);
+    return 0;
+}
+
+fn test_float_suffixes() -> i32 {
+    let a = 0.0f64;
+    let b = 1.5f32;
+    let mut acc = a;
+    acc += 2.5;
+    assert!(acc == 2.5);
+    assert!(b > 1.0);
+    return 0;
+}
+
+fn test_suffix_in_tuple() -> i32 {
+    let (mut w, h) = (3000i32, 100i32);
+    w += h;
+    assert!(w == 3100);
+    return 0;
+}

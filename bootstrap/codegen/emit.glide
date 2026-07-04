@@ -3364,10 +3364,20 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         return;
     }
     if e.kind == EX_INT {
+        // A type-suffixed literal (`200u8`, `5i64`) carries its C type via a
+        // cast so the value is stored/compared at the right width.
+        if e.cast_to != null {
+            print!("(", type_to_c(e.cast_to), ")(", e.int_val, ")");
+            return;
+        }
         print!(e.int_val);
         return;
     }
     if e.kind == EX_FLOAT {
+        if e.cast_to != null {
+            print!("(", type_to_c(e.cast_to), ")(", e.float_val, ")");
+            return;
+        }
         print!(e.float_val);
         return;
     }

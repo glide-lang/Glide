@@ -376,6 +376,31 @@ impl Lexer {
                     }
                 }
             }
+            // Optional numeric type suffix (`0i32`, `3u8`, `1.5f32`, `2.0f64`).
+            // Only consumed when it exactly matches a known suffix, so `1foo`
+            // still lexes as `1` + `foo`. Folded into the lexeme; the parser
+            // splits it back out.
+            let pkc: i32 = self.peek().to_int();
+            if pkc == 105 || pkc == 117 || pkc == 102 {
+                let mut sp: i32 = self.pos;
+                while sp < self.src_len {
+                    let sc: char = self.src.at(sp);
+                    if sc.is_alpha() || sc.is_digit() {
+                        sp = sp + 1;
+                    } else {
+                        break;
+                    }
+                }
+                let sfx: string = self.src.substring(self.pos, sp);
+                if _is_num_suffix(sfx) {
+                    while self.pos < sp {
+                        self.advance();
+                    }
+                    if sfx.at(0).to_int() == 102 {
+                        is_float = true;
+                    }
+                }
+            }
             let lex: string = self.src.substring(start_pos, self.pos);
             let mut kind: i32 = TOK_INT;
             if is_float {
