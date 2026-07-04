@@ -4396,6 +4396,10 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 let is_prim: bool = is_stdlib_primitive(stripped.name);
                 let r_is_ptr: bool = recv_ty != null && (recv_ty.kind == TY_POINTER || recv_ty.kind == TY_BORROW || recv_ty.kind == TY_BORROW_MUT);
                 let mut needs_addr: bool = false;
+                // Receiver is a pointer (a `&self` method body calling a
+                // VALUE-receiver method: `self.concat(..)` where `self` is
+                // `string const*`) but the callee wants a value -> deref.
+                let mut needs_deref: bool = false;
                 if g.fns.contains(fn_name) {
                     let sig: Stmt = g.fns.get(fn_name);
                     if sig.fn_params != null && sig.fn_params.len() > 0 {
@@ -4404,10 +4408,20 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                         if p_is_ptr && !r_is_ptr {
                             needs_addr = true;
                         }
+                        if !p_is_ptr && r_is_ptr {
+                            needs_deref = true;
+                        }
                     }
                 } else {
-                    // Unknown signature: fall back to the legacy heuristic.
+                    // Unknown signature (extern / runtime prim methods like
+                    // `__glide_string_concat`): those take a VALUE receiver, so
+                    // a borrowed `self` (pointer) must be dereferenced.
                     needs_addr = !is_prim && !r_is_ptr;
+                    // Only PRIMITIVE runtime methods take a value receiver; a
+                    // struct method with an unseen sig still wants its pointer.
+                    if r_is_ptr && is_prim {
+                        needs_deref = true;
+                    }
                 }
                 // `&<literal>` / `&<call()>` is not valid C (rvalue). Spill the
                 // receiver into a statement-expression temp so a borrowed
@@ -4435,7 +4449,13 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 if needs_addr {
                     print!("&");
                 }
+                if needs_deref {
+                    print!("(*");
+                }
                 emit_expr(g, recv);
+                if needs_deref {
+                    print!(")");
+                }
                 if e.args != null {
                     for let i: i32 = 0; i < e.args.len(); i++ {
                         print!(", ");
