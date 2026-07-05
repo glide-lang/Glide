@@ -1,7 +1,6 @@
 // Correctness guard for the string methods rewritten to a single-allocation
 // builder (no behavior change vs the old O(n^2) concat folds): string.replace
 // / to_upper / to_lower / repeat / reverse, and Vector<string>.join / concat.
-import stdlib::strings::*;
 
 fn test_replace() -> i32 {
     assert_str_eq!("aXbXc".replace("X", "--"), "a--b--c");   // grow
@@ -48,7 +47,7 @@ fn test_vec_join_concat() -> i32 {
     assert_str_eq!(v.join(", "), "a, b, c");
     assert_str_eq!(v.join(""), "abc");
     assert_str_eq!(v.concat(), "abc");
-    assert_str_eq!(string_join(v, "+"), "a+b+c");
+    assert_str_eq!(v.join("+"), "a+b+c");
     let e: *Vector<string> = Vector::new();
     defer e.free();
     assert_str_eq!(e.join(","), "");

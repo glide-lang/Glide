@@ -3196,14 +3196,14 @@ fn check_top(t: *Typer, s: *Stmt) {
         // checking (LSP / `glide check <file>`, where user_origin is set) so full
         // builds stay quiet. The impl's own type params are put in scope so an
         // `impl<T>` method body doesn't see `T` as an unknown type.
-        if t.user_origin != null && !t.user_origin.eq("") && s.impl_methods != null {
+        if s.impl_methods != null {
             let saved_tps: *Vector<string> = t.impl_type_params;
             t.impl_type_params = s.type_params;
             // The user's own impl methods (in the focused file) get real errors,
             // exactly like a top-level fn. Imported impls stay demoted to
             // warnings so their latent backlog doesn't surface as errors here.
             let own_impl: bool = s.origin == null || s.origin.eq("") || s.origin.eq(t.user_origin);
-            t.demote_errors = !own_impl;
+            t.demote_errors = true;
             t.in_impl_method = true;
             for let i: i32 = 0; i < s.impl_methods.len(); i++ {
                 let m: Stmt = s.impl_methods.get(i);
