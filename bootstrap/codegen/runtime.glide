@@ -1429,6 +1429,46 @@ pub fn collect_slice_in_type(g: *CG, t: *Type) {
         }
     }
 }
+pub fn collect_slice_in_expr(g: *CG, e: *Expr) {
+    if e == null {
+        return;
+    }
+    if e.cast_to != null {
+        collect_slice_in_type(g, e.cast_to);
+    }
+    if e.lhs != null {
+        collect_slice_in_expr(g, e.lhs);
+    }
+    if e.rhs != null {
+        collect_slice_in_expr(g, e.rhs);
+    }
+    if e.operand != null {
+        collect_slice_in_expr(g, e.operand);
+    }
+    if e.args != null {
+        for let i: i32 = 0; i < e.args.len(); i++ {
+            let a: Expr = e.args.get(i);
+            collect_slice_in_expr(g, &a);
+        }
+    }
+    if e.block_stmts != null {
+        for let i: i32 = 0; i < e.block_stmts.len(); i++ {
+            let b: Stmt = e.block_stmts.get(i);
+            collect_slice_in_stmt(g, &b);
+        }
+    }
+    if e.match_arms != null {
+        for let i: i32 = 0; i < e.match_arms.len(); i++ {
+            let a: MatchArm = e.match_arms.get(i);
+            if a.body != null {
+                for let k: i32 = 0; k < a.body.len(); k++ {
+                    let b: Stmt = a.body.get(k);
+                    collect_slice_in_stmt(g, &b);
+                }
+            }
+        }
+    }
+}
 pub fn collect_slice_in_stmt(g: *CG, s: *Stmt) {
     if s == null {
         return;
@@ -1449,6 +1489,39 @@ pub fn collect_slice_in_stmt(g: *CG, s: *Stmt) {
         for let i: i32 = 0; i < s.struct_fields.len(); i++ {
             let f: Field = s.struct_fields.get(i);
             collect_slice_in_type(g, f.ty);
+        }
+    }
+    if s.let_value != null {
+        collect_slice_in_expr(g, s.let_value);
+    }
+    if s.expr_value != null {
+        collect_slice_in_expr(g, s.expr_value);
+    }
+    if s.cond != null {
+        collect_slice_in_expr(g, s.cond);
+    }
+    if s.for_init != null {
+        collect_slice_in_stmt(g, s.for_init);
+    }
+    if s.for_step != null {
+        collect_slice_in_expr(g, s.for_step);
+    }
+    if s.then_body != null {
+        for let i: i32 = 0; i < s.then_body.len(); i++ {
+            let b: Stmt = s.then_body.get(i);
+            collect_slice_in_stmt(g, &b);
+        }
+    }
+    if s.else_body != null {
+        for let i: i32 = 0; i < s.else_body.len(); i++ {
+            let b: Stmt = s.else_body.get(i);
+            collect_slice_in_stmt(g, &b);
+        }
+    }
+    if s.fn_body != null {
+        for let i: i32 = 0; i < s.fn_body.len(); i++ {
+            let b: Stmt = s.fn_body.get(i);
+            collect_slice_in_stmt(g, &b);
         }
     }
     if s.impl_methods != null {

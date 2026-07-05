@@ -588,6 +588,38 @@ fn _emit_optres_method(g: *CG, e: *Expr) -> bool {
 // Intrinsic methods on Option (`?T`) / Result (`!T`). Emits an inline
 // statement-expr and returns true when `e` is such a method call; false lets
 // the caller fall through to normal dispatch. Mirrors the chan method block.
+// as_slice() intrinsic: `Vector<T>.as_slice()` -> a fat-pointer `{ ptr, len }`
+// over the source's data+len. Evaluated once via a statement-expr.
+fn _emit_slice_method(g: *CG, e: *Expr) -> bool {
+    if e.lhs == null || e.lhs.kind != EX_MEMBER || e.lhs.field == null || !e.lhs.field.eq("as_slice") {
+        return false;
+    }
+    if e.args != null && e.args.len() > 0 {
+        return false;
+    }
+    let recv_e: *Expr = e.lhs.lhs;
+    let recv_ty: *Type = infer_for_codegen(g, recv_e);
+    let stripped: *Type = strip_ptr(recv_ty);
+    if stripped == null || stripped.kind != TY_GENERIC || stripped.name == null || !stripped.name.eq("Vector") || stripped.args == null || stripped.args.len() == 0 {
+        return false;
+    }
+    let elem: Type = stripped.args.get(0);
+    register_slice_type(g, &elem);
+    let m: string = mangle_type(&elem);
+    let acc: string = if recv_ty != null && recv_ty.kind == TY_POINTER { "->" } else { "." };
+    print!("({ ");
+    print!(type_to_c(recv_ty));
+    print!(" __sv = (");
+    emit_expr(g, recv_e);
+    print!("); (__glide_slice_");
+    print!(m);
+    print!("){ __sv");
+    print!(acc);
+    print!("data, __sv");
+    print!(acc);
+    print!("len }; })");
+    return true;
+}
 fn _emit_opt_res_method(g: *CG, e: *Expr) -> bool {
     if e.lhs == null || e.lhs.kind != EX_MEMBER || e.lhs.lhs == null {
         return false;
@@ -4580,6 +4612,9 @@ pub fn emit_expr(g: *CG, e: *Expr) {
             }
         }
         // ---- Option / Result intrinsic methods ----
+        if _emit_slice_method(g, e) {
+            return;
+        }
         if _emit_opt_res_method(g, e) {
             return;
         }
@@ -4924,6 +4959,15 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         return;
     }
     if e.kind == EX_INDEX {
+        let _ixty: *Type = infer_for_codegen(g, e.lhs);
+        if _ixty != null && _ixty.kind == TY_SLICE {
+            print!("(");
+            emit_expr(g, e.lhs);
+            print!(").ptr[");
+            emit_expr(g, e.rhs);
+            print!("]");
+            return;
+        }
         emit_expr(g, e.lhs);
         print!("[");
         emit_expr(g, e.rhs);
