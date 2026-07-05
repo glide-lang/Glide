@@ -815,6 +815,9 @@ fn emit_fn(g: *CG, s: *Stmt) {
     g.scope.clear();
     let saved_ret: *Type = g.current_ret_ty;
     g.current_ret_ty = s.fn_ret_ty;
+    let saved_cfb: *Vector<Stmt> = g.cur_fn_body;
+    g.cur_fn_body = s.fn_body;
+    g.str_acc.clear();
     // Reset defer + auto-drop stacks for this fn.
     let saved_defer: *Vector<Expr> = g.defer_stack;
     let saved_err_defer: *Vector<Expr> = g.err_defer_stack;
@@ -867,6 +870,7 @@ fn emit_fn(g: *CG, s: *Stmt) {
     g.err_defer_flags = saved_edflags;
     g.defer_flag_ctr = saved_dctr;
     g.current_ret_ty = saved_ret;
+    g.cur_fn_body = saved_cfb;
     g.current_origin = saved_origin;
     println!("}");
     // Real C `main` wrapper: runs scheduler init/shutdown around the user's
@@ -928,6 +932,9 @@ fn emit_impl(g: *CG, s: *Stmt) {
         // emit_fn does for top-level fns).
         let saved_ret: *Type = g.current_ret_ty;
         g.current_ret_ty = m.fn_ret_ty;
+        let saved_cfb_m: *Vector<Stmt> = g.cur_fn_body;
+        g.cur_fn_body = m.fn_body;
+        g.str_acc.clear();
         let saved_defer: *Vector<Expr> = g.defer_stack;
         let saved_err_defer: *Vector<Expr> = g.err_defer_stack;
         let saved_drop: *Vector<Expr> = g.auto_drop_stack;
@@ -966,6 +973,7 @@ fn emit_impl(g: *CG, s: *Stmt) {
         g.defer_flags = saved_df_m;
         g.defer_flag_ctr = saved_dctr_m;
         g.current_ret_ty = saved_ret;
+        g.cur_fn_body = saved_cfb_m;
         println!("}");
         println!("");
     }
@@ -1722,6 +1730,24 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
     // by the `?Struct`/`!Struct` result-option pre-pass below) sees the
     // type. The vtable bodies + thunks still come later via emit_dyn_runtime.
     emit_dyn_fat_pointers(g, program);
+    // Slice fat-pointer typedefs (one { T* ptr; int len; } per []T element used).
+    // Per-fn scope + let_ty backfill so an annotation-free `v.as_slice()` /
+    // `s.as_bytes()` can infer its receiver's type during the collect.
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind == ST_FN && s.fn_body != null {
+            g.scope.clear();
+            if s.fn_params != null {
+                for let k: i32 = 0; k < s.fn_params.len(); k++ {
+                    let p: Param = s.fn_params.get(k);
+                    g.declare(p.name, p.ty);
+                }
+            }
+            infer_let_types(g, s.fn_body);
+        }
+        collect_slice_in_stmt(g, &s);
+    }
+    emit_slice_fat_pointers(g);
     // Pre-emit struct bodies for every Type that appears as an `impl Trait
     // for Type` target where Trait is dyn-used. The thunks emitted by
     // emit_dyn_runtime do `*(Type*)self_p`, which needs the full definition.
@@ -1989,6 +2015,10 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
             }
         }
     }
+    // All free fns are now in g.fns — compute the string-retention summary so
+    // the ephemeral-string drop can pass a string to a non-retaining callee
+    // without disqualifying it.
+    compute_str_retention(g);
     // Pre-pass: backfill `let v = Generic::new()` (no annot) by inferring T
     // from the first subsequent use of v. Must run AFTER generic fn registry
     // is populated and BEFORE the generic-uses collection below.
@@ -2323,6 +2353,9 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         }
         let saved_ret_mono: *Type = g.current_ret_ty;
         g.current_ret_ty = new_ret;
+        let saved_cfb_q: *Vector<Stmt> = g.cur_fn_body;
+        g.cur_fn_body = new_body;
+        g.str_acc.clear();
         if _body_has_defer(new_body) {
             ind(1);
             println!("char __gdefer[256] = {0};");
@@ -2333,6 +2366,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         }
         g.emit_deferred_reverse(1, "");
         g.current_ret_ty = saved_ret_mono;
+        g.cur_fn_body = saved_cfb_q;
         g.defer_stack = saved_d;
         g.auto_drop_stack = saved_dr;
         g.defer_flags = saved_df_q;
@@ -2381,6 +2415,9 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         // closure body lower against the closure's declared return type.
         let saved_ret_anon: *Type = g.current_ret_ty;
         g.current_ret_ty = af.ret_ty;
+        let saved_cfb_a: *Vector<Stmt> = g.cur_fn_body;
+        g.cur_fn_body = af.body;
+        g.str_acc.clear();
         if af.body != null && _body_has_defer(af.body) {
             ind(1);
             println!("char __gdefer[256] = {0};");
@@ -2392,6 +2429,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
             }
         }
         g.current_ret_ty = saved_ret_anon;
+        g.cur_fn_body = saved_cfb_a;
         g.emit_deferred_reverse(1, "");
         g.defer_stack = saved_d;
         g.auto_drop_stack = saved_dr;

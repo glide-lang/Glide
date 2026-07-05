@@ -616,6 +616,13 @@ pub fn ty_pointer(inner: *Type) -> *Type {
     t.inner = inner;
     return t;
 }
+pub fn ty_slice(inner: *Type) -> *Type {
+    let t: *Type = __glide_palloc(sizeof(Type)) as *Type;
+    t.kind = TY_SLICE;
+    t.name = "";
+    t.inner = inner;
+    return t;
+}
 
 // `*Vector<elem>` — the type the builtin `vec_of!` yields. Shared by the
 // typer (result type of a `vec_of!` call) and codegen (the annotation on the

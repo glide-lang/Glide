@@ -1,0 +1,33 @@
+// Fat-pointer slices []T: a zero-copy view { ptr, len } over a Vector. The
+// source is exclusively borrowed while the slice is live (mutating it is a
+// compile error: use-while-mut-borrowed), and a slice can't be returned/stored
+// (borrow-return-type / borrow-in-field) — those are compile errors, verified
+// manually. Here the read path is exercised. (B2 requires an explicit `[]T`
+// annotation on the binding so the fat-pointer typedef is collected.)
+fn slice_sum(v: *Vector<i32>) -> i32 {
+    let sl: []i32 = v.as_slice();
+    let mut s: i32 = 0;
+    for i in 0..sl.len { s = s + sl[i]; }
+    return s;
+}
+
+fn test_slice_read() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    v.push(10); v.push(20); v.push(30);
+    assert!(slice_sum(v) == 60);
+    let sl: []i32 = v.as_slice();
+    assert!(sl.len == 3);
+    assert!(sl[1] == 20);
+    return 0;
+}
+
+// B5: annotation-free — `let sl = v.as_slice()` (no []i32) infers the slice type.
+fn test_slice_infer() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    v.push(5); v.push(7);
+    let sl = v.as_slice();
+    assert!(sl.len == 2);
+    assert!(sl[1] == 7);
+    assert!(v.as_slice().len == 2);
+    return 0;
+}

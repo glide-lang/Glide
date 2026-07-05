@@ -33,12 +33,39 @@ static void __glide_str_hdr_set(char* base, int len) {
     base[2] = (char)((len >> 16) & 0xff);
     base[3] = (char)((len >> 24) & 0xff);
 }
+/* Owned-allocation flag: while > 0, string allocations use malloc (individually
+   freeable) instead of the never-freed bump arena. The compiler pushes it only
+   around the RHS of a `let` it proved ephemeral+unaliased (single-allocation
+   producer), so exactly that one result is malloc-backed and freed at scope end. */
+static _Thread_local int g_str_own = 0;
+void __glide_str_own_push(void) { g_str_own++; }
+void __glide_str_own_pop(void)  { if (g_str_own > 0) g_str_own--; }
 static char* __glide_str_alloc(int len) {
     if (len < 0) len = 0;
-    char* base = (char*)__glide_palloc(4 + len + 1);
+    char* base = (g_str_own > 0)
+        ? (char*)malloc((size_t)(4 + len + 1))
+        : (char*)__glide_palloc(4 + len + 1);
     __glide_str_hdr_set(base, len);
     base[4 + len] = 0;
     return base + 4;
+}
+/* Owned variant: same SDS layout but malloc-backed, so it CAN be individually
+   freed by __glide_string_free. The compiler routes a string local here only
+   when it proves the value ephemeral (heap-provenance, never aliased/escaped),
+   so the matching scope-end free is sound. Never used for literals/FFI/params. */
+static char* __glide_str_alloc_owned(int len) {
+    if (len < 0) len = 0;
+    char* base = (char*)malloc((size_t)(4 + len + 1));
+    __glide_str_hdr_set(base, len);
+    base[4 + len] = 0;
+    return base + 4;
+}
+/* Free a string from __glide_str_alloc_owned. The value points at the SDS data;
+   the malloc block starts 4 bytes earlier at the length header. Only ever emitted
+   by the compiler on provably-owned, provably-dead, un-aliased string locals. */
+static void __glide_string_free(const char* s) {
+    if (!s) return;
+    free((void*)(s - 4));
 }
 /* Header length read (unaligned-safe). Used by phase-2 __glide_string_len. */
 static int __glide_str_hdr_len(const char* s) {
@@ -78,11 +105,8 @@ static const char* __glide_string_substring(const char* s, int start, int end) {
     if (end < start) end = start;
     if (end > slen) end = slen;
     int cap = end - start;
-    char* base = (char*)__glide_palloc(4 + cap + 1);
-    char* out = base + 4;
+    char* out = __glide_str_alloc(cap);  /* routes through g_str_own (ownable) */
     if (cap > 0) memcpy(out, s + start, (size_t)cap);
-    out[cap] = 0;
-    __glide_str_hdr_set(base, cap);
     return out;
 }
 /* Backs the panic! / todo! / unimplemented! / unreachable! macros: print the

@@ -1987,8 +1987,8 @@ fn _ban_borrow_signature(t: *Typer, m: *Stmt) {
         nl = m.line;
         nc = m.column;
     }
-    if m.fn_ret_ty != null && (m.fn_ret_ty.kind == TY_BORROW || m.fn_ret_ty.kind == TY_BORROW_MUT) {
-        t.err_code(nl, nc, "borrow-return-type", "cannot return a borrow `".concat(type_to_string(m.fn_ret_ty)).concat("` — borrows flow into calls, never out; return `*T` or a value"));
+    if m.fn_ret_ty != null && (m.fn_ret_ty.kind == TY_BORROW || m.fn_ret_ty.kind == TY_BORROW_MUT || m.fn_ret_ty.kind == TY_SLICE) {
+        t.err_code(nl, nc, "borrow-return-type", "cannot return a borrow `".concat(type_to_string(m.fn_ret_ty)).concat("` — borrows and slices flow into calls, never out; return `*T` or a value"));
     } else {
         _reject_nested_borrow(t, m.fn_ret_ty, nl, nc, false);
     }
@@ -2184,8 +2184,8 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
                     if f.ty != null {
                         t.struct_field_types.insert(s.name.concat("::").concat(f.name), *f.ty);
                     }
-                    if f.ty != null && (f.ty.kind == TY_BORROW || f.ty.kind == TY_BORROW_MUT) {
-                        t.err_code(s.line, s.column, "borrow-in-field", "borrow `".concat(type_to_string(f.ty)).concat("` not allowed in struct field `").concat(f.name).concat("` (use `*T` instead)"));
+                    if f.ty != null && (f.ty.kind == TY_BORROW || f.ty.kind == TY_BORROW_MUT || f.ty.kind == TY_SLICE) {
+                        t.err_code(s.line, s.column, "borrow-in-field", "borrow/slice `".concat(type_to_string(f.ty)).concat("` not allowed in struct field `").concat(f.name).concat("` (use `*T` instead)"));
                     } else {
                         // Nested borrow (`Vector<&T>` field, `!&T`, …) is the
                         // same store-a-borrow hole one level down.
@@ -4037,6 +4037,27 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
             record_borrow(t, src, is_mut, s.name, s.line, s.column);
         }
     }
+    // `let sl = v.as_slice()` exclusively borrows the source Vector: mutating /
+    // reassigning / freeing v while sl is live is a compile error (via the shipped
+    // use/assign/free-while-borrowed checks). Stricter than Rust's shared &[T] but
+    // sound with zero new machinery.
+    if s.kind == ST_LET && s.let_value != null && s.let_value.kind == EX_CALL && s.let_value.lhs != null && s.let_value.lhs.kind == EX_MEMBER && s.let_value.lhs.field != null && s.let_value.lhs.field.eq("as_slice") && s.let_value.lhs.lhs != null {
+        let _slsrc: string = _borrow_root_ident(s.let_value.lhs.lhs);
+        if !_slsrc.eq("") {
+            record_borrow(t, _slsrc, true, s.name, s.line, s.column);
+        }
+    }
+    // `let bs = s.as_bytes()` SHARED-borrows the source string: assigning or
+    // freeing s while bs is live is a compile error (assign/free-while-borrowed
+    // fire on shared borrows too), while reads of s stay legal. MANDATORY — the
+    // ONLY guard on the owned-local `let mut out* = <heap>` overwrite-free path
+    // (emit.glide) that the drop-disqualification does not cover.
+    if s.kind == ST_LET && s.let_value != null && s.let_value.kind == EX_CALL && s.let_value.lhs != null && s.let_value.lhs.kind == EX_MEMBER && s.let_value.lhs.field != null && s.let_value.lhs.field.eq("as_bytes") && s.let_value.lhs.lhs != null {
+        let _absrc: string = _borrow_root_ident(s.let_value.lhs.lhs);
+        if !_absrc.eq("") {
+            record_borrow(t, _absrc, false, s.name, s.line, s.column);
+        }
+    }
     // Copying a borrow: `let b = a` where a is borrow-typed. A shared copy is
     // a second live view (recorded so overlap/NLL survive the chain); copying
     // a `&mut` MOVES it — the old binder\'s exclusive view ends and later uses
@@ -4799,6 +4820,26 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         // Borrow check: forbid aliased borrows of the same source within
         // a single call (`&x + &mut x`, `&mut x + &mut x`).
         check_call_aliasing(t, e);
+        // as_slice() intrinsic: `Vector<T>.as_slice()` -> `[]T`, a fat-pointer
+        // view over the source's data+len. (The exclusive borrow that keeps the
+        // source frozen while the slice is live is registered in the ST_LET path.)
+        if e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.field != null && e.lhs.field.eq("as_slice") && (e.args == null || e.args.len() == 0) && e.lhs.lhs != null {
+            let _ass: *Type = strip_ptr(infer_expr(t, e.lhs.lhs));
+            if _ass != null && _ass.kind == TY_GENERIC && _ass.name.eq("Vector") && _ass.args != null && _ass.args.len() > 0 {
+                let _elp: *Type = __glide_palloc(sizeof(Type)) as *Type;
+                *_elp = _ass.args.get(0);
+                return ty_slice(_elp);
+            }
+        }
+        // as_bytes() intrinsic: `string.as_bytes()` -> `[]u8`, a zero-copy view
+        // (ptr = the SDS data, len = the header length). The SHARED borrow that
+        // pins the source string while the view is live is registered in ST_LET.
+        if e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.field != null && e.lhs.field.eq("as_bytes") && (e.args == null || e.args.len() == 0) && e.lhs.lhs != null {
+            let _abr: *Type = infer_expr(t, e.lhs.lhs);
+            if _abr != null && _abr.kind == TY_NAMED && _abr.name != null && _abr.name.eq("string") {
+                return ty_slice(ty_named("u8"));
+            }
+        }
         // `free(x)` where x is a borrow: a borrow is a view, never the owner.
         // (The cast form `free(r as *void)` carries the borrow under EX_CAST.)
         if e.lhs != null && e.lhs.kind == EX_IDENT && e.lhs.str_val != null && e.lhs.str_val.eq("free") && e.args != null && e.args.len() == 1 {
@@ -5479,6 +5520,9 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
     if e.kind == EX_INDEX {
         let _u4: *Type = infer_expr(t, e.lhs);
         let _u5: *Type = infer_expr(t, e.rhs);
+        if _u4 != null && _u4.kind == TY_SLICE {
+            return _u4.inner; // slice[i] -> element type
+        }
         return null; // Need element type. Defer.
     }
     if e.kind == EX_CAST {

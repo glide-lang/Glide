@@ -1,0 +1,22 @@
+// B4: string.as_bytes() -> zero-copy []u8 view over the SDS data (no copy). The
+// source string is SHARED-borrowed while the view is live: reading it stays legal,
+// but reassigning/freeing it is a compile error (assign/free-while-borrowed) —
+// those negatives are verified manually. Here the read path is exercised.
+fn test_as_bytes_read() -> i32 {
+    let s: string = "hello".concat("!");
+    let bs: []u8 = s.as_bytes();
+    assert!(bs.len == 6);
+    assert!(bs[0] as i32 == 104);   // 'h'
+    assert!(bs[5] as i32 == 33);    // '!'
+    assert!(s.len() == 6);          // reading the source is allowed (shared borrow)
+    return 0;
+}
+
+// B5: annotation-free as_bytes.
+fn test_as_bytes_infer() -> i32 {
+    let s: string = "ab".concat("c");
+    let bs = s.as_bytes();
+    assert!(bs.len == 3);
+    assert!(bs[2] as i32 == 99);   // 'c'
+    return 0;
+}

@@ -1,0 +1,186 @@
+// Ephemeral-string drop (opt-in `let s*: string`): a string local the compiler
+// proves heap-allocated (disjoint producer), unaliased, and dead at scope end is
+// freed there — bounding RAM in long-running loops. Any ESCAPING string (returned,
+// stored in a field, aliased) is left untouched, so a wrong free would surface
+// here as garbage or a crash. Each case asserts real values end-to-end.
+struct SBox { name: string }
+
+// s is used only by len() => droppable => malloc-routed + freed each iteration.
+fn droppable_sum() -> i64 {
+    let mut acc: i64 = 0;
+    for i in 0..1000 {
+        let s*: string = format!("item-{}", i);
+        acc = acc + (s.len() as i64);
+    }
+    return acc;
+}
+
+// s escapes via return => the analysis must NOT free it.
+fn escapes_via_return(a: string, b: string) -> string {
+    let s*: string = a.concat(b);
+    return s;
+}
+
+// s escapes into a field => must NOT be freed.
+fn escapes_via_field(bx: *SBox, a: string) {
+    let s*: string = a.concat("!");
+    bx.name = s;
+}
+
+fn test_ephemeral_dropped() -> i32 {
+    // sum of len("item-i") for i in 0..1000: 10*6 + 90*7 + 900*8 = 7890.
+    assert!(droppable_sum() == 7890);
+    return 0;
+}
+
+fn test_return_escape_survives() -> i32 {
+    let r: string = escapes_via_return("foo", "bar");
+    assert!(r.eq("foobar"));
+    return 0;
+}
+
+fn test_field_escape_survives() -> i32 {
+    let bx: *SBox = calloc(1, sizeof(SBox)) as *SBox;
+    escapes_via_field(bx, "x");
+    assert!(bx.name.eq("x!"));
+    return 0;
+}
+
+// Phase 2: accumulator free-on-overwrite. Each `out = out.concat(..)` frees the
+// previous buffer; the returned final survives. 50k iters stays ~O(len), not O(n^2).
+fn accumulate(n: i32) -> string {
+    let mut out*: string = "";
+    for i in 0..n { out = out.concat("x"); }
+    return out;
+}
+
+// Storing an intermediate must DISQUALIFY the accumulator (else the stored
+// pointer would be freed on the next overwrite -> UAF). Here the field must
+// still read back correctly.
+fn accumulate_store(bx: *SBox, n: i32) {
+    let mut out*: string = "";
+    for i in 0..n { out = out.concat("y"); bx.name = out; }
+}
+
+fn test_accumulator_builds() -> i32 {
+    assert!(accumulate(5).eq("xxxxx"));
+    assert!(accumulate(50000).len() == 50000);
+    return 0;
+}
+
+fn test_accumulator_store_disqualified() -> i32 {
+    let bx: *SBox = calloc(1, sizeof(SBox)) as *SBox;
+    accumulate_store(bx, 100);
+    assert!(bx.name.len() == 100);
+    return 0;
+}
+
+// Phase 3: a string used only via an immutable borrow `&s` stays droppable
+// (a second-class borrow can't be retained), so passing it to a `&string` fn
+// does not disqualify the drop.
+fn slen(x: &string) -> i32 {
+    return x.len();
+}
+
+fn test_borrow_use_stays_droppable() -> i32 {
+    let s*: string = "foo".concat("bar");
+    assert!(slen(&s) == 6);
+    return 0;
+}
+
+// A substring producer must be malloc-routed like concat/format! (it used to
+// alloc straight from the bump arena, so freeing its droppable result was a
+// bad-free). This exercises that fixed path.
+fn substring_drop(a: string) -> i32 {
+    let s*: string = a.substring(1, 4);
+    return s.len();
+}
+
+fn test_substring_drop_no_badfree() -> i32 {
+    assert!(substring_drop("abcdef") == 3);
+    return 0;
+}
+
+// Inference: the same drops now fire WITHOUT the opt-in `*` — plain `let s` /
+// `let mut out` are recognized by provenance (producer RHS / "" seed).
+fn infer_sum() -> i64 {
+    let mut acc: i64 = 0;
+    for i in 0..1000 {
+        let s = format!("item-{}", i);       // no *, no : string
+        acc = acc + (s.len() as i64);
+    }
+    return acc;
+}
+
+fn infer_accumulate(n: i32) -> string {
+    let mut out = "";                        // no *
+    for i in 0..n { out = out.concat("x"); }
+    return out;
+}
+
+fn test_inferred_ephemeral() -> i32 {
+    assert!(infer_sum() == 7890);
+    return 0;
+}
+
+fn test_inferred_accumulator() -> i32 {
+    assert!(infer_accumulate(5).eq("xxxxx"));
+    assert!(infer_accumulate(50000).len() == 50000);
+    return 0;
+}
+
+// A0 (red-team fix): a string sent through a `select!` arm must NOT be dropped
+// at scope end — the channel keeps it in flight. Before the walker visited
+// select_arms, this was a use-after-free.
+fn test_select_send_string_survives() -> i32 {
+    let ch: chan<string> = make_chan(2);
+    let s = format!("msg-{}", 42);
+    select! {
+        ch.send(s) => {}
+        default => {}
+    }
+    let got: string = ch.recv();
+    assert!(got.eq("msg-42"));
+    return 0;
+}
+
+// A2 (interprocedural retention): passing a string to a callee that only READS
+// it (non-retaining) no longer disqualifies the drop; passing to one that STORES
+// it still does. Both must stay memory-correct.
+fn ret_reader(x: string) -> i32 { return x.len(); }
+fn ret_keeper(bx: *SBox, x: string) { bx.name = x; }
+
+fn test_retention_reader_correct() -> i32 {
+    let mut acc: i64 = 0;
+    for i in 0..1000 { let s = format!("v-{}", i); acc = acc + (ret_reader(s) as i64); }
+    assert!(acc == 4890);
+    return 0;
+}
+
+fn test_retention_keeper_safe() -> i32 {
+    let bx: *SBox = calloc(1, sizeof(SBox)) as *SBox;
+    ret_keeper(bx, "a".concat("b"));
+    assert!(bx.name.eq("ab"));
+    return 0;
+}
+
+// A3 (retention fixpoint): forwarding chains resolve transitively. wrap->reader
+// is non-retaining (drops); fwd->keeper retains (disqualifies). Both stay correct.
+fn a3_log(x: string) -> i32 { return x.len(); }
+fn a3_wrap(x: string) -> i32 { return a3_log(x); }
+fn a3_store(bx: *SBox, x: string) { bx.name = x; }
+fn a3_fwd(bx: *SBox, x: string) { a3_store(bx, x); }
+
+fn test_retention_forward_reader() -> i32 {
+    let mut acc: i64 = 0;
+    for i in 0..1000 { let s = format!("v-{}", i); acc = acc + (a3_wrap(s) as i64); }
+    assert!(acc == 4890);
+    return 0;
+}
+
+fn test_retention_forward_keeper_safe() -> i32 {
+    let bx: *SBox = calloc(1, sizeof(SBox)) as *SBox;
+    a3_fwd(bx, "a".concat("b"));
+    assert!(bx.name.eq("ab"));
+    return 0;
+}
