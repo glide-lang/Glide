@@ -42,10 +42,15 @@ void __glide_str_own_push(void) { g_str_own++; }
 void __glide_str_own_pop(void)  { if (g_str_own > 0) g_str_own--; }
 static char* __glide_str_alloc(int len) {
     if (len < 0) len = 0;
-    char* base = (g_str_own > 0)
+    int owned = (g_str_own > 0);
+    char* base = owned
         ? (char*)malloc((size_t)(4 + len + 1))
         : (char*)__glide_palloc(4 + len + 1);
     __glide_str_hdr_set(base, len);
+    /* High bit of the length header = "owned" (malloc-backed, individually
+       freeable). Set only on the malloc path so __glide_string_free can no-op
+       on arena/literal strings -- making a stray drop harmless, not a bad free. */
+    if (owned) base[3] = (char)((unsigned char)base[3] | 0x80u);
     base[4 + len] = 0;
     return base + 4;
 }
@@ -57,6 +62,7 @@ static char* __glide_str_alloc_owned(int len) {
     if (len < 0) len = 0;
     char* base = (char*)malloc((size_t)(4 + len + 1));
     __glide_str_hdr_set(base, len);
+    base[3] = (char)((unsigned char)base[3] | 0x80u);   /* owned bit */
     base[4 + len] = 0;
     return base + 4;
 }
@@ -65,11 +71,16 @@ static char* __glide_str_alloc_owned(int len) {
    by the compiler on provably-owned, provably-dead, un-aliased string locals. */
 static void __glide_string_free(const char* s) {
     if (!s) return;
+    /* No-op unless the owned bit (header high byte, at s[-1]) is set: freeing an
+       arena/literal string is a bad free (munmap_chunk abort). This makes the
+       drop analysis's frees safe even if a candidate turns out non-owned. */
+    if (!((unsigned char)s[-1] & 0x80u)) return;
     free((void*)(s - 4));
 }
-/* Header length read (unaligned-safe). Used by phase-2 __glide_string_len. */
+/* Header length read (unaligned-safe). Masks off the owned high bit. Used by
+   phase-2 __glide_string_len. */
 static int __glide_str_hdr_len(const char* s) {
-    int l; memcpy(&l, s - 4, 4); return l;
+    unsigned int u; memcpy(&u, s - 4, 4); return (int)(u & 0x7fffffffu);
 }
 /* Phase 2: O(1) length from the header (every string is headered — literals via
    codegen, allocations via __glide_str_alloc, FFI returns via __glide_string_adopt). */
