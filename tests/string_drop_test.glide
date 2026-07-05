@@ -100,3 +100,31 @@ fn test_substring_drop_no_badfree() -> i32 {
     assert!(substring_drop("abcdef") == 3);
     return 0;
 }
+
+// Inference: the same drops now fire WITHOUT the opt-in `*` — plain `let s` /
+// `let mut out` are recognized by provenance (producer RHS / "" seed).
+fn infer_sum() -> i64 {
+    let mut acc: i64 = 0;
+    for i in 0..1000 {
+        let s = format!("item-{}", i);       // no *, no : string
+        acc = acc + (s.len() as i64);
+    }
+    return acc;
+}
+
+fn infer_accumulate(n: i32) -> string {
+    let mut out = "";                        // no *
+    for i in 0..n { out = out.concat("x"); }
+    return out;
+}
+
+fn test_inferred_ephemeral() -> i32 {
+    assert!(infer_sum() == 7890);
+    return 0;
+}
+
+fn test_inferred_accumulator() -> i32 {
+    assert!(infer_accumulate(5).eq("xxxxx"));
+    assert!(infer_accumulate(50000).len() == 50000);
+    return 0;
+}
