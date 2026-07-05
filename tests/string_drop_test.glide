@@ -206,3 +206,21 @@ fn test_a4_reader_macro_drops() -> i32 {
     assert!(a4_reader_sum() == 4390);
     return 0;
 }
+
+// Leak fix: `<scalar>.to_string()` is an always-fresh producer (formats into a
+// new buffer, never aliases), so it now DROPS instead of leaking in the never-
+// freed run arena. Value-correct end-to-end (a bad free would abort/garble).
+fn tostring_sum() -> i64 {
+    let mut acc: i64 = 0;
+    for i in 0..1000 {
+        let s = i.to_string();
+        acc = acc + (s.len() as i64);
+    }
+    return acc;
+}
+
+fn test_scalar_tostring_drops() -> i32 {
+    // sum of digits-count of i for 0..1000: 10*1 + 90*2 + 900*3 = 2890.
+    assert!(tostring_sum() == 2890);
+    return 0;
+}

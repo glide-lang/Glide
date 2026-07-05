@@ -1261,13 +1261,42 @@ fn _str_stmt_escapes(g: *CG, name: string, st: *Stmt) -> bool {
 }
 // Droppable IFF opt-in `let s*`, string-typed, disjoint-alloc RHS, and no
 // escaping use anywhere in the enclosing function body.
+// A producer whose result is ALWAYS a fresh, unaliased string (never returns an
+// existing/`self` buffer), so dropping it is sound. Superset of
+// _str_rhs_disjoint_alloc: adds `int_to_str(x)` (formats into a new buffer) and
+// `<non-string>.to_string()` (int/float/bool/… allocate anew; a string's
+// to_string returns self, excluded by the receiver-type check, and unknown types
+// stay conservative). These were the biggest source of run-arena leaks — every
+// `.to_string()` in a loop stuck a string in the never-freed bump run.
+fn _str_rhs_fresh(g: *CG, e: *Expr) -> bool {
+    if e == null { return false; }
+    if _str_rhs_disjoint_alloc(e) { return true; }
+    if e.kind == EX_CALL && e.lhs != null {
+        if e.lhs.kind == EX_IDENT && e.lhs.str_val != null && e.lhs.str_val.eq("int_to_str") { return true; }
+        if e.lhs.kind == EX_MEMBER && e.lhs.field != null && e.lhs.field.eq("to_string")
+            && (e.args == null || e.args.len() == 0) && e.lhs.lhs != null {
+            // ONLY scalar-primitive to_string is the always-fresh builtin. A user
+            // type's to_string may `return self.some_field` (an alias), and a
+            // string's returns self — both unsafe to drop, so exclude them.
+            let rt: *Type = infer_for_codegen(g, e.lhs.lhs);
+            if rt != null && rt.kind == TY_NAMED && rt.name != null {
+                let n: string = rt.name;
+                if n.eq("i8") || n.eq("i16") || n.eq("i32") || n.eq("i64")
+                    || n.eq("u8") || n.eq("u16") || n.eq("u32") || n.eq("u64")
+                    || n.eq("f32") || n.eq("f64") || n.eq("int") || n.eq("uint")
+                    || n.eq("usize") || n.eq("isize") || n.eq("bool") || n.eq("char") { return true; }
+            }
+        }
+    }
+    return false;
+}
 fn _str_let_droppable(g: *CG, st: *Stmt) -> bool {
     if st == null { return false; }
-    // A disjoint producer (format!/concat/substring) always returns `string`, so
-    // no explicit annotation is required (`let s = format!(..)`); if a type IS
-    // written it must be string.
+    // A disjoint producer (format!/concat/substring/int_to_str/<non-string>.
+    // to_string) always returns `string`, so no explicit annotation is required
+    // (`let s = format!(..)`); if a type IS written it must be string.
     if st.let_ty != null && (st.let_ty.kind != TY_NAMED || st.let_ty.name == null || !st.let_ty.name.eq("string")) { return false; }
-    if !_str_rhs_disjoint_alloc(st.let_value) { return false; }
+    if !_str_rhs_fresh(g, st.let_value) { return false; }
     if st.name == null || st.name.eq("") { return false; }
     if g.cur_fn_body == null { return false; }
     if _str_stmts_escape(g, st.name, g.cur_fn_body) { return false; }
