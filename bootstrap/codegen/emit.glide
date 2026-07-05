@@ -901,6 +901,8 @@ pub struct CG {
     pub cur_fn_body: *Vector<Stmt>, // body of the function being emitted (ephemeral-string drop scan)
     pub str_acc: *HashMap<string>,  // accumulator string local name -> its owned-shadow C var
     pub str_acc_ctr: i32,           // unique suffix for shadow vars
+    pub str_retains: *HashMap<bool>, // "fn#argidx" -> does that fn retain that string arg
+    pub str_retain_building: bool,   // true while computing the summary (forces all-retain)
     // Associated-type lookup for `<Trait>::<Concrete>::<Item>`. Populated
     // up front from every `impl Trait for Type { type Item = X; }`.
     pub assoc_table: *HashMap<Type>,
@@ -1052,80 +1054,122 @@ fn _str_rhs_disjoint_alloc(e: *Expr) -> bool {
     }
     return false;
 }
-fn _str_args_escape(name: string, args: *Vector<Expr>) -> bool {
+fn _str_args_escape(g: *CG, name: string, args: *Vector<Expr>) -> bool {
     if args == null { return false; }
     for let i: i32 = 0; i < args.len(); i = i + 1 {
         let a: Expr = args.get(i);
-        if _str_expr_escapes(name, &a) { return true; }
+        if _str_expr_escapes(g, name, &a) { return true; }
     }
     return false;
 }
-fn _str_arms_escape(name: string, arms: *Vector<MatchArm>) -> bool {
+// Callee key for retention lookup: a user free-fn -> its name; else "" (=> retain).
+fn _str_callee_key(g: *CG, call: *Expr) -> string {
+    if call == null || call.lhs == null { return ""; }
+    if call.lhs.kind == EX_IDENT && call.lhs.str_val != null && g.fns.contains(call.lhs.str_val) {
+        return call.lhs.str_val;
+    }
+    return "";
+}
+// Does the callee RETAIN argument `idx` (store / return / pass it onward)? The
+// safe default is RETAIN (true): unknown / unresolved / indirect / method /
+// extern / dyn / generic callees, and anything while the summary is still being
+// built, all retain. Only a resolved user fn with a computed non-retaining entry
+// relaxes to false.
+fn callee_retains_arg(g: *CG, call: *Expr, idx: i32) -> bool {
+    if g.str_retain_building { return true; }
+    let key: string = _str_callee_key(g, call);
+    if key.eq("") { return true; }
+    let ik: string = key.concat("#").concat(idx.to_string());
+    if g.str_retains.contains(ik) { return g.str_retains.get(ik); }
+    return true;
+}
+// Retention-aware call-arg check: a bare-ident string arg handed to a param the
+// callee does NOT retain is a safe pass; anything else stays conservative.
+fn _str_call_args_escape(g: *CG, name: string, call: *Expr) -> bool {
+    if call.args == null { return false; }
+    for let i: i32 = 0; i < call.args.len(); i = i + 1 {
+        let a: Expr = call.args.get(i);
+        if a.kind == EX_IDENT && a.str_val != null && a.str_val.eq(name) {
+            if callee_retains_arg(g, call, i) { return true; }
+        } else {
+            if _str_expr_escapes(g, name, &a) { return true; }
+        }
+    }
+    return false;
+}
+fn _str_arms_escape(g: *CG, name: string, arms: *Vector<MatchArm>) -> bool {
     if arms == null { return false; }
     for let i: i32 = 0; i < arms.len(); i = i + 1 {
         let ar: MatchArm = arms.get(i);
-        if _str_expr_escapes(name, ar.lit) { return true; }
-        if _str_stmts_escape(name, ar.body) { return true; }
+        if _str_expr_escapes(g, name, ar.lit) { return true; }
+        if _str_stmts_escape(g, name, ar.body) { return true; }
     }
     return false;
 }
-fn _str_expr_escapes(name: string, e: *Expr) -> bool {
+fn _str_expr_escapes(g: *CG, name: string, e: *Expr) -> bool {
     if e == null { return false; }
     if e.kind == EX_IDENT { return e.str_val != null && e.str_val.eq(name); }
     // `&s` (immutable read-borrow) is second-class: it cannot be stored or
     // returned, so it never retains s -> a safe use.
     if e.kind == EX_UNARY && e.op_code == UN_ADDR && e.operand != null && e.operand.kind == EX_IDENT && e.operand.str_val != null && e.operand.str_val.eq(name) { return false; }
+    // reader-receiver: name.<reader>(args) — receiver read-only, check the args.
     if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER
         && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT && e.lhs.lhs.str_val != null
         && e.lhs.lhs.str_val.eq(name) && _is_str_read_only(e.lhs.field) {
-        return _str_args_escape(name, e.args);
+        return _str_args_escape(g, name, e.args);
     }
-    if _str_expr_escapes(name, e.lhs) { return true; }
-    if _str_expr_escapes(name, e.rhs) { return true; }
-    if _str_expr_escapes(name, e.operand) { return true; }
-    if _str_expr_escapes(name, e.macro_recv) { return true; }
-    if _str_args_escape(name, e.args) { return true; }
-    if _str_stmts_escape(name, e.block_stmts) { return true; }
-    if _str_stmts_escape(name, e.fn_expr_body) { return true; }
-    if _str_arms_escape(name, e.match_arms) { return true; }
+    // general call: the callee expr + retention-aware argument positions.
+    if e.kind == EX_CALL {
+        if _str_expr_escapes(g, name, e.lhs) { return true; }
+        if _str_call_args_escape(g, name, e) { return true; }
+        return false;
+    }
+    if _str_expr_escapes(g, name, e.lhs) { return true; }
+    if _str_expr_escapes(g, name, e.rhs) { return true; }
+    if _str_expr_escapes(g, name, e.operand) { return true; }
+    if _str_expr_escapes(g, name, e.macro_recv) { return true; }
+    if _str_args_escape(g, name, e.args) { return true; }
+    if _str_stmts_escape(g, name, e.block_stmts) { return true; }
+    if _str_stmts_escape(g, name, e.fn_expr_body) { return true; }
+    if _str_arms_escape(g, name, e.match_arms) { return true; }
     return false;
 }
-fn _str_stmts_escape(name: string, list: *Vector<Stmt>) -> bool {
+fn _str_stmts_escape(g: *CG, name: string, list: *Vector<Stmt>) -> bool {
     if list == null { return false; }
     for let i: i32 = 0; i < list.len(); i = i + 1 {
         let st: Stmt = list.get(i);
-        if _str_stmt_escapes(name, &st) { return true; }
+        if _str_stmt_escapes(g, name, &st) { return true; }
     }
     return false;
 }
 // select! arms funnel a string into a channel (send_value) that later frees it,
 // or into an arm body — must be visited or a `select!{ ch.send(s) => .. }` would
 // let the drop free an in-flight string.
-fn _str_selectarms_escape(name: string, arms: *Vector<SelectArm>) -> bool {
+fn _str_selectarms_escape(g: *CG, name: string, arms: *Vector<SelectArm>) -> bool {
     if arms == null { return false; }
     for let i: i32 = 0; i < arms.len(); i = i + 1 {
         let ar: SelectArm = arms.get(i);
-        if _str_expr_escapes(name, ar.chan_expr) { return true; }
-        if _str_expr_escapes(name, ar.send_value) { return true; }
-        if _str_stmts_escape(name, ar.body) { return true; }
+        if _str_expr_escapes(g, name, ar.chan_expr) { return true; }
+        if _str_expr_escapes(g, name, ar.send_value) { return true; }
+        if _str_stmts_escape(g, name, ar.body) { return true; }
     }
     return false;
 }
-fn _str_stmt_escapes(name: string, st: *Stmt) -> bool {
+fn _str_stmt_escapes(g: *CG, name: string, st: *Stmt) -> bool {
     if st == null { return false; }
-    if _str_expr_escapes(name, st.let_value) { return true; }
-    if _str_expr_escapes(name, st.expr_value) { return true; }
-    if _str_expr_escapes(name, st.cond) { return true; }
-    if _str_expr_escapes(name, st.for_step) { return true; }
-    if _str_expr_escapes(name, st.scrutinee) { return true; }
-    if st.for_init != null && _str_stmt_escapes(name, st.for_init) { return true; }
-    if _str_stmts_escape(name, st.then_body) { return true; }
-    if _str_stmts_escape(name, st.else_body) { return true; }
-    if _str_stmts_escape(name, st.fn_body) { return true; }
-    if _str_arms_escape(name, st.arms) { return true; }
-    if _str_selectarms_escape(name, st.select_arms) { return true; }
-    if _str_args_escape(name, st.asm_out_exprs) { return true; }
-    if _str_args_escape(name, st.asm_in_exprs) { return true; }
+    if _str_expr_escapes(g, name, st.let_value) { return true; }
+    if _str_expr_escapes(g, name, st.expr_value) { return true; }
+    if _str_expr_escapes(g, name, st.cond) { return true; }
+    if _str_expr_escapes(g, name, st.for_step) { return true; }
+    if _str_expr_escapes(g, name, st.scrutinee) { return true; }
+    if st.for_init != null && _str_stmt_escapes(g, name, st.for_init) { return true; }
+    if _str_stmts_escape(g, name, st.then_body) { return true; }
+    if _str_stmts_escape(g, name, st.else_body) { return true; }
+    if _str_stmts_escape(g, name, st.fn_body) { return true; }
+    if _str_arms_escape(g, name, st.arms) { return true; }
+    if _str_selectarms_escape(g, name, st.select_arms) { return true; }
+    if _str_args_escape(g, name, st.asm_out_exprs) { return true; }
+    if _str_args_escape(g, name, st.asm_in_exprs) { return true; }
     return false;
 }
 // Droppable IFF opt-in `let s*`, string-typed, disjoint-alloc RHS, and no
@@ -1139,7 +1183,7 @@ fn _str_let_droppable(g: *CG, st: *Stmt) -> bool {
     if !_str_rhs_disjoint_alloc(st.let_value) { return false; }
     if st.name == null || st.name.eq("") { return false; }
     if g.cur_fn_body == null { return false; }
-    if _str_stmts_escape(st.name, g.cur_fn_body) { return false; }
+    if _str_stmts_escape(g, st.name, g.cur_fn_body) { return false; }
     return true;
 }
 
@@ -1368,6 +1412,9 @@ impl CG {
         let sacc: *HashMap<string> = HashMap::new();
         g.str_acc = sacc;
         g.str_acc_ctr = 0;
+        let sret: *HashMap<bool> = HashMap::new();
+        g.str_retains = sret;
+        g.str_retain_building = false;
         g.scope = s;
         g.generic_structs = gs;
         g.generic_fns = gf;
