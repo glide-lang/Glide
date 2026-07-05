@@ -1189,28 +1189,53 @@ fn _str_let_droppable(g: *CG, st: *Stmt) -> bool {
 fn _param_is_string(ty: *Type) -> bool {
     return ty != null && ty.kind == TY_NAMED && ty.name != null && ty.name.eq("string");
 }
-// Interprocedural retention summary (A2, intraprocedural): for each user free fn,
+// Interprocedural retention summary (A3, least-fixpoint): for each user free fn,
 // which string params ESCAPE the body (stored / returned / passed onward / sent)
-// => retained. A non-retaining param lets the drop pass keep a caller's string
-// droppable across the call. Built with callee_retains_arg forced all-retain
-// (str_retain_building), so this is a pure per-function summary. Absent entries
-// (extern / variadic / bodyless / unresolved callee) default to RETAIN.
+// => retained. Non-retaining params let the drop pass keep a caller's string
+// droppable across the call. Seed every analyzable free-fn string param OPTIMISTIC
+// (non-retaining), then iterate — recomputing each still-false param while
+// callee_retains_arg CONSULTS the partial table — until a full pass adds nothing.
+// Monotone (retention only turns true) => terminates; sound only at the fixpoint,
+// which is the only point the table is read (drop runs after codegen starts).
+// Forwarding chains resolve: wrap(s){ log(s) } with log read-only => wrap
+// non-retaining transitively. Absent entries (extern/variadic/bodyless/unresolved
+// callee: method/generic/indirect) default to RETAIN in callee_retains_arg.
 fn compute_str_retention(g: *CG) {
-    g.str_retain_building = true;
     let names: *Vector<string> = g.fns.keys();
+    // Seed: analyzable free-fn string params start non-retaining (false).
     for let i: i32 = 0; i < names.len(); i = i + 1 {
-        let fname: string = names.get(i);
-        let f: Stmt = g.fns.get(fname);
+        let f: Stmt = g.fns.get(names.get(i));
         if f.is_extern || f.is_variadic || f.fn_body == null || f.fn_params == null { continue; }
         for let k: i32 = 0; k < f.fn_params.len(); k = k + 1 {
             let p: Param = f.fn_params.get(k);
-            if _param_is_string(p.ty) {
-                let retains: bool = _str_stmts_escape(g, p.name, f.fn_body);
-                g.str_retains.insert(fname.concat("#").concat(k.to_string()), retains);
+            if _param_is_string(p.ty) { g.str_retains.insert(names.get(i).concat("#").concat(k.to_string()), false); }
+        }
+    }
+    // Fixpoint: consult the partial table (building=false), flip false->true only.
+    g.str_retain_building = false;
+    let mut changed: bool = true;
+    let mut iters: i32 = 0;
+    while changed && iters < 60 {
+        changed = false;
+        iters = iters + 1;
+        for let i: i32 = 0; i < names.len(); i = i + 1 {
+            let fname: string = names.get(i);
+            let f: Stmt = g.fns.get(fname);
+            if f.is_extern || f.is_variadic || f.fn_body == null || f.fn_params == null { continue; }
+            for let k: i32 = 0; k < f.fn_params.len(); k = k + 1 {
+                let p: Param = f.fn_params.get(k);
+                if _param_is_string(p.ty) {
+                    let key: string = fname.concat("#").concat(k.to_string());
+                    if !g.str_retains.get(key) {
+                        if _str_stmts_escape(g, p.name, f.fn_body) {
+                            g.str_retains.insert(key, true);
+                            changed = true;
+                        }
+                    }
+                }
             }
         }
     }
-    g.str_retain_building = false;
 }
 
 // ---- Phase 2: accumulator free-on-overwrite (`let mut out*: string = "")` ----

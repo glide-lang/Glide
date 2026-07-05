@@ -163,3 +163,24 @@ fn test_retention_keeper_safe() -> i32 {
     assert!(bx.name.eq("ab"));
     return 0;
 }
+
+// A3 (retention fixpoint): forwarding chains resolve transitively. wrap->reader
+// is non-retaining (drops); fwd->keeper retains (disqualifies). Both stay correct.
+fn a3_log(x: string) -> i32 { return x.len(); }
+fn a3_wrap(x: string) -> i32 { return a3_log(x); }
+fn a3_store(bx: *SBox, x: string) { bx.name = x; }
+fn a3_fwd(bx: *SBox, x: string) { a3_store(bx, x); }
+
+fn test_retention_forward_reader() -> i32 {
+    let mut acc: i64 = 0;
+    for i in 0..1000 { let s = format!("v-{}", i); acc = acc + (a3_wrap(s) as i64); }
+    assert!(acc == 4890);
+    return 0;
+}
+
+fn test_retention_forward_keeper_safe() -> i32 {
+    let bx: *SBox = calloc(1, sizeof(SBox)) as *SBox;
+    a3_fwd(bx, "a".concat("b"));
+    assert!(bx.name.eq("ab"));
+    return 0;
+}
