@@ -4998,32 +4998,58 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                     _elem = _ixty.inner;
                 }
             }
-            print!("({int __lo=(");
-            emit_expr(g, e.rhs.lhs);
-            print!(");int __hi=(");
-            emit_expr(g, e.rhs.rhs);
-            print!(");(");
-            print!(type_to_c(ty_slice(_elem)));
-            print!("){(");
-            emit_expr(g, e.lhs);
+            let _slnm: string = type_to_c(ty_slice(_elem));
+            // __end = exclusive upper bound (hi, or hi+1 for `..=`). A SLICE base
+            // is bounds-CHECKED at construction (0<=lo<=end<=len) so the subview
+            // can't reach past the parent — this is what makes the checked
+            // element access above sound. A raw-pointer base is the manual layer.
             if _is_sl {
-                print!(").ptr+__lo,__hi-__lo");
+                print!("({");
+                print!(_slnm);
+                print!(" __s=(");
+                emit_expr(g, e.lhs);
+                print!(");int __lo=(");
+                emit_expr(g, e.rhs.lhs);
+                print!(");int __end=(");
+                emit_expr(g, e.rhs.rhs);
+                if e.rhs.bool_val {
+                    print!(")+1;");
+                } else {
+                    print!(");");
+                }
+                print!("if(__lo<0||__end>__s.len||__lo>__end)__glide_panic(\"slice range out of bounds\",\"\",", e.line, ");(");
+                print!(_slnm);
+                print!("){__s.ptr+__lo,__end-__lo};})");
             } else {
-                print!(")+__lo,__hi-__lo");
-            }
-            if e.rhs.bool_val {
-                print!("+1};})");
-            } else {
-                print!("};})");
+                print!("({int __lo=(");
+                emit_expr(g, e.rhs.lhs);
+                print!(");int __end=(");
+                emit_expr(g, e.rhs.rhs);
+                if e.rhs.bool_val {
+                    print!(")+1;(");
+                } else {
+                    print!(");(");
+                }
+                print!(_slnm);
+                print!("){(");
+                emit_expr(g, e.lhs);
+                print!(")+__lo,__end-__lo};})");
             }
             return;
         }
         if _ixty != null && _ixty.kind == TY_SLICE {
-            print!("(");
+            // Safe-layer bounds check: a slice carries its len, so `sl[i]` is
+            // CHECKED — an out-of-range index panics instead of reading past the
+            // view. Raw-pointer `p[i]` (manual layer) stays unchecked. The
+            // stmt-expr yields `T*` and we deref, so `sl[i]` is still an lvalue
+            // (`sl[i] = x` works). Index evaluated once.
+            print!("(*({");
+            print!(type_to_c(_ixty));
+            print!(" __s=(");
             emit_expr(g, e.lhs);
-            print!(").ptr[");
+            print!(");int __i=(");
             emit_expr(g, e.rhs);
-            print!("]");
+            print!(");if(__i<0||__i>=__s.len)__glide_panic(\"slice index out of bounds\",\"\",", e.line, ");__s.ptr+__i;}))");
             return;
         }
         emit_expr(g, e.lhs);
