@@ -588,6 +588,27 @@ fn _emit_optres_method(g: *CG, e: *Expr) -> bool {
 // Intrinsic methods on Option (`?T`) / Result (`!T`). Emits an inline
 // statement-expr and returns true when `e` is such a method call; false lets
 // the caller fall through to normal dispatch. Mirrors the chan method block.
+// as_bytes() intrinsic: `string.as_bytes()` -> zero-copy `[]u8` view; ptr is the
+// SDS data pointer (the string value), len is __glide_string_len (O(1), reads the
+// header). No copy, no allocation.
+fn _emit_str_as_bytes_method(g: *CG, e: *Expr) -> bool {
+    if e.lhs == null || e.lhs.kind != EX_MEMBER || e.lhs.field == null || !e.lhs.field.eq("as_bytes") {
+        return false;
+    }
+    if e.args != null && e.args.len() > 0 {
+        return false;
+    }
+    let recv_e: *Expr = e.lhs.lhs;
+    let recv_ty: *Type = infer_for_codegen(g, recv_e);
+    if recv_ty == null || recv_ty.kind != TY_NAMED || recv_ty.name == null || !recv_ty.name.eq("string") {
+        return false;
+    }
+    register_slice_type(g, ty_named("u8"));
+    print!("({ const char* __sv = (");
+    emit_expr(g, recv_e);
+    print!("); (__glide_slice_u8){ (uint8_t*)__sv, (int)__glide_string_len(__sv) }; })");
+    return true;
+}
 // as_slice() intrinsic: `Vector<T>.as_slice()` -> a fat-pointer `{ ptr, len }`
 // over the source's data+len. Evaluated once via a statement-expr.
 fn _emit_slice_method(g: *CG, e: *Expr) -> bool {
@@ -4612,6 +4633,9 @@ pub fn emit_expr(g: *CG, e: *Expr) {
             }
         }
         // ---- Option / Result intrinsic methods ----
+        if _emit_str_as_bytes_method(g, e) {
+            return;
+        }
         if _emit_slice_method(g, e) {
             return;
         }

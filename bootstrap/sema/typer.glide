@@ -4047,6 +4047,17 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
             record_borrow(t, _slsrc, true, s.name, s.line, s.column);
         }
     }
+    // `let bs = s.as_bytes()` SHARED-borrows the source string: assigning or
+    // freeing s while bs is live is a compile error (assign/free-while-borrowed
+    // fire on shared borrows too), while reads of s stay legal. MANDATORY — the
+    // ONLY guard on the owned-local `let mut out* = <heap>` overwrite-free path
+    // (emit.glide) that the drop-disqualification does not cover.
+    if s.kind == ST_LET && s.let_value != null && s.let_value.kind == EX_CALL && s.let_value.lhs != null && s.let_value.lhs.kind == EX_MEMBER && s.let_value.lhs.field != null && s.let_value.lhs.field.eq("as_bytes") && s.let_value.lhs.lhs != null {
+        let _absrc: string = _borrow_root_ident(s.let_value.lhs.lhs);
+        if !_absrc.eq("") {
+            record_borrow(t, _absrc, false, s.name, s.line, s.column);
+        }
+    }
     // Copying a borrow: `let b = a` where a is borrow-typed. A shared copy is
     // a second live view (recorded so overlap/NLL survive the chain); copying
     // a `&mut` MOVES it — the old binder\'s exclusive view ends and later uses
@@ -4818,6 +4829,15 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 let _elp: *Type = __glide_palloc(sizeof(Type)) as *Type;
                 *_elp = _ass.args.get(0);
                 return ty_slice(_elp);
+            }
+        }
+        // as_bytes() intrinsic: `string.as_bytes()` -> `[]u8`, a zero-copy view
+        // (ptr = the SDS data, len = the header length). The SHARED borrow that
+        // pins the source string while the view is live is registered in ST_LET.
+        if e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.field != null && e.lhs.field.eq("as_bytes") && (e.args == null || e.args.len() == 0) && e.lhs.lhs != null {
+            let _abr: *Type = infer_expr(t, e.lhs.lhs);
+            if _abr != null && _abr.kind == TY_NAMED && _abr.name != null && _abr.name.eq("string") {
+                return ty_slice(ty_named("u8"));
             }
         }
         // `free(x)` where x is a borrow: a borrow is a view, never the owner.
