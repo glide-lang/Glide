@@ -1072,6 +1072,9 @@ fn _str_arms_escape(name: string, arms: *Vector<MatchArm>) -> bool {
 fn _str_expr_escapes(name: string, e: *Expr) -> bool {
     if e == null { return false; }
     if e.kind == EX_IDENT { return e.str_val != null && e.str_val.eq(name); }
+    // `&s` (immutable read-borrow) is second-class: it cannot be stored or
+    // returned, so it never retains s -> a safe use.
+    if e.kind == EX_UNARY && e.op_code == UN_ADDR && e.operand != null && e.operand.kind == EX_IDENT && e.operand.str_val != null && e.operand.str_val.eq(name) { return false; }
     if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER
         && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT && e.lhs.lhs.str_val != null
         && e.lhs.lhs.str_val.eq(name) && _is_str_read_only(e.lhs.field) {
@@ -1151,6 +1154,7 @@ fn _str_acc_arms_bad(name: string, arms: *Vector<MatchArm>) -> bool {
 fn _str_acc_use_bad(name: string, e: *Expr) -> bool {
     if e == null { return false; }
     if e.kind == EX_IDENT { return e.str_val != null && e.str_val.eq(name); }
+    if e.kind == EX_UNARY && e.op_code == UN_ADDR && e.operand != null && e.operand.kind == EX_IDENT && e.operand.str_val != null && e.operand.str_val.eq(name) { return false; }
     // accumulator reassign: `out = <disjoint producer>` (producer may read out)
     if e.kind == EX_ASSIGN && e.lhs != null && e.lhs.kind == EX_IDENT && e.lhs.str_val != null && e.lhs.str_val.eq(name) {
         if !op_to_c(e.op_code).eq("=") { return true; }

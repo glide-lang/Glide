@@ -74,3 +74,16 @@ fn test_accumulator_store_disqualified() -> i32 {
     assert!(bx.name.len() == 100);
     return 0;
 }
+
+// Phase 3: a string used only via an immutable borrow `&s` stays droppable
+// (a second-class borrow can't be retained), so passing it to a `&string` fn
+// does not disqualify the drop.
+fn slen(x: &string) -> i32 {
+    return x.len();
+}
+
+fn test_borrow_use_stays_droppable() -> i32 {
+    let s*: string = "foo".concat("bar");
+    assert!(slen(&s) == 6);
+    return 0;
+}

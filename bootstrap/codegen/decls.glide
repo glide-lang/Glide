@@ -2331,6 +2331,9 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         }
         let saved_ret_mono: *Type = g.current_ret_ty;
         g.current_ret_ty = new_ret;
+        let saved_cfb_q: *Vector<Stmt> = g.cur_fn_body;
+        g.cur_fn_body = new_body;
+        g.str_acc.clear();
         if _body_has_defer(new_body) {
             ind(1);
             println!("char __gdefer[256] = {0};");
@@ -2341,6 +2344,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         }
         g.emit_deferred_reverse(1, "");
         g.current_ret_ty = saved_ret_mono;
+        g.cur_fn_body = saved_cfb_q;
         g.defer_stack = saved_d;
         g.auto_drop_stack = saved_dr;
         g.defer_flags = saved_df_q;
@@ -2389,6 +2393,9 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         // closure body lower against the closure's declared return type.
         let saved_ret_anon: *Type = g.current_ret_ty;
         g.current_ret_ty = af.ret_ty;
+        let saved_cfb_a: *Vector<Stmt> = g.cur_fn_body;
+        g.cur_fn_body = af.body;
+        g.str_acc.clear();
         if af.body != null && _body_has_defer(af.body) {
             ind(1);
             println!("char __gdefer[256] = {0};");
@@ -2400,6 +2407,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
             }
         }
         g.current_ret_ty = saved_ret_anon;
+        g.cur_fn_body = saved_cfb_a;
         g.emit_deferred_reverse(1, "");
         g.defer_stack = saved_d;
         g.auto_drop_stack = saved_dr;
