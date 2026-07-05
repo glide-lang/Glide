@@ -184,3 +184,25 @@ fn test_retention_forward_keeper_safe() -> i32 {
     assert!(bx.name.eq("ab"));
     return 0;
 }
+
+// A4 (macro-arg readers): a producer string whose only use is a READER macro
+// (format!/println!/print!) is non-retaining -> it drops each iteration. format!
+// copies its args into a fresh buffer; it never retains them. A bad free (or a
+// wrongly-dropped literal) would garble or abort, so real values are asserted.
+fn a4_reader_sum() -> i64 {
+    let mut acc: i64 = 0;
+    for i in 0..500 {
+        let s = format!("row-{}", i);   // producer; used only by the format! below
+        let t = format!("[{}]", s);     // s flows into a reader macro -> s droppable
+        acc = acc + (t.len() as i64);
+    }
+    return acc;
+}
+
+fn test_a4_reader_macro_drops() -> i32 {
+    // len("[row-i]") = len("row-i") + 2. digits(i): 0..9 ->1, 10..99 ->2, 100..499 ->3.
+    // s len = 4 + digits; t len = s + 2 = 6 + digits.
+    // 10*(7) + 90*(8) + 400*(9) = 70 + 720 + 3600 = 4390.
+    assert!(a4_reader_sum() == 4390);
+    return 0;
+}

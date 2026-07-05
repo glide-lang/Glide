@@ -1101,10 +1101,16 @@ fn _str_rhs_disjoint_alloc(e: *Expr) -> bool {
     if e.kind == EX_MACRO && e.str_val != null && e.str_val.eq("format") { return true; }
     if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.field != null {
         let m: string = e.lhs.field;
-        if m.eq("concat") || m.eq("substring") {
-            let recv: *Expr = e.lhs.lhs;
-            if recv != null && (recv.kind == EX_IDENT || recv.kind == EX_STRING) { return true; }
-        }
+        let recv: *Expr = e.lhs.lhs;
+        let nargs: i32 = if e.args != null { e.args.len() } else { 0 };
+        let recv_ok: bool = recv != null && (recv.kind == EX_IDENT || recv.kind == EX_STRING);
+        // ONLY `string.concat(x)` / `string.substring(a,b)` are provably a fresh,
+        // g_str_own-routed allocation (always malloc-backed when owned). Pin by
+        // ARITY so we don't misclassify `Vector.concat()` / `.join()` (0/1 args),
+        // which return the STATIC "" literal for an empty vector — dropping that
+        // frees a non-malloc pointer and aborts (munmap_chunk: invalid pointer).
+        if m.eq("concat") && nargs == 1 && recv_ok { return true; }
+        if m.eq("substring") && nargs == 2 && recv_ok { return true; }
     }
     return false;
 }
@@ -1160,9 +1166,36 @@ fn _str_arms_escape(g: *CG, name: string, arms: *Vector<MatchArm>) -> bool {
     }
     return false;
 }
+// A4 (macro-arg readers): reader macros only READ their args (print / compare /
+// copy into a fresh buffer), so a bare-ident string arg is NOT retained.
+fn _is_reader_macro(m: string) -> bool {
+    if m == null { return false; }
+    // ONLY macros that print-and-discard or copy-and-discard their args (never
+    // return/store them). `format!` copies args into a fresh buffer; the print
+    // family writes to a stream. Deliberately EXCLUDES `dbg!` (returns its arg
+    // -> passthrough escape) and the `stdlib::log` macros (info!/warn!/… —
+    // unverified retention). Conservative keeps A4 sound.
+    return m.eq("format") || m.eq("println") || m.eq("print")
+        || m.eq("eprintln") || m.eq("eprint");
+}
 fn _str_expr_escapes(g: *CG, name: string, e: *Expr) -> bool {
     if e == null { return false; }
     if e.kind == EX_IDENT { return e.str_val != null && e.str_val.eq(name); }
+    // A4: a bare-ident string handed to a reader macro is a safe read; nested
+    // producer args still recurse. (recv-form `recv.name!(args)` recurses recv.)
+    if e.kind == EX_MACRO && e.str_val != null && _is_reader_macro(e.str_val) {
+        if _str_expr_escapes(g, name, e.macro_recv) { return true; }
+        if e.args != null {
+            for let i: i32 = 0; i < e.args.len(); i = i + 1 {
+                let a: Expr = e.args.get(i);
+                if a.kind == EX_IDENT && a.str_val != null && a.str_val.eq(name) {
+                    continue;
+                }
+                if _str_expr_escapes(g, name, &a) { return true; }
+            }
+        }
+        return false;
+    }
     // `&s` (immutable read-borrow) is second-class: it cannot be stored or
     // returned, so it never retains s -> a safe use.
     if e.kind == EX_UNARY && e.op_code == UN_ADDR && e.operand != null && e.operand.kind == EX_IDENT && e.operand.str_val != null && e.operand.str_val.eq(name) { return false; }
