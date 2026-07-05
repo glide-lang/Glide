@@ -1452,6 +1452,14 @@ pub fn collect_slice_in_expr(g: *CG, e: *Expr) {
             }
         }
     }
+    // B3 range slice `base[lo..hi]` synthesizes a `[]elem` fat pointer whose
+    // typedef must be declared (mirrors the as_slice path above).
+    if e.kind == EX_INDEX && e.rhs != null && e.rhs.kind == EX_RANGE {
+        let _rb: *Type = infer_for_codegen(g, e.lhs);
+        if _rb != null && _rb.inner != null && (_rb.kind == TY_SLICE || _rb.kind == TY_POINTER || _rb.kind == TY_BORROW || _rb.kind == TY_BORROW_MUT) {
+            register_slice_type(g, _rb.inner);
+        }
+    }
     if e.cast_to != null {
         collect_slice_in_type(g, e.cast_to);
     }
@@ -2746,6 +2754,13 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
     if e.kind == EX_INDEX {
         let base: *Type = infer_for_codegen(g, e.lhs);
         if base == null {
+            return null;
+        }
+        // B3 range slice: `base[lo..hi]` -> `[]elem` fat pointer.
+        if e.rhs != null && e.rhs.kind == EX_RANGE {
+            if base.kind == TY_SLICE || base.kind == TY_POINTER || base.kind == TY_BORROW || base.kind == TY_BORROW_MUT {
+                return ty_slice(base.inner);
+            }
             return null;
         }
         if base.kind == TY_POINTER || base.kind == TY_BORROW || base.kind == TY_BORROW_MUT || base.kind == TY_SLICE {

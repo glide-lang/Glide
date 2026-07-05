@@ -4053,6 +4053,18 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
             record_borrow(t, _absrc, false, s.name, s.line, s.column);
         }
     }
+    // `let s = base[lo..hi]` (range slice) EXCLUSIVELY re-borrows a SLICE base,
+    // mirroring as_slice: mutating/reassigning/freeing the base while s lives is
+    // an error. Raw-pointer bases are the manual layer -> not borrow-tracked.
+    if s.kind == ST_LET && s.let_value != null && s.let_value.kind == EX_INDEX && s.let_value.rhs != null && s.let_value.rhs.kind == EX_RANGE && s.let_value.lhs != null {
+        let _rbase: *Type = infer_expr(t, s.let_value.lhs);
+        if _rbase != null && _rbase.kind == TY_SLICE {
+            let _rsrc: string = _borrow_root_ident(s.let_value.lhs);
+            if !_rsrc.eq("") {
+                record_borrow(t, _rsrc, true, s.name, s.line, s.column);
+            }
+        }
+    }
     // Copying a borrow: `let b = a` where a is borrow-typed. A shared copy is
     // a second live view (recorded so overlap/NLL survive the chain); copying
     // a `&mut` MOVES it — the old binder\'s exclusive view ends and later uses
@@ -5514,6 +5526,18 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
     }
     if e.kind == EX_INDEX {
         let _u4: *Type = infer_expr(t, e.lhs);
+        // B3 range slice: `base[lo..hi]` yields a `[]elem` fat-pointer view of
+        // base (a re-borrow — see the ST_LET borrow registration). Base must be
+        // a slice `[]T` or a raw pointer `*T`; Vector/string go via as_slice/
+        // .substring. Infer lo/hi for their own side effects/borrow tracking.
+        if e.rhs != null && e.rhs.kind == EX_RANGE {
+            infer_expr(t, e.rhs.lhs);
+            infer_expr(t, e.rhs.rhs);
+            if _u4 != null && (_u4.kind == TY_SLICE || _u4.kind == TY_POINTER) {
+                return ty_slice(_u4.inner);
+            }
+            return null;
+        }
         let _u5: *Type = infer_expr(t, e.rhs);
         if _u4 != null && _u4.kind == TY_SLICE {
             return _u4.inner; // slice[i] -> element type

@@ -2818,10 +2818,20 @@ fn parse_expr(p: *Parser, min_bp: i32) -> *Expr {
             left = expr_call(left, args);
             continue;
         }
-        // index []
+        // index []  — plain `[i]` or range slice `[lo..hi]` / `[lo..=hi]`
         if p.at_op("[") {
+            let bline: i32 = p.current.line;
+            let bcol: i32 = p.current.column;
             p.advance();
             let idx: *Expr = parse_expr(p, 0);
+            if p.at_op("..") || p.at_op("..=") {
+                let inclusive: bool = p.at_op("..=");
+                p.advance();
+                let hi: *Expr = parse_expr(p, 0);
+                p.expect_op("]");
+                left = expr_index(left, expr_range(idx, hi, inclusive, bline, bcol));
+                continue;
+            }
             p.expect_op("]");
             left = expr_index(left, idx);
             continue;

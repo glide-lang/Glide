@@ -81,6 +81,7 @@ pub const EX_IF: i32 = 23; // `if cond { then } else { else }` — single-expr b
 pub const EX_BLOCK: i32 = 24; // `{ stmts; return val; }` as expression. block_stmts holds stmts (without the trailing return), operand holds the yielded value.
 pub const EX_MATCH: i32 = 25; // `match e { ... }` as expression. lhs=scrutinee, match_arms=arms. A bare `=> expr` arm yields its value (synthesized return marked is_arm_yield); a user-written `return` exits the enclosing fn.
 pub const EX_TUPLE: i32 = 26; // `(a, b, ...)` tuple literal. element exprs in `args`. zero args = unit `()`.
+pub const EX_RANGE: i32 = 27; // `lo..hi` / `lo..=hi`. lhs=lo, rhs=hi, bool_val=inclusive. Only appears as the index of an EX_INDEX (range slicing `arr[lo..hi]`).
 // Binary op codes (subset; extend as needed)
 pub const OP_ADD: i32 = 1;
 pub const OP_SUB: i32 = 2;
@@ -1125,6 +1126,17 @@ pub fn expr_index(obj: *Expr, idx: *Expr) -> *Expr {
     e.column = obj.column;
     e.lhs = obj;
     e.rhs = idx;
+    return e;
+}
+
+pub fn expr_range(lo: *Expr, hi: *Expr, inclusive: bool, line: i32, col: i32) -> *Expr {
+    let e: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
+    e.kind = EX_RANGE;
+    e.line = line;
+    e.column = col;
+    e.lhs = lo;
+    e.rhs = hi;
+    e.bool_val = inclusive;
     return e;
 }
 

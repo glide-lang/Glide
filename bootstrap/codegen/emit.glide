@@ -4984,6 +4984,40 @@ pub fn emit_expr(g: *CG, e: *Expr) {
     }
     if e.kind == EX_INDEX {
         let _ixty: *Type = infer_for_codegen(g, e.lhs);
+        // B3 range slice: `base[lo..hi]` -> `(__glide_slice_T){ptr,len}`. Bind
+        // lo/hi to temps so an effectful bound is evaluated exactly once. A slice
+        // base indexes through `.ptr`; a raw-pointer base is the bare pointer.
+        if e.rhs != null && e.rhs.kind == EX_RANGE {
+            let mut _elem: *Type = null;
+            let mut _is_sl: bool = false;
+            if _ixty != null && _ixty.kind == TY_SLICE {
+                _elem = _ixty.inner;
+                _is_sl = true;
+            } else {
+                if _ixty != null {
+                    _elem = _ixty.inner;
+                }
+            }
+            print!("({int __lo=(");
+            emit_expr(g, e.rhs.lhs);
+            print!(");int __hi=(");
+            emit_expr(g, e.rhs.rhs);
+            print!(");(");
+            print!(type_to_c(ty_slice(_elem)));
+            print!("){(");
+            emit_expr(g, e.lhs);
+            if _is_sl {
+                print!(").ptr+__lo,__hi-__lo");
+            } else {
+                print!(")+__lo,__hi-__lo");
+            }
+            if e.rhs.bool_val {
+                print!("+1};})");
+            } else {
+                print!("};})");
+            }
+            return;
+        }
         if _ixty != null && _ixty.kind == TY_SLICE {
             print!("(");
             emit_expr(g, e.lhs);

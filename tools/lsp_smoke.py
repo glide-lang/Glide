@@ -2086,6 +2086,23 @@ case_diagnostics("borrowing a container element is rejected",
     '    let r = &mut v[0];\n    return 0;\n}',
     expect_codes_present=["borrow-vector-element"])
 
+case_diagnostics("using a slice while a range subslice borrows it is rejected",
+    'fn main() -> i32 {\n'
+    '    let v: *Vector<i32> = Vector::new();\n    v.push(1);\n    v.push(2);\n'
+    '    let sl = v.as_slice();\n'
+    '    let sub = sl[0..1];\n'
+    '    let y = sl.len;\n'
+    '    return sub.len + y;\n}',
+    expect_codes_present=["use-while-mut-borrowed"])
+
+case_diagnostics("a range subslice used without touching its base is clean",
+    'fn main() -> i32 {\n'
+    '    let v: *Vector<i32> = Vector::new();\n    v.push(1);\n    v.push(2);\n'
+    '    let sl = v.as_slice();\n'
+    '    let sub = sl[0..1];\n'
+    '    return sub.len;\n}',
+    expect_codes_absent=["use-while-mut-borrowed"])
+
 case_diagnostics("same-root mutable aliasing in one call is rejected",
     'struct S { a: i32, b: i32 }\n'
     'fn f(x: &mut i32, y: &mut i32) { *x = 1; *y = 2; }\n'
