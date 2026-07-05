@@ -1433,6 +1433,25 @@ pub fn collect_slice_in_expr(g: *CG, e: *Expr) {
     if e == null {
         return;
     }
+    // Annotation-free `v.as_slice()` / `s.as_bytes()`: no []T annotation to walk,
+    // so the element type is known only by inference (needs the live g.scope set
+    // by the scoped collect driver in emit_program). Mirrors _emit_slice_method.
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.field != null && e.lhs.lhs != null && (e.args == null || e.args.len() == 0) {
+        if e.lhs.field.eq("as_slice") {
+            let _rt: *Type = strip_ptr(infer_for_codegen(g, e.lhs.lhs));
+            if _rt != null && _rt.kind == TY_GENERIC && _rt.name != null && _rt.name.eq("Vector") && _rt.args != null && _rt.args.len() > 0 {
+                let _ep: *Type = __glide_palloc(sizeof(Type)) as *Type;
+                *_ep = _rt.args.get(0);
+                register_slice_type(g, _ep);
+            }
+        }
+        if e.lhs.field.eq("as_bytes") {
+            let _brt: *Type = infer_for_codegen(g, e.lhs.lhs);
+            if _brt != null && _brt.kind == TY_NAMED && _brt.name != null && _brt.name.eq("string") {
+                register_slice_type(g, ty_named("u8"));
+            }
+        }
+    }
     if e.cast_to != null {
         collect_slice_in_type(g, e.cast_to);
     }
@@ -1472,6 +1491,12 @@ pub fn collect_slice_in_expr(g: *CG, e: *Expr) {
 pub fn collect_slice_in_stmt(g: *CG, s: *Stmt) {
     if s == null {
         return;
+    }
+    // Declare a let's local into the live scope (its let_ty was backfilled by
+    // the driver's infer_let_types) so a later `local.as_slice()`/`.as_bytes()`
+    // in a sibling statement can infer the receiver's type during collection.
+    if s.kind == ST_LET && s.let_ty != null && s.name != null && !s.name.eq("") {
+        g.declare(s.name, s.let_ty);
     }
     if s.let_ty != null {
         collect_slice_in_type(g, s.let_ty);
@@ -2389,6 +2414,24 @@ pub fn emit_stdlib_runtime() {
 pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
     if e == null {
         return null;
+    }
+    // as_slice()/as_bytes() intrinsics — mirror the typer so an annotation-free
+    // `let sl = v.as_slice()` / `let bs = s.as_bytes()` gets the right slice type.
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.field != null && e.lhs.lhs != null && (e.args == null || e.args.len() == 0) {
+        if e.lhs.field.eq("as_slice") {
+            let _sr: *Type = strip_ptr(infer_for_codegen(g, e.lhs.lhs));
+            if _sr != null && _sr.kind == TY_GENERIC && _sr.name != null && _sr.name.eq("Vector") && _sr.args != null && _sr.args.len() > 0 {
+                let _sep: *Type = __glide_palloc(sizeof(Type)) as *Type;
+                *_sep = _sr.args.get(0);
+                return ty_slice(_sep);
+            }
+        }
+        if e.lhs.field.eq("as_bytes") {
+            let _sbr: *Type = infer_for_codegen(g, e.lhs.lhs);
+            if _sbr != null && _sbr.kind == TY_NAMED && _sbr.name != null && _sbr.name.eq("string") {
+                return ty_slice(ty_named("u8"));
+            }
+        }
     }
     if e.kind == EX_INT {
         // Mirror infer_expr in the typer: literals that overflow 32-bit

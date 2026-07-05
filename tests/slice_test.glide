@@ -20,3 +20,14 @@ fn test_slice_read() -> i32 {
     assert!(sl[1] == 20);
     return 0;
 }
+
+// B5: annotation-free — `let sl = v.as_slice()` (no []i32) infers the slice type.
+fn test_slice_infer() -> i32 {
+    let v: *Vector<i32> = Vector::new();
+    v.push(5); v.push(7);
+    let sl = v.as_slice();
+    assert!(sl.len == 2);
+    assert!(sl[1] == 7);
+    assert!(v.as_slice().len == 2);
+    return 0;
+}

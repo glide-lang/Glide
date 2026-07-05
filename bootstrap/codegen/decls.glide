@@ -1730,9 +1730,21 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
     // by the `?Struct`/`!Struct` result-option pre-pass below) sees the
     // type. The vtable bodies + thunks still come later via emit_dyn_runtime.
     emit_dyn_fat_pointers(g, program);
-    // Slice fat-pointer typedefs (one { T* ptr; int len; } per [T] element used).
+    // Slice fat-pointer typedefs (one { T* ptr; int len; } per []T element used).
+    // Per-fn scope + let_ty backfill so an annotation-free `v.as_slice()` /
+    // `s.as_bytes()` can infer its receiver's type during the collect.
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
+        if s.kind == ST_FN && s.fn_body != null {
+            g.scope.clear();
+            if s.fn_params != null {
+                for let k: i32 = 0; k < s.fn_params.len(); k++ {
+                    let p: Param = s.fn_params.get(k);
+                    g.declare(p.name, p.ty);
+                }
+            }
+            infer_let_types(g, s.fn_body);
+        }
         collect_slice_in_stmt(g, &s);
     }
     emit_slice_fat_pointers(g);

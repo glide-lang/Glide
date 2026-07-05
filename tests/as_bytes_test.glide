@@ -11,3 +11,12 @@ fn test_as_bytes_read() -> i32 {
     assert!(s.len() == 6);          // reading the source is allowed (shared borrow)
     return 0;
 }
+
+// B5: annotation-free as_bytes.
+fn test_as_bytes_infer() -> i32 {
+    let s: string = "ab".concat("c");
+    let bs = s.as_bytes();
+    assert!(bs.len == 3);
+    assert!(bs[2] as i32 == 99);   // 'c'
+    return 0;
+}
