@@ -143,3 +143,23 @@ fn test_select_send_string_survives() -> i32 {
     assert!(got.eq("msg-42"));
     return 0;
 }
+
+// A2 (interprocedural retention): passing a string to a callee that only READS
+// it (non-retaining) no longer disqualifies the drop; passing to one that STORES
+// it still does. Both must stay memory-correct.
+fn ret_reader(x: string) -> i32 { return x.len(); }
+fn ret_keeper(bx: *SBox, x: string) { bx.name = x; }
+
+fn test_retention_reader_correct() -> i32 {
+    let mut acc: i64 = 0;
+    for i in 0..1000 { let s = format!("v-{}", i); acc = acc + (ret_reader(s) as i64); }
+    assert!(acc == 4890);
+    return 0;
+}
+
+fn test_retention_keeper_safe() -> i32 {
+    let bx: *SBox = calloc(1, sizeof(SBox)) as *SBox;
+    ret_keeper(bx, "a".concat("b"));
+    assert!(bx.name.eq("ab"));
+    return 0;
+}

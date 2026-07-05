@@ -1186,6 +1186,32 @@ fn _str_let_droppable(g: *CG, st: *Stmt) -> bool {
     if _str_stmts_escape(g, st.name, g.cur_fn_body) { return false; }
     return true;
 }
+fn _param_is_string(ty: *Type) -> bool {
+    return ty != null && ty.kind == TY_NAMED && ty.name != null && ty.name.eq("string");
+}
+// Interprocedural retention summary (A2, intraprocedural): for each user free fn,
+// which string params ESCAPE the body (stored / returned / passed onward / sent)
+// => retained. A non-retaining param lets the drop pass keep a caller's string
+// droppable across the call. Built with callee_retains_arg forced all-retain
+// (str_retain_building), so this is a pure per-function summary. Absent entries
+// (extern / variadic / bodyless / unresolved callee) default to RETAIN.
+fn compute_str_retention(g: *CG) {
+    g.str_retain_building = true;
+    let names: *Vector<string> = g.fns.keys();
+    for let i: i32 = 0; i < names.len(); i = i + 1 {
+        let fname: string = names.get(i);
+        let f: Stmt = g.fns.get(fname);
+        if f.is_extern || f.is_variadic || f.fn_body == null || f.fn_params == null { continue; }
+        for let k: i32 = 0; k < f.fn_params.len(); k = k + 1 {
+            let p: Param = f.fn_params.get(k);
+            if _param_is_string(p.ty) {
+                let retains: bool = _str_stmts_escape(g, p.name, f.fn_body);
+                g.str_retains.insert(fname.concat("#").concat(k.to_string()), retains);
+            }
+        }
+    }
+    g.str_retain_building = false;
+}
 
 // ---- Phase 2: accumulator free-on-overwrite (`let mut out*: string = "")` ----
 // `out` is an accumulator IFF every use is a reassignment `out = <disjoint

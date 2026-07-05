@@ -1997,6 +1997,10 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
             }
         }
     }
+    // All free fns are now in g.fns — compute the string-retention summary so
+    // the ephemeral-string drop can pass a string to a non-retaining callee
+    // without disqualifying it.
+    compute_str_retention(g);
     // Pre-pass: backfill `let v = Generic::new()` (no annot) by inferring T
     // from the first subsequent use of v. Must run AFTER generic fn registry
     // is populated and BEFORE the generic-uses collection below.
