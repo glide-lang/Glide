@@ -1730,6 +1730,12 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
     // by the `?Struct`/`!Struct` result-option pre-pass below) sees the
     // type. The vtable bodies + thunks still come later via emit_dyn_runtime.
     emit_dyn_fat_pointers(g, program);
+    // Slice fat-pointer typedefs (one { T* ptr; int len; } per [T] element used).
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        collect_slice_in_stmt(g, &s);
+    }
+    emit_slice_fat_pointers(g);
     // Pre-emit struct bodies for every Type that appears as an `impl Trait
     // for Type` target where Trait is dyn-used. The thunks emitted by
     // emit_dyn_runtime do `*(Type*)self_p`, which needs the full definition.

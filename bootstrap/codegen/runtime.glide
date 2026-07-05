@@ -1390,6 +1390,92 @@ pub fn emit_tuple_runtime(g: *CG) {
     println!("");
 }
 
+// ---- Slices: fat pointer { T* ptr; int len; } per element type -------------
+// A `[T]` is a borrowed view (ptr + length), emitted on demand like the dyn
+// fat pointers. Register the element type; emit one typedef per distinct elem.
+pub fn register_slice_type(g: *CG, elem: *Type) {
+    if elem == null {
+        return;
+    }
+    if elem.kind == TY_SLICE {
+        register_slice_type(g, elem.inner);
+    }
+    let m: string = mangle_type(elem);
+    for let i: i32 = 0; i < g.slice_types.len(); i++ {
+        let ex: Type = g.slice_types.get(i);
+        if mangle_type(&ex).eq(m) {
+            return;
+        }
+    }
+    g.slice_types.push(*elem);
+}
+pub fn collect_slice_in_type(g: *CG, t: *Type) {
+    if t == null {
+        return;
+    }
+    if t.kind == TY_SLICE {
+        register_slice_type(g, t.inner);
+    }
+    if t.inner != null {
+        collect_slice_in_type(g, t.inner);
+    }
+    if t.fnptr_ret != null {
+        collect_slice_in_type(g, t.fnptr_ret);
+    }
+    if t.args != null {
+        for let i: i32 = 0; i < t.args.len(); i++ {
+            let a: Type = t.args.get(i);
+            collect_slice_in_type(g, &a);
+        }
+    }
+}
+pub fn collect_slice_in_stmt(g: *CG, s: *Stmt) {
+    if s == null {
+        return;
+    }
+    if s.let_ty != null {
+        collect_slice_in_type(g, s.let_ty);
+    }
+    if s.fn_ret_ty != null {
+        collect_slice_in_type(g, s.fn_ret_ty);
+    }
+    if s.fn_params != null {
+        for let i: i32 = 0; i < s.fn_params.len(); i++ {
+            let p: Param = s.fn_params.get(i);
+            collect_slice_in_type(g, p.ty);
+        }
+    }
+    if s.struct_fields != null {
+        for let i: i32 = 0; i < s.struct_fields.len(); i++ {
+            let f: Field = s.struct_fields.get(i);
+            collect_slice_in_type(g, f.ty);
+        }
+    }
+    if s.impl_methods != null {
+        for let i: i32 = 0; i < s.impl_methods.len(); i++ {
+            let m: Stmt = s.impl_methods.get(i);
+            collect_slice_in_stmt(g, &m);
+        }
+    }
+}
+pub fn emit_slice_fat_pointers(g: *CG) {
+    if g.slice_types.len() == 0 {
+        return;
+    }
+    for let i: i32 = 0; i < g.slice_types.len(); i++ {
+        let elem: Type = g.slice_types.get(i);
+        let m: string = mangle_type(&elem);
+        print!("typedef struct __glide_slice_");
+        print!(m);
+        print!(" { ");
+        print!(type_to_c(&elem));
+        print!("* ptr; int len; } __glide_slice_");
+        print!(m);
+        println!(";");
+    }
+    println!("");
+}
+
 fn collect_chan_in_type(g: *CG, t: *Type) {
     if t == null {
         return;

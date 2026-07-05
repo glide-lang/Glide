@@ -897,6 +897,7 @@ pub struct CG {
     // gets one C struct typedef (`__glide_tuple<N>_..._t`). Collected program-
     // wide, emitted inner-first so nested tuples precede their containers.
     pub tuple_types: *Vector<Type>,
+    pub slice_types: *Vector<Type>, // element types of every [T] slice used (fat-pointer typedefs)
     pub current_ret_ty: *Type,
     pub cur_fn_body: *Vector<Stmt>, // body of the function being emitted (ephemeral-string drop scan)
     pub str_acc: *HashMap<string>,  // accumulator string local name -> its owned-shadow C var
@@ -1456,6 +1457,8 @@ impl CG {
         g.optres_types = ort;
         let tt: *Vector<Type> = Vector::new();
         g.tuple_types = tt;
+        let slt: *Vector<Type> = Vector::new();
+        g.slice_types = slt;
         let at: *HashMap<Type> = HashMap::new();
         g.assoc_table = at;
         g.current_ret_ty = null;
@@ -1741,7 +1744,7 @@ pub fn type_to_c(t: *Type) -> string {
         return type_to_c(t.inner).concat("*");
     }
     if t.kind == TY_SLICE {
-        return "/* []".concat(type_to_c(t.inner)).concat(" */ void*");
+        return "__glide_slice_".concat(mangle_type(t.inner));
     }
     if t.kind == TY_DYN {
         return "__glide_dyn_".concat(t.name);
