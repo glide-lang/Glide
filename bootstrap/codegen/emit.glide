@@ -1098,6 +1098,19 @@ fn _str_stmts_escape(name: string, list: *Vector<Stmt>) -> bool {
     }
     return false;
 }
+// select! arms funnel a string into a channel (send_value) that later frees it,
+// or into an arm body — must be visited or a `select!{ ch.send(s) => .. }` would
+// let the drop free an in-flight string.
+fn _str_selectarms_escape(name: string, arms: *Vector<SelectArm>) -> bool {
+    if arms == null { return false; }
+    for let i: i32 = 0; i < arms.len(); i = i + 1 {
+        let ar: SelectArm = arms.get(i);
+        if _str_expr_escapes(name, ar.chan_expr) { return true; }
+        if _str_expr_escapes(name, ar.send_value) { return true; }
+        if _str_stmts_escape(name, ar.body) { return true; }
+    }
+    return false;
+}
 fn _str_stmt_escapes(name: string, st: *Stmt) -> bool {
     if st == null { return false; }
     if _str_expr_escapes(name, st.let_value) { return true; }
@@ -1110,6 +1123,9 @@ fn _str_stmt_escapes(name: string, st: *Stmt) -> bool {
     if _str_stmts_escape(name, st.else_body) { return true; }
     if _str_stmts_escape(name, st.fn_body) { return true; }
     if _str_arms_escape(name, st.arms) { return true; }
+    if _str_selectarms_escape(name, st.select_arms) { return true; }
+    if _str_args_escape(name, st.asm_out_exprs) { return true; }
+    if _str_args_escape(name, st.asm_in_exprs) { return true; }
     return false;
 }
 // Droppable IFF opt-in `let s*`, string-typed, disjoint-alloc RHS, and no
@@ -1202,6 +1218,19 @@ fn _str_acc_stmt_bad(name: string, st: *Stmt) -> bool {
     if _str_acc_stmts_bad(name, st.else_body) { return true; }
     if _str_acc_stmts_bad(name, st.fn_body) { return true; }
     if _str_acc_arms_bad(name, st.arms) { return true; }
+    if _str_acc_selectarms_bad(name, st.select_arms) { return true; }
+    if _str_acc_args_bad(name, st.asm_out_exprs) { return true; }
+    if _str_acc_args_bad(name, st.asm_in_exprs) { return true; }
+    return false;
+}
+fn _str_acc_selectarms_bad(name: string, arms: *Vector<SelectArm>) -> bool {
+    if arms == null { return false; }
+    for let i: i32 = 0; i < arms.len(); i = i + 1 {
+        let ar: SelectArm = arms.get(i);
+        if _str_acc_use_bad(name, ar.chan_expr) { return true; }
+        if _str_acc_use_bad(name, ar.send_value) { return true; }
+        if _str_acc_stmts_bad(name, ar.body) { return true; }
+    }
     return false;
 }
 // Recognize `let mut out*: string = <literal>` whose every use is accumulator-safe.

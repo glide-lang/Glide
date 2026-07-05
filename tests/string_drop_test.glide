@@ -128,3 +128,18 @@ fn test_inferred_accumulator() -> i32 {
     assert!(infer_accumulate(50000).len() == 50000);
     return 0;
 }
+
+// A0 (red-team fix): a string sent through a `select!` arm must NOT be dropped
+// at scope end — the channel keeps it in flight. Before the walker visited
+// select_arms, this was a use-after-free.
+fn test_select_send_string_survives() -> i32 {
+    let ch: chan<string> = make_chan(2);
+    let s = format!("msg-{}", 42);
+    select! {
+        ch.send(s) => {}
+        default => {}
+    }
+    let got: string = ch.recv();
+    assert!(got.eq("msg-42"));
+    return 0;
+}
