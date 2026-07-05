@@ -87,3 +87,16 @@ fn test_borrow_use_stays_droppable() -> i32 {
     assert!(slen(&s) == 6);
     return 0;
 }
+
+// A substring producer must be malloc-routed like concat/format! (it used to
+// alloc straight from the bump arena, so freeing its droppable result was a
+// bad-free). This exercises that fixed path.
+fn substring_drop(a: string) -> i32 {
+    let s*: string = a.substring(1, 4);
+    return s.len();
+}
+
+fn test_substring_drop_no_badfree() -> i32 {
+    assert!(substring_drop("abcdef") == 3);
+    return 0;
+}

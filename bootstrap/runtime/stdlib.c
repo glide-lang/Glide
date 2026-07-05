@@ -105,11 +105,8 @@ static const char* __glide_string_substring(const char* s, int start, int end) {
     if (end < start) end = start;
     if (end > slen) end = slen;
     int cap = end - start;
-    char* base = (char*)__glide_palloc(4 + cap + 1);
-    char* out = base + 4;
+    char* out = __glide_str_alloc(cap);  /* routes through g_str_own (ownable) */
     if (cap > 0) memcpy(out, s + start, (size_t)cap);
-    out[cap] = 0;
-    __glide_str_hdr_set(base, cap);
     return out;
 }
 /* Backs the panic! / todo! / unimplemented! / unreachable! macros: print the
