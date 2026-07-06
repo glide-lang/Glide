@@ -47,6 +47,35 @@ pub struct JsonValue {
     pub obj_vals: *Vector<JsonValue>,
 }
 
+// Recursively free the owned Vector infrastructure of a JsonValue tree — its
+// arr / obj_vals / obj_keys and, transitively, every child's — but NOT the node
+// struct itself. Array/object children live BY VALUE inside their parent's Vector
+// buffer, so they are reclaimed when that buffer is freed (Vector.free releases
+// only its data buffer + struct, never per-element), not individually. String
+// payloads are SDS (arena-managed), left as-is.
+fn _json_free_inner(v: *JsonValue) {
+    if v == null { return; }
+    if v.kind == JSON_ARRAY && v.arr != null {
+        for let i: i32 = 0; i < v.arr.len(); i++ {
+            let e: JsonValue = v.arr.get(i);
+            _json_free_inner(&e);
+        }
+        v.arr.free();
+    }
+    if v.kind == JSON_OBJECT {
+        if v.obj_vals != null {
+            for let i: i32 = 0; i < v.obj_vals.len(); i++ {
+                let e: JsonValue = v.obj_vals.get(i);
+                _json_free_inner(&e);
+            }
+            v.obj_vals.free();
+        }
+        if v.obj_keys != null {
+            v.obj_keys.free();
+        }
+    }
+}
+
 // Printing a JsonValue (e.g. `println!(v.to_json())`) emits the serialized
 // JSON text rather than a pointer or the internal field dump.
 impl Display for JsonValue {
@@ -282,6 +311,16 @@ impl JsonValue {
         if self.kind == JSON_ARRAY  { return self.arr.len(); }
         if self.kind == JSON_OBJECT { return self.obj_keys.len(); }
         return 0;
+    }
+
+    /// Recursively free a JsonValue tree (typically a `JsonValue::parse` result):
+    /// the arr/obj Vectors of every node plus the root struct. Pair a parse with
+    /// `defer v.free();`. Safe on null. (String payloads are arena-managed, so
+    /// they are reclaimed with the arena, not here.)
+    pub fn free(self: *JsonValue) {
+        if self == null { return; }
+        _json_free_inner(self);
+        free(self as *void);
     }
 
     /// Read as string. Empty string for non-strings / `null`.

@@ -133,3 +133,20 @@ fn test_round_trip() -> i32 {
     assert!(parsed.get("nada").is_null());
     return 0;
 }
+
+// Recursive JsonValue::free reclaims the arr/obj Vectors of a whole nested tree.
+// Access all nested values FIRST (so a premature free would read garbage), then
+// free; a double free of any shared child Vector would abort. `free(null)` is a
+// no-op. Looped so a leak/UAF would show as a crash or wrong value.
+fn test_recursive_free() -> i32 {
+    for i in 0..2000 {
+        let v: *JsonValue = JsonValue::parse("{\"a\":[1,[2,3],{\"z\":9}],\"b\":{\"c\":[true,\"x\"]}}");
+        assert_eq!(v.get("a").at(1).at(0).as_int(), 2);
+        assert_eq!(v.get("a").at(2).get("z").as_int(), 9);
+        assert_str_eq!(v.get("b").get("c").at(1).as_string(), "x");
+        v.free();
+    }
+    let n: *JsonValue = JsonValue::parse("null");
+    n.free();
+    return 0;
+}
