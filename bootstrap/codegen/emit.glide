@@ -1371,6 +1371,151 @@ fn _own_stmt_escapes(g: *CG, name: string, st: *Stmt) -> bool {
     if _own_args_escape(g, name, st.asm_in_exprs) { return true; }
     return false;
 }
+// ---- Defer-aware drop veto -------------------------------------------------
+// emit_deferred_reverse drains scope-end auto-drops BEFORE explicit defers
+// (deliberately: `defer arena.free()` at fn-top must fire after the drops of
+// objects allocated inside it). So a defer body that MENTIONS an owned local
+// executes AFTER that local's drop — even a read-only use like
+// `defer println!(s.len())` reads freed memory, and a deferred `v.free()`
+// would be a second free. The escape walkers can't catch this: the hazard is
+// temporal (runs-after-drop), not a matter of which kind of use it is. Rule:
+// a local mentioned anywhere inside any defer/defer_err body of the enclosing
+// fn gets NO scope-end auto-drop — it leaks (or the defer's own free is the
+// cleanup), it never UAFs or double-frees.
+fn _ment_args(name: string, args: *Vector<Expr>) -> bool {
+    if args == null { return false; }
+    for let i: i32 = 0; i < args.len(); i = i + 1 {
+        let a: Expr = args.get(i);
+        if _ment_expr(name, &a) { return true; }
+    }
+    return false;
+}
+fn _ment_arms(name: string, arms: *Vector<MatchArm>) -> bool {
+    if arms == null { return false; }
+    for let i: i32 = 0; i < arms.len(); i = i + 1 {
+        let ar: MatchArm = arms.get(i);
+        if _ment_expr(name, ar.lit) { return true; }
+        if _ment_stmts(name, ar.body) { return true; }
+    }
+    return false;
+}
+fn _ment_selectarms(name: string, arms: *Vector<SelectArm>) -> bool {
+    if arms == null { return false; }
+    for let i: i32 = 0; i < arms.len(); i = i + 1 {
+        let ar: SelectArm = arms.get(i);
+        if _ment_expr(name, ar.chan_expr) { return true; }
+        if _ment_expr(name, ar.send_value) { return true; }
+        if _ment_stmts(name, ar.body) { return true; }
+    }
+    return false;
+}
+// ANY occurrence of the bare ident `name` in the expression tree.
+fn _ment_expr(name: string, e: *Expr) -> bool {
+    if e == null { return false; }
+    if e.kind == EX_IDENT { return e.str_val != null && e.str_val.eq(name); }
+    if _ment_expr(name, e.lhs) { return true; }
+    if _ment_expr(name, e.rhs) { return true; }
+    if _ment_expr(name, e.operand) { return true; }
+    if _ment_expr(name, e.macro_recv) { return true; }
+    if _ment_args(name, e.args) { return true; }
+    if _ment_stmts(name, e.block_stmts) { return true; }
+    if _ment_stmts(name, e.fn_expr_body) { return true; }
+    if _ment_arms(name, e.match_arms) { return true; }
+    return false;
+}
+fn _ment_stmts(name: string, list: *Vector<Stmt>) -> bool {
+    if list == null { return false; }
+    for let i: i32 = 0; i < list.len(); i = i + 1 {
+        let st: Stmt = list.get(i);
+        if _ment_stmt(name, &st) { return true; }
+    }
+    return false;
+}
+fn _ment_stmt(name: string, st: *Stmt) -> bool {
+    if st == null { return false; }
+    if _ment_expr(name, st.let_value) { return true; }
+    if _ment_expr(name, st.expr_value) { return true; }
+    if _ment_expr(name, st.cond) { return true; }
+    if _ment_expr(name, st.for_step) { return true; }
+    if _ment_expr(name, st.scrutinee) { return true; }
+    if st.for_init != null && _ment_stmt(name, st.for_init) { return true; }
+    if _ment_stmts(name, st.then_body) { return true; }
+    if _ment_stmts(name, st.else_body) { return true; }
+    if _ment_stmts(name, st.fn_body) { return true; }
+    if _ment_arms(name, st.arms) { return true; }
+    if _ment_selectarms(name, st.select_arms) { return true; }
+    if _ment_args(name, st.asm_out_exprs) { return true; }
+    if _ment_args(name, st.asm_in_exprs) { return true; }
+    return false;
+}
+// True when some defer / defer_err statement in the subtree mentions `name`.
+// Recurses through nested blocks (if/for/match/select bodies) and block-exprs
+// so a defer registered inside a conditional is found too. A defer inside a
+// closure body (fn_expr_body) runs at the CLOSURE's exit, but vetoing on it
+// anyway is merely conservative (a leak, never a wrong free).
+fn _defer_uses_stmts(name: string, list: *Vector<Stmt>) -> bool {
+    if list == null { return false; }
+    for let i: i32 = 0; i < list.len(); i = i + 1 {
+        let st: Stmt = list.get(i);
+        if _defer_uses_stmt(name, &st) { return true; }
+    }
+    return false;
+}
+fn _defer_uses_arms(name: string, arms: *Vector<MatchArm>) -> bool {
+    if arms == null { return false; }
+    for let i: i32 = 0; i < arms.len(); i = i + 1 {
+        let ar: MatchArm = arms.get(i);
+        if _defer_uses_stmts(name, ar.body) { return true; }
+    }
+    return false;
+}
+fn _defer_uses_selectarms(name: string, arms: *Vector<SelectArm>) -> bool {
+    if arms == null { return false; }
+    for let i: i32 = 0; i < arms.len(); i = i + 1 {
+        let ar: SelectArm = arms.get(i);
+        if _defer_uses_stmts(name, ar.body) { return true; }
+    }
+    return false;
+}
+fn _defer_uses_args(name: string, args: *Vector<Expr>) -> bool {
+    if args == null { return false; }
+    for let i: i32 = 0; i < args.len(); i = i + 1 {
+        let a: Expr = args.get(i);
+        if _defer_uses_expr(name, &a) { return true; }
+    }
+    return false;
+}
+fn _defer_uses_expr(name: string, e: *Expr) -> bool {
+    if e == null { return false; }
+    if _defer_uses_expr(name, e.lhs) { return true; }
+    if _defer_uses_expr(name, e.rhs) { return true; }
+    if _defer_uses_expr(name, e.operand) { return true; }
+    if _defer_uses_expr(name, e.macro_recv) { return true; }
+    if _defer_uses_args(name, e.args) { return true; }
+    if _defer_uses_stmts(name, e.block_stmts) { return true; }
+    if _defer_uses_stmts(name, e.fn_expr_body) { return true; }
+    if _defer_uses_arms(name, e.match_arms) { return true; }
+    return false;
+}
+fn _defer_uses_stmt(name: string, st: *Stmt) -> bool {
+    if st == null { return false; }
+    if st.kind == ST_DEFER || st.kind == ST_DEFER_ERR {
+        return _ment_expr(name, st.expr_value);
+    }
+    if _defer_uses_expr(name, st.let_value) { return true; }
+    if _defer_uses_expr(name, st.expr_value) { return true; }
+    if _defer_uses_expr(name, st.cond) { return true; }
+    if _defer_uses_expr(name, st.for_step) { return true; }
+    if _defer_uses_expr(name, st.scrutinee) { return true; }
+    if st.for_init != null && _defer_uses_stmt(name, st.for_init) { return true; }
+    if _defer_uses_stmts(name, st.then_body) { return true; }
+    if _defer_uses_stmts(name, st.else_body) { return true; }
+    if _defer_uses_stmts(name, st.fn_body) { return true; }
+    if _defer_uses_arms(name, st.arms) { return true; }
+    if _defer_uses_selectarms(name, st.select_arms) { return true; }
+    return false;
+}
+
 // A fresh, sole-owner collection constructor: `Vector::new()` /
 // `Vector::with_capacity(n)` / `HashMap::new()` / `vec_of!(...)`.
 fn _vec_fresh_ctor(e: *Expr, tyname: string) -> bool {
@@ -1407,6 +1552,9 @@ fn _vec_let_droppable(g: *CG, st: *Stmt) -> bool {
     if st.name.starts_with("__") { return false; }
     if g.cur_fn_body == null { return false; }
     if _own_stmts_escape(g, st.name, g.cur_fn_body) { return false; }
+    // Defer bodies run after the scope-end drop (see the defer-veto block):
+    // even a receiver-safe `defer v.push(x)` would touch a freed vector.
+    if _defer_uses_stmts(st.name, g.cur_fn_body) { return false; }
     return true;
 }
 // Droppable IFF opt-in `let s*`, string-typed, disjoint-alloc RHS, and no
@@ -1471,6 +1619,9 @@ fn _str_let_droppable(g: *CG, st: *Stmt) -> bool {
     if st.name == null || st.name.eq("") { return false; }
     if g.cur_fn_body == null { return false; }
     if _str_stmts_escape(g, st.name, g.cur_fn_body) { return false; }
+    // Defer bodies run after the scope-end drop (see the defer-veto block):
+    // a read-only `defer println!(s.len())` would read the freed buffer.
+    if _defer_uses_stmts(st.name, g.cur_fn_body) { return false; }
     return true;
 }
 fn _param_is_string(ty: *Type) -> bool {
@@ -6102,6 +6253,19 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
             print!(shadow);
             println!(" = ((void*)0);");
             g.str_acc.insert(s.name, shadow);
+        }
+        // Defer-veto (see the defer-veto block above _vec_fresh_ctor): a local
+        // mentioned in any defer body outlives its scope-end drop point — the
+        // drop drains BEFORE the defers. Suppress the auto-drop entirely: a
+        // deferred `v.free()` becomes the single cleanup, and a read-only
+        // mention just leaks the value instead of reading freed memory. This
+        // covers the paths with no escape analysis of their own (struct-lit
+        // auto, explicit `let v*`, caller-side move, let-rebind move);
+        // _str_let_droppable / _vec_let_droppable veto internally.
+        if auto_owned && s.name != null && !s.name.eq("") && g.cur_fn_body != null {
+            if _defer_uses_stmts(s.name, g.cur_fn_body) {
+                auto_owned = false;
+            }
         }
         if str_drop {
             // Ephemeral string: free the malloc-backed buffer at scope end.
