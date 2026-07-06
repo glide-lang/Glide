@@ -1,5 +1,77 @@
 # Changelog
 
+## 0.8.0 — 2026-07-06
+
+The memory-safety release. Glide gains Rust-level memory safety **without Rust's
+complexity** — no lifetime annotations, ever — plus fat-pointer slices, and a
+stdlib that no longer leaks. The compiler self-hosts through all of it.
+
+### Memory safety — second-class borrows
+
+- **`&T` / `&mut T` are now second-class references.** A borrow flows *into* calls
+  (as a parameter or argument) but can never flow *out* — it can't be returned,
+  stored in a struct field, placed in a generic (`Vector<&T>`), a tuple, an `!`/`?`,
+  or sent across a task. That single rule is why Glide needs **zero lifetime
+  annotations**: a borrow can't outlive what it points at, by construction. The
+  checker enforces the full set — `borrow-return-type`, `return-borrow`,
+  `borrow-in-field`, `borrow-in-generic`, `borrow-escape`, `free-borrow`,
+  `borrow-vector-element`, `borrow-alias-in-call`, `overlap-borrow`,
+  `assign-while-borrowed`, `use-while-mut-borrowed`, `free-while-borrowed`, and
+  `use-after-move` (NLL-shaped: a borrow dies at its last use).
+- **Two-layer model.** The safe layer is values + second-class exclusive borrows +
+  owned heap (`let v =` auto-drop with move tracking): no dangling, no aliased
+  mutation, no use-after-free. The manual layer stays `*T` with `malloc`/`free` for
+  FFI and data-structure internals.
+- **impl-method bodies are borrow-checked.** Violations inside a method body that
+  previously slipped through the LSP-only path are now hard errors at build time.
+
+### Slices — fat pointers and the `&str` of Glide
+
+- **`[]T` is a real fat pointer** `{ T* ptr; int len; }`. `v.as_slice()` takes an
+  exclusive view; `s.as_bytes()` gives a `[]u8` **shared, zero-copy** view of a
+  string's UTF-8. No annotations.
+- **Range slicing `base[lo..hi]`** yields a zero-copy `[]T` subview (`..=` is
+  inclusive); on a string, `s[lo..hi]` is a `[]u8` view of the bytes — Glide's
+  `&str`, without lifetimes. Indexing a safe-layer slice is **bounds-checked** and
+  panics on out-of-range instead of reading wild memory.
+
+### Memory — auto-drop and leak-free stdlib
+
+- **Locals free themselves.** A `let v = Vector::new()` (or any owned heap value)
+  that doesn't escape its scope is dropped automatically — **you no longer call
+  `.free()`** on a local Vector/string. Ownership moves on return/store; a manual
+  `free` of an already-tracked binding no longer double-frees.
+- **~60 stdlib memory leaks fixed** across 26 modules (http, tls, json, compress,
+  net, process, …) plus a recursive `JsonValue::free`, so long-running servers no
+  longer bleed memory. A short-lived string acquires an "owned" bit so a stray drop
+  of an arena/literal string is a safe no-op instead of a bad free.
+
+### Performance
+
+- A **bump allocator** backs short-lived string allocations on the build/run path,
+  a **hand-rolled `format!`** replaces `vsnprintf` (~31% faster on the int/string
+  path), integers stringify through a hand-rolled `itoa`, and `&mut` parameters emit
+  C `restrict`.
+
+### Fixes
+
+- **`${bool}` interpolation no longer crashes.** `format!` (which every `${expr}`
+  lowers to) materialized `bool` args as a raw `0`/`1` against a `%s` spec, which
+  `printf` dereferenced as a pointer and segfaulted. It now renders `"true"`/`"false"`
+  like the direct `println!` path.
+
+### Breaking changes
+
+- **Borrows can't escape.** Code that returned a borrow (`-> &T`), stored one in a
+  struct field, or used `Vector<&T>` / a borrow in a generic now fails to compile —
+  use `*T` (the manual layer) for those. This is the headline change; most code that
+  only *passes* borrows into calls is unaffected.
+- **Borrow checks in impl bodies.** Method bodies that relied on the previously
+  unchecked path may surface new borrow errors.
+- **Slice out-of-bounds panics** instead of silently reading past the end.
+- Qualified module imports from 0.7.0 remain in force (`import stdlib::x::*` or a
+  qualified name; no implicit bring-all).
+
 ## 0.7.0 — 2026-07-02
 
 ### Toolchain — zig removed
