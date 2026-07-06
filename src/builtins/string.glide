@@ -193,7 +193,7 @@ impl string {
     pub fn replace(self: string, find: string, repl: string) -> string {
         let n: i32 = self.len();
         let m: i32 = find.len();
-        if m == 0 { return self; }
+        if m == 0 { return self.substring(0, self.len()); }
         // Pass 1: count non-overlapping matches to size the output exactly.
         let mut matches: i32 = 0;
         let mut i: i32 = 0;
@@ -201,7 +201,7 @@ impl string {
             if i + m <= n && _match_at(self, find, i, m) { matches = matches + 1; i = i + m; }
             else { i = i + 1; }
         }
-        if matches == 0 { return self; }
+        if matches == 0 { return self.substring(0, self.len()); }
         let rlen: i32 = repl.len();
         let total: i32 = n + matches * (rlen - m);
         let cap: i32 = if total > 0 { total } else { 1 };
@@ -271,7 +271,7 @@ impl string {
     /// ```
     pub fn to_upper(self: string) -> string {
         let n: i32 = self.len();
-        if n == 0 { return self; }
+        if n == 0 { return self.substring(0, self.len()); }
         let buf: *u8 = malloc(n as usize) as *u8;
         let mut i: i32 = 0;
         while i < n {
@@ -293,7 +293,7 @@ impl string {
     /// ```
     pub fn to_lower(self: string) -> string {
         let n: i32 = self.len();
-        if n == 0 { return self; }
+        if n == 0 { return self.substring(0, self.len()); }
         let buf: *u8 = malloc(n as usize) as *u8;
         let mut i: i32 = 0;
         while i < n {
@@ -315,9 +315,9 @@ impl string {
     /// "x".repeat(0);      // ""
     /// ```
     pub fn repeat(self: string, n: i32) -> string {
-        if n <= 0 { return ""; }
+        if n <= 0 { return self.substring(0, 0); }
         let slen: i32 = self.len();
-        if slen == 0 { return ""; }
+        if slen == 0 { return self.substring(0, 0); }
         let total: i32 = slen * n;
         let buf: *u8 = malloc(total as usize) as *u8;
         let mut w: i32 = 0;
@@ -593,7 +593,7 @@ impl string {
             else if b >= 192 { adv = 2; }
             i = i + adv;
         }
-        if n == 0 { return self; }
+        if n == 0 { return self.substring(0, self.len()); }
         // Re-emit the per-character byte spans back-to-front into one buffer
         // (total bytes unchanged), so it's O(n) instead of an O(n^2) concat fold.
         let buf: *u8 = malloc(n as usize) as *u8;
@@ -622,7 +622,7 @@ impl string {
     /// ```
     pub fn pad_left(self: string, width: i32, ch: char) -> string {
         let n: i32 = self.len();
-        if n >= width { return self; }
+        if n >= width { return self.substring(0, self.len()); }
         let buf: *u8 = malloc(width as usize) as *u8;
         let cb: u8 = ch.to_int() as u8;
         let pad: i32 = width - n;
@@ -642,7 +642,7 @@ impl string {
     /// ```
     pub fn pad_right(self: string, width: i32, ch: char) -> string {
         let n: i32 = self.len();
-        if n >= width { return self; }
+        if n >= width { return self.substring(0, self.len()); }
         let buf: *u8 = malloc(width as usize) as *u8;
         let cb: u8 = ch.to_int() as u8;
         let mut j: i32 = 0;
@@ -662,7 +662,7 @@ impl string {
     /// ```
     pub fn strip_prefix(self: string, pre: string) -> string {
         if self.starts_with(pre) { return self.substring(pre.len(), self.len()); }
-        return self;
+        return self.substring(0, self.len());
     }
 
     /// Remove `suf` from the end if present; otherwise return `self`.
@@ -672,7 +672,7 @@ impl string {
     /// ```
     pub fn strip_suffix(self: string, suf: string) -> string {
         if self.ends_with(suf) { return self.substring(0, self.len() - suf.len()); }
-        return self;
+        return self.substring(0, self.len());
     }
 
     /// Split into lines on `\n`, dropping a trailing `\r` (so CRLF and LF both

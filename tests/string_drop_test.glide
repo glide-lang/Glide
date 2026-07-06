@@ -224,3 +224,24 @@ fn test_scalar_tostring_drops() -> i32 {
     assert!(tostring_sum() == 2890);
     return 0;
 }
+
+// String-transform builtins (to_upper/replace/…) are now ALWAYS-fresh (never
+// return self), so their results drop instead of leaking. No-op paths (no-match
+// replace, empty to_upper) return a fresh copy, not the receiver — asserted so a
+// wrong free or a stale alias would surface.
+fn transform_sum() -> i64 {
+    let mut acc: i64 = 0;
+    for i in 0..500 {
+        let u = "hello world".to_upper();   // "HELLO WORLD" (11)
+        let r = "a.b.c".replace(".", "/");   // "a/b/c" (5)
+        acc = acc + (u.len() as i64) + (r.len() as i64);
+    }
+    return acc;
+}
+
+fn test_transform_builtins_drop() -> i32 {
+    assert!(transform_sum() == 8000);              // (11 + 5) * 500
+    assert!("abc".replace("z", "Q").eq("abc"));    // no-match -> fresh copy, correct
+    assert!("".to_upper().eq(""));                 // empty -> fresh empty
+    return 0;
+}

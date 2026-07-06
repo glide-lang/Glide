@@ -1418,11 +1418,25 @@ fn _vec_let_droppable(g: *CG, st: *Stmt) -> bool {
 // to_string returns self, excluded by the receiver-type check, and unknown types
 // stay conservative). These were the biggest source of run-arena leaks — every
 // `.to_string()` in a loop stuck a string in the never-freed bump run.
+// String-transform builtins rewritten to ALWAYS allocate a fresh buffer (never
+// `return self`), so their result is a distinct, unaliased string safe to drop.
+fn _str_is_transform_method(f: string) -> bool {
+    if f == null { return false; }
+    return f.eq("to_upper") || f.eq("to_lower") || f.eq("reverse") || f.eq("trim")
+        || f.eq("trim_left") || f.eq("trim_right") || f.eq("replace") || f.eq("repeat")
+        || f.eq("pad_left") || f.eq("pad_right") || f.eq("strip_prefix") || f.eq("strip_suffix");
+}
 fn _str_rhs_fresh(g: *CG, e: *Expr) -> bool {
     if e == null { return false; }
     if _str_rhs_disjoint_alloc(e) { return true; }
     if e.kind == EX_CALL && e.lhs != null {
         if e.lhs.kind == EX_IDENT && e.lhs.str_val != null && e.lhs.str_val.eq("int_to_str") { return true; }
+        // A string-transform builtin on a STRING receiver (gate excludes a same-
+        // named method of another type, e.g. Vector.reverse).
+        if e.lhs.kind == EX_MEMBER && e.lhs.field != null && e.lhs.lhs != null && _str_is_transform_method(e.lhs.field) {
+            let tct: *Type = infer_for_codegen(g, e.lhs.lhs);
+            if tct != null && tct.kind == TY_NAMED && tct.name != null && tct.name.eq("string") { return true; }
+        }
         if e.lhs.kind == EX_MEMBER && e.lhs.field != null && e.lhs.field.eq("to_string")
             && (e.args == null || e.args.len() == 0) && e.lhs.lhs != null {
             // ONLY scalar-primitive to_string is the always-fresh builtin. A user
