@@ -1,0 +1,42 @@
+// Zero-copy string range slicing: `s[lo..hi]` yields a `[]u8` fat-pointer view
+// of the UTF-8 bytes with NO allocation (unlike `.substring`, which copies) — the
+// &str of Glide, a shared borrow of s, no lifetime. Bounds-checked; `..=` incl.
+
+fn test_str_slice_bytes() -> i32 {
+    let s: string = "hello world";
+    let sub = s[0..5];              // []u8 view of "hello"
+    assert!(sub.len == 5);
+    assert!((sub[0] as i32) == 104);   // 'h'
+    assert!((sub[4] as i32) == 111);   // 'o'
+    let mid = s[6..11];            // "world"
+    assert!(mid.len == 5);
+    assert!((mid[0] as i32) == 119);   // 'w'
+    return 0;
+}
+
+fn test_str_slice_inclusive_empty() -> i32 {
+    let s: string = "abcdef";
+    let a = s[1..=3];             // inclusive -> "bcd"
+    assert!(a.len == 3);
+    assert!((a[0] as i32) == 98);      // 'b'
+    assert!((a[2] as i32) == 100);     // 'd'
+    let e = s[2..2];             // empty view
+    assert!(e.len == 0);
+    return 0;
+}
+
+// The zero-copy view aliases the source bytes: mutating through it (it's []u8, a
+// mutable slice) is visible... but strings are immutable, so we only READ here.
+fn sum_bytes(s: string) -> i64 {
+    let mut acc: i64 = 0;
+    let n: i32 = s.len();
+    let view = s[0..n];            // whole string as []u8, no copy
+    for let i: i32 = 0; i < view.len; i++ { acc = acc + (view[i] as i64); }
+    return acc;
+}
+
+fn test_str_slice_scan() -> i32 {
+    // bytes of "abc" = 97+98+99 = 294
+    assert!(sum_bytes("abc") == 294);
+    return 0;
+}

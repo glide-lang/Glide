@@ -1459,6 +1459,9 @@ pub fn collect_slice_in_expr(g: *CG, e: *Expr) {
         if _rb != null && _rb.inner != null && (_rb.kind == TY_SLICE || _rb.kind == TY_POINTER || _rb.kind == TY_BORROW || _rb.kind == TY_BORROW_MUT) {
             register_slice_type(g, _rb.inner);
         }
+        if _rb != null && _rb.kind == TY_NAMED && _rb.name != null && _rb.name.eq("string") {
+            register_slice_type(g, ty_named("u8"));
+        }
     }
     if e.cast_to != null {
         collect_slice_in_type(g, e.cast_to);
@@ -2760,6 +2763,9 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         if e.rhs != null && e.rhs.kind == EX_RANGE {
             if base.kind == TY_SLICE || base.kind == TY_POINTER || base.kind == TY_BORROW || base.kind == TY_BORROW_MUT {
                 return ty_slice(base.inner);
+            }
+            if base.kind == TY_NAMED && base.name != null && base.name.eq("string") {
+                return ty_slice(ty_named("u8"));
             }
             return null;
         }

@@ -4064,6 +4064,15 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
                 record_borrow(t, _rsrc, true, s.name, s.line, s.column);
             }
         }
+        // `let sub = str[lo..hi]` SHARED-borrows the source string (immutable, so
+        // reads of it stay legal; reassigning/freeing it while sub lives errors) —
+        // mirrors as_bytes. Makes the zero-copy str-slice sound with no new machinery.
+        if _rbase != null && _rbase.kind == TY_NAMED && _rbase.name != null && _rbase.name.eq("string") {
+            let _rsrc2: string = _borrow_root_ident(s.let_value.lhs);
+            if !_rsrc2.eq("") {
+                record_borrow(t, _rsrc2, false, s.name, s.line, s.column);
+            }
+        }
     }
     // Copying a borrow: `let b = a` where a is borrow-typed. A shared copy is
     // a second live view (recorded so overlap/NLL survive the chain); copying
@@ -5535,6 +5544,11 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             infer_expr(t, e.rhs.rhs);
             if _u4 != null && (_u4.kind == TY_SLICE || _u4.kind == TY_POINTER) {
                 return ty_slice(_u4.inner);
+            }
+            // string base: `s[lo..hi]` is a ZERO-COPY `[]u8` view of the UTF-8
+            // bytes (a shared re-borrow of s — the &str of Glide, no lifetime).
+            if _u4 != null && _u4.kind == TY_NAMED && _u4.name != null && _u4.name.eq("string") {
+                return ty_slice(ty_named("u8"));
             }
             return null;
         }

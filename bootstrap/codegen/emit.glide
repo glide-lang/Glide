@@ -5223,9 +5223,13 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         if e.rhs != null && e.rhs.kind == EX_RANGE {
             let mut _elem: *Type = null;
             let mut _is_sl: bool = false;
+            let mut _is_str: bool = false;
             if _ixty != null && _ixty.kind == TY_SLICE {
                 _elem = _ixty.inner;
                 _is_sl = true;
+            } else if _ixty != null && _ixty.kind == TY_NAMED && _ixty.name != null && _ixty.name.eq("string") {
+                _elem = ty_named("u8");
+                _is_str = true;
             } else {
                 if _ixty != null {
                     _elem = _ixty.inner;
@@ -5253,6 +5257,23 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 print!("if(__lo<0||__end>__s.len||__lo>__end)__glide_panic(\"slice range out of bounds\",\"\",", e.line, ");(");
                 print!(_slnm);
                 print!("){__s.ptr+__lo,__end-__lo};})");
+            } else if _is_str {
+                // string base: ZERO-COPY []u8 view of the UTF-8 bytes, bounds-
+                // checked against the string length (s is a char* to the data).
+                print!("({const char* __str=(");
+                emit_expr(g, e.lhs);
+                print!(");int __slen=__glide_string_len(__str);int __lo=(");
+                emit_expr(g, e.rhs.lhs);
+                print!(");int __end=(");
+                emit_expr(g, e.rhs.rhs);
+                if e.rhs.bool_val {
+                    print!(")+1;");
+                } else {
+                    print!(");");
+                }
+                print!("if(__lo<0||__end>__slen||__lo>__end)__glide_panic(\"str range out of bounds\",\"\",", e.line, ");(");
+                print!(_slnm);
+                print!("){(uint8_t*)__str+__lo,__end-__lo};})");
             } else {
                 print!("({int __lo=(");
                 emit_expr(g, e.rhs.lhs);
