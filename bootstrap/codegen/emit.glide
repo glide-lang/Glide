@@ -1437,6 +1437,13 @@ fn _str_rhs_fresh(g: *CG, e: *Expr) -> bool {
             let tct: *Type = infer_for_codegen(g, e.lhs.lhs);
             if tct != null && tct.kind == TY_NAMED && tct.name != null && tct.name.eq("string") { return true; }
         }
+        // Vector.join(sep) / Vector.concat() build a fresh string (or the "" literal
+        // for an empty vector — the owned bit makes dropping that a safe no-op).
+        if e.lhs.kind == EX_MEMBER && e.lhs.field != null && e.lhs.lhs != null
+            && (e.lhs.field.eq("join") || e.lhs.field.eq("concat")) {
+            let jct: *Type = strip_ptr(infer_for_codegen(g, e.lhs.lhs));
+            if jct != null && jct.kind == TY_GENERIC && jct.name != null && jct.name.eq("Vector") { return true; }
+        }
         if e.lhs.kind == EX_MEMBER && e.lhs.field != null && e.lhs.field.eq("to_string")
             && (e.args == null || e.args.len() == 0) && e.lhs.lhs != null {
             // ONLY scalar-primitive to_string is the always-fresh builtin. A user
