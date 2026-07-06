@@ -230,6 +230,8 @@ impl JsonValue {
     // ---- mutators (instance) -------------------------------------------
 
     /// Append `v` to a JSON array. No-op when `self` isn't an array.
+    /// CONSUMES `v`: after its contents are copied into the array, the
+    /// wrapper node is freed, so callers must not reuse `v` afterward.
     ///
     /// ```glide
     /// let a: *JsonValue = JsonValue::array();
@@ -240,6 +242,7 @@ impl JsonValue {
     pub fn arr_push(&mut self, v: *JsonValue) {
         if self == null || self.kind != JSON_ARRAY { return; }
         self.arr.push(*v);
+        free(v as *void);
     }
 
     /// Set `key` → `v` on a JSON object. Duplicate keys append rather

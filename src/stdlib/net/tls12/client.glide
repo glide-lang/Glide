@@ -209,9 +209,11 @@ pub fn tls12_attach(stream: *TcpStream, host: string, verify: bool) -> !*Tls12Co
     while !done {
         let rec: !*T12Record = _t12next(conn);
         if !rec.is_ok() { return err(rec.unwrap_err()); }
-        if rec.unwrap().rtype == 21 { return err("tls12: server alert during handshake"); }
-        if rec.unwrap().rtype != 22 { return err("tls12: unexpected record in flight"); }
-        hs_buf.push_str(rec.unwrap().payload);
+        let rp: *T12Record = rec.unwrap();
+        if rp.rtype == 21 { free(rp as *void); return err("tls12: server alert during handshake"); }
+        if rp.rtype != 22 { free(rp as *void); return err("tls12: unexpected record in flight"); }
+        hs_buf.push_str(rp.payload);
+        free(rp as *void);
         let avail: string = hs_buf.to_string();
         let mut off: i32 = 0;
         while off + 4 <= avail.len() {
@@ -329,16 +331,22 @@ pub fn tls12_attach(stream: *TcpStream, host: string, verify: bool) -> !*Tls12Co
     while !got {
         let rec: !*T12Record = _t12next(conn);
         if !rec.is_ok() { return err(rec.unwrap_err()); }
-        if rec.unwrap().rtype == 20 { continue; }          // server ChangeCipherSpec
-        if rec.unwrap().rtype == 21 { return err("tls12: server alert before Finished"); }
-        let dec: !*Tls12Plain = tls12_open(conn.s_key, conn.s_iv, conn.s_seq, rec.unwrap().raw);
-        if !dec.is_ok() { return err(dec.unwrap_err()); }
+        let rp: *T12Record = rec.unwrap();
+        if rp.rtype == 20 { free(rp as *void); continue; }          // server ChangeCipherSpec
+        if rp.rtype == 21 { free(rp as *void); return err("tls12: server alert before Finished"); }
+        let dec: !*Tls12Plain = tls12_open(conn.s_key, conn.s_iv, conn.s_seq, rp.raw);
+        if !dec.is_ok() { free(rp as *void); return err(dec.unwrap_err()); }
+        free(rp as *void);
+        let dp: *Tls12Plain = dec.unwrap();
         conn.s_seq = conn.s_seq + 1;
-        let sfm: !*HsMessage = read_handshake(dec.unwrap().content, 0);
-        if !sfm.is_ok() { return err(sfm.unwrap_err()); }
-        if sfm.unwrap().msg_type != 20 { return err("tls12: expected server Finished"); }
+        let sfm: !*HsMessage = read_handshake(dp.content, 0);
+        if !sfm.is_ok() { free(dp as *void); return err(sfm.unwrap_err()); }
+        let sp: *HsMessage = sfm.unwrap();
+        if sp.msg_type != 20 { free(sp as *void); free(dp as *void); return err("tls12: expected server Finished"); }
         let expect: string = tls12_prf(master, "server finished", sha256(transcript.to_string()), 12);
-        if !expect.eq(sfm.unwrap().body) { return err("tls12: server Finished mismatch"); }
+        if !expect.eq(sp.body) { free(sp as *void); free(dp as *void); return err("tls12: server Finished mismatch"); }
+        free(sp as *void);
+        free(dp as *void);
         got = true;
         _conn_ok = true;
     }
@@ -387,12 +395,14 @@ pub fn tls12_read(conn: *Tls12Conn, max: i32) -> !string {
             if rec.unwrap_err().contains("closed") { conn.closed = true; return ok(""); }
             return err(rec.unwrap_err());
         }
-        if rec.unwrap().rtype == 20 { continue; }
+        let rp: *T12Record = rec.unwrap();
+        if rp.rtype == 20 { free(rp as *void); continue; }
         // The endpoint reads with the peer's keys: server reads c_*, client reads s_*.
         let mut rk: string = conn.s_key; let mut riv: string = conn.s_iv; let mut rseq: u64 = conn.s_seq;
         if conn.is_server { rk = conn.c_key; riv = conn.c_iv; rseq = conn.c_seq; }
-        let dec: !*Tls12Plain = tls12_open(rk, riv, rseq, rec.unwrap().raw);
-        if !dec.is_ok() { return err(dec.unwrap_err()); }
+        let dec: !*Tls12Plain = tls12_open(rk, riv, rseq, rp.raw);
+        if !dec.is_ok() { free(rp as *void); return err(dec.unwrap_err()); }
+        free(rp as *void);
         if conn.is_server { conn.c_seq = conn.c_seq + 1; } else { conn.s_seq = conn.s_seq + 1; }
         if dec.unwrap().content_type == 23 {
             let data: string = dec.unwrap().content;
@@ -477,6 +487,8 @@ pub fn tls12_server_handshake(stream: *TcpStream, cert_chain: *Vector<string>,
     transcript.push_str(chrec.payload.substring(0, chm.next));
     let chb: string = chm.body;
     let client_random: string = chb.substring(2, 34);
+    free(chm as *void);
+    free(chrec as *void);
     // Choose the curve: X25519 if the client offered supported_groups with
     // it, else secp256r1 (parsed leniently; default secp256r1).
     let mut curve: i32 = GRP_SECP256R1;
@@ -554,6 +566,8 @@ pub fn tls12_server_handshake(stream: *TcpStream, cert_chain: *Vector<string>,
     transcript.push_str(ckerec.payload.substring(0, ckem.next));
     let cpublen: i32 = _t12cb(ckem.body, 0);
     let client_pub: string = ckem.body.substring(1, 1 + cpublen);
+    free(ckem as *void);
+    free(ckerec as *void);
     let pms: string = if curve == GRP_X25519 { x25519(server_priv, client_pub)? } else { p256_ecdh(server_priv, client_pub)? };
 
     // 8. Key derivation.
@@ -569,14 +583,17 @@ pub fn tls12_server_handshake(stream: *TcpStream, cert_chain: *Vector<string>,
     let mut got: bool = false;
     while !got {
         let rec: *T12Record = _t12next(conn)?;
-        if rec.rtype == 20 { continue; }
+        if rec.rtype == 20 { free(rec as *void); continue; }
         let dec: *Tls12Plain = tls12_open(conn.c_key, conn.c_iv, conn.c_seq, rec.raw)?;
+        free(rec as *void);
         conn.c_seq = conn.c_seq + 1;
         let fm: *HsMessage = read_handshake(dec.content, 0)?;
-        if fm.msg_type != 20 { return err("tls12: expected client Finished"); }
+        if fm.msg_type != 20 { free(fm as *void); free(dec as *void); return err("tls12: expected client Finished"); }
         let expect: string = tls12_prf(master, "client finished", sha256(transcript.to_string()), 12);
-        if !expect.eq(fm.body) { return err("tls12: client Finished mismatch"); }
+        if !expect.eq(fm.body) { free(fm as *void); free(dec as *void); return err("tls12: client Finished mismatch"); }
         transcript.push_str(dec.content);
+        free(fm as *void);
+        free(dec as *void);
         got = true;
     }
 
