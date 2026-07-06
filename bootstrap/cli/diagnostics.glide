@@ -332,16 +332,30 @@ pub fn print_pretty_diag(d: DiagEntry, src: string, src_path: string) {
 
 // Normalize backslashes to forward slashes so a Windows path compares equal to
 // the forward-slashed form codegen writes into `#line` directives.
+// Single pass: POSIX paths (no backslash at all) return unchanged, and the
+// rewrite copies whole between-backslash segments — never concat-per-char
+// (that pattern is O(n^2) memory; see the note at `_craw_skip_noncode`).
 fn _fwd_slashes(p: string) -> string {
-    let mut out: string = "";
-    for let i: i32 = 0; i < p.len(); i++ {
+    let n: i32 = p.len();
+    let mut bs: i32 = -1;
+    for let i: i32 = 0; i < n; i++ {
         if p.at(i).to_int() == 92 {
-            out = out.concat("/");
-        } else {
-            out = out.concat(p.substring(i, i + 1));
+            bs = i;
+            break;
         }
     }
-    return out;
+    if bs < 0 {
+        return p;
+    }
+    let mut out: string = p.substring(0, bs).concat("/");
+    let mut seg: i32 = bs + 1;
+    for let i: i32 = bs + 1; i < n; i++ {
+        if p.at(i).to_int() == 92 {
+            out = out.concat(p.substring(seg, i)).concat("/");
+            seg = i + 1;
+        }
+    }
+    return out.concat(p.substring(seg, n));
 }
 
 fn _cc_all_digits(s: string) -> bool {
@@ -489,12 +503,14 @@ fn _cc_parse_line_path(l: string) -> string {
 // of file f, and each following non-directive line increments it. Prints the
 // matched C line plus a little following context, stopping at the next `#line`.
 // Skips silently when nothing maps (e.g. an error in the C preamble).
-fn cc_print_c_snippet(csrc: string, glide_file: string, glide_line: i32) {
+// `lines` is the generated C pre-split by the caller — splitting the multi-MB
+// C here, once per rendered error, is what blew a failed build up to tens of
+// GB of SDS strings (the 2026-07-06 OOM). Split ONCE in `cc_render_log`.
+fn cc_print_c_snippet(lines: *Vector<string>, glide_file: string, glide_line: i32) {
     if glide_line <= 0 {
         return;
     }
     let target: string = _fwd_slashes(glide_file);
-    let lines: *Vector<string> = csrc.split("\n");
     let mut cur_file: string = "";
     let mut cur_gline: i32 = 0;
     let mut hit: i32 = -1;
@@ -606,8 +622,27 @@ fn craw_contains(spans: *Vector<CrawSpan>, file: string, line: i32) -> bool {
     return false;
 }
 
+// Read `path` at most once per render pass. A cc cascade anchors most of its
+// errors at the same one or two .glide files; without this cache every
+// rendered error re-read the whole file from disk. `files`/`texts` are
+// parallel vectors owned by `cc_render_log` (tiny: distinct files per pass).
+fn _cc_read_cached(files: *Vector<string>, texts: *Vector<string>, path: string) -> string {
+    for let i: i32 = 0; i < files.len(); i++ {
+        if files.get(i).eq(path) {
+            return texts.get(i);
+        }
+    }
+    let txt: string = read_file(path);
+    files.push(path);
+    texts.push(txt);
+    return txt;
+}
+
 // Render one parsed cc error as a Glide diagnostic + the generated-C slice.
-fn cc_render_one(cd: CcDiag, csrc: string, src_path: string, src_text: string, craw: *Vector<CrawSpan>) {
+// `csrc` (whole text) and `clines` (same text pre-split) both come from the
+// caller: the text feeds `print_pretty_diag`'s line lookup for C-anchored
+// errors, the lines feed the snippet scan — neither is re-derived per error.
+fn cc_render_one(cd: CcDiag, csrc: string, clines: *Vector<string>, src_path: string, src_text: string, craw: *Vector<CrawSpan>, cache_files: *Vector<string>, cache_texts: *Vector<string>) {
     let in_craw: bool = craw_contains(craw, cd.file, cd.line);
     let mut code: string = "ice";
     if in_craw {
@@ -624,9 +659,9 @@ fn cc_render_one(cd: CcDiag, csrc: string, src_path: string, src_text: string, c
         if cd.file.eq(src_path) {
             print_pretty_diag(d, src_text, cd.file);
         } else {
-            print_pretty_diag(d, read_file(cd.file), cd.file);
+            print_pretty_diag(d, _cc_read_cached(cache_files, cache_texts, cd.file), cd.file);
         }
-        cc_print_c_snippet(csrc, cd.file, cd.line);
+        cc_print_c_snippet(clines, cd.file, cd.line);
     } else {
         // Anchored at the generated .c itself (no #line was in effect, e.g. the
         // preamble) — render that C line directly; there is no glide line to map.
@@ -634,7 +669,11 @@ fn cc_render_one(cd: CcDiag, csrc: string, src_path: string, src_text: string, c
     }
 }
 
-// Render every error in a captured cc log. Returns the count rendered; 0 means
+// Render every error in a captured cc log, capped at `cap` — a broken build of
+// a large program can produce thousands of cc errors, and rendering is O(work)
+// per error, so an uncapped pass turns one failure into minutes of scrolling
+// (and, before the split-once fix above, into an OOM). The full log stays on
+// disk; the caller prints its path. Returns the count rendered; 0 means
 // nothing parseable (linker error, unknown format) so the caller falls back to
 // dumping the raw log.
 pub fn cc_render_log(cc_log: string, tmp_c: string, src_path: string, src_text: string, craw: *Vector<CrawSpan>) -> i32 {
@@ -646,15 +685,34 @@ pub fn cc_render_log(cc_log: string, tmp_c: string, src_path: string, src_text: 
     if diags.len() == 0 {
         return 0;
     }
+    // Split the generated C exactly ONCE for the whole pass; every rendered
+    // error reuses this Vector (see cc_print_c_snippet).
     let csrc: string = read_file(tmp_c);
+    let clines: *Vector<string> = csrc.split("\n");
+    let cache_files: *Vector<string> = Vector::new();
+    let cache_texts: *Vector<string> = Vector::new();
+    let cap: i32 = 20;
     let mut shown: i32 = 0;
+    let mut hidden: i32 = 0;
     for let i: i32 = 0; i < diags.len(); i++ {
         let cd: CcDiag = diags.get(i);
         if cd.severity != 1 {
             continue;
         }
-        cc_render_one(cd, csrc, src_path, src_text, craw);
+        if shown >= cap {
+            hidden = hidden + 1;
+            continue;
+        }
+        cc_render_one(cd, csrc, clines, src_path, src_text, craw, cache_files, cache_texts);
         shown = shown + 1;
+    }
+    if hidden > 0 {
+        let mut noun: string = " more errors";
+        if hidden == 1 {
+            noun = " more error";
+        }
+        println!("  ".concat(col_blue()).concat("+").concat(int_to_str(hidden)).concat(noun).concat(col_reset()).concat(" not shown (the full cc log is preserved; path below)"));
+        println!("");
     }
     return shown;
 }
