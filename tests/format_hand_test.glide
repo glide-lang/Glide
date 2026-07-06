@@ -30,3 +30,17 @@ fn test_format_empty_and_adjacent() -> i32 {
     assert_str_eq!(format!("[{}]", ""), "[]");
     return 0;
 }
+// A bool's format spec is `%s` ("true"/"false"), so the arg must be materialized
+// to a string via __glide_bool_to_string — passing the raw 0/1 to %s crashes.
+// Regression: `format!` (and `${bool}` interpolation, which lowers to it) omitted
+// the bool case that the direct println!/dbg! paths already had.
+fn test_format_bool() -> i32 {
+    assert_str_eq!(format!("{}", true), "true");
+    assert_str_eq!(format!("{}", false), "false");
+    assert_str_eq!(format!("a={} b={}", true, false), "a=true b=false");
+    let flag: bool = true;
+    assert_str_eq!("flag is ${flag}", "flag is true");   // interpolation -> format!
+    let mixed: bool = false;
+    assert_str_eq!("n=${1 + 1} ok=${mixed}", "n=2 ok=false");
+    return 0;
+}

@@ -5630,7 +5630,14 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                     if cg_is_display(g, at) {
                         emit_display_arg(g, &a, at);
                     } else {
-                        if !_narrow_int_ctype(at).eq("") {
+                        if at != null && at.kind == TY_NAMED && at.name.eq("bool") {
+                            // A bool's format spec is `%s` ("true"/"false"), so the
+                            // arg must be materialized to a string — passing the raw
+                            // 0/1 to printf's %s dereferences it as a char* (crash).
+                            print!("__glide_bool_to_string(");
+                            emit_expr(g, &a);
+                            print!(")");
+                        } else if !_narrow_int_ctype(at).eq("") {
                             print!("(".concat(_narrow_int_ctype(at)).concat(")("));
                             emit_expr(g, &a);
                             print!(")");
