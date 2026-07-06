@@ -89,6 +89,7 @@ impl TcpStream {
         let r: !*Vector<*IpAddr> = resolve(host);
         if !r.ok { return err(r.err); }
         let v: *Vector<*IpAddr> = r.val;
+        defer v.free();
         if v.len() == 0 { return err("tcp: no addresses for ".concat(host)); }
         let mut last_err: string = "tcp: connect failed";
         for let i: i32 = 0; i < v.len(); i++ {

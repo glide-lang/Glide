@@ -153,12 +153,13 @@ impl HttpClient {
             // Decide whether to follow.
             if !_hcli_is_redirect(resp.status) { return ok(resp); }
             if hops >= self.max_redirects {
+                free(resp as *void);
                 return err("http_client: too many redirects");
             }
             let loc: string = resp.header("Location");
             if loc.eq("") { return ok(resp); }
             let next_url: !string = _hcli_resolve_url(current_url, loc);
-            if !next_url.ok { return err(next_url.err); }
+            if !next_url.ok { free(resp as *void); return err(next_url.err); }
 
             // 303 → GET, no body. 301/302 historically also dropped body
             // for non-GET; we follow that convention here. 307/308
@@ -177,6 +178,7 @@ impl HttpClient {
                     current_headers = _hcli_strip_content_headers(current_headers);
                 }
             }
+            free(resp as *void);
             current_url = next_url.val;
             hops = hops + 1;
         }
@@ -253,6 +255,11 @@ impl HttpClient {
             block = block.concat(h.name).concat(": ").concat(h.value);
         }
         resp.headers_block = block;
+        for let i: i32 = 0; i < h2r.headers.len(); i++ {
+            free(h2r.headers.get(i) as *void);
+        }
+        h2r.headers.free();
+        free(h2r as *void);
 
         if self.jar != null {
             let lines: *Vector<string> = resp.headers("Set-Cookie");
@@ -266,6 +273,7 @@ impl HttpClient {
         let u: !*ParsedUrl = _hcli_parse_url(url_s);
         if !u.ok { return err(u.err); }
         let url: *ParsedUrl = u.val;
+        defer free(url as *void);
         if !url.scheme.eq("http") && !url.scheme.eq("https") {
             return err("http_client: scheme must be http or https (got `".concat(url.scheme).concat("`)"));
         }
@@ -797,6 +805,7 @@ fn _hcli_resolve_url(base: string, loc: string) -> !string {
     let base_url: !*ParsedUrl = _hcli_parse_url(base);
     if !base_url.is_ok() { return err(base_url.unwrap_err()); }
     let bu: *ParsedUrl = base_url.unwrap();
+    defer free(bu as *void);
     if loc.starts_with("//") {
         return ok(bu.scheme.concat(":").concat(loc));
     }

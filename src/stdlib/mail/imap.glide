@@ -55,6 +55,7 @@ impl ImapSession {
     /// ```
     pub fn connect(host: string, port: i32, use_tls: bool) -> !*ImapSession {
         let s: *ImapSession = malloc(sizeof(ImapSession)) as *ImapSession;
+        if s == null { return err("imap: out of memory"); }
         s.host = host;
         s.tcp = null as *TcpStream;
         s.tls = null as *TlsStream;
@@ -99,6 +100,7 @@ impl ImapSession {
         let cmd: string = "LOGIN \"".concat(user).concat("\" \"").concat(pass).concat("\"");
         let _r: !*ImapResponse = self._cmd(cmd);
         if !_r.ok { return err(_r.err); }
+        defer _r.val.free();
         return ok(0);
     }
 
@@ -114,6 +116,7 @@ impl ImapSession {
         let cmd: string = "SELECT \"".concat(mailbox).concat("\"");
         let r: !*ImapResponse = self._cmd(cmd);
         if !r.ok { return err(r.err); }
+        defer r.val.free();
         // Look for "* N EXISTS" in the untagged lines.
         let mut count: i32 = 0;
         for let i: i32 = 0; i < r.val.untagged.len(); i++ {
@@ -145,6 +148,7 @@ impl ImapSession {
         let cmd: string = "FETCH ".concat(_imap_itos(seq)).concat(" BODY[]");
         let r: !*ImapResponse = self._cmd_capture_literal(cmd);
         if !r.ok { return err(r.err); }
+        defer r.val.free();
         return ok(r.val.literal);
     }
 
@@ -164,6 +168,7 @@ impl ImapSession {
             .concat(op).concat(" (").concat(flag).concat(")");
         let _r: !*ImapResponse = self._cmd(cmd);
         if !_r.ok { return err(_r.err); }
+        defer _r.val.free();
         return ok(0);
     }
 
@@ -189,6 +194,7 @@ impl ImapSession {
         let cmd: string = "SEARCH ".concat(criteria);
         let r: !*ImapResponse = self._cmd(cmd);
         if !r.ok { return err(r.err); }
+        defer r.val.free();
         let out: *Vector<i32> = Vector::new();
         for let i: i32 = 0; i < r.val.untagged.len(); i++ {
             let line: string = r.val.untagged.get(i);
@@ -357,6 +363,7 @@ impl ImapSession {
     pub fn logout(&mut self) -> !i32 {
         let _r: !*ImapResponse = self._cmd("LOGOUT");
         if !_r.ok { return err(_r.err); }
+        defer _r.val.free();
         return ok(0);
     }
 
@@ -420,18 +427,20 @@ impl ImapSession {
         let tag: string = self._next_tag();
         let _w: !i32 = self._write(tag.concat(" ").concat(cmd).concat("\r\n"));
         let resp: *ImapResponse = malloc(sizeof(ImapResponse)) as *ImapResponse;
+        if resp == null { return err("imap: out of memory"); }
         let v: *Vector<string> = Vector::new();
         resp.untagged = v;
         resp.tagged = "";
         resp.literal = "";
         while true {
             let lr: !string = self._read_line();
-            if !lr.ok { return err(lr.err); }
+            if !lr.ok { resp.free(); return err(lr.err); }
             let line: string = lr.val;
             if line.starts_with(tag.concat(" ")) {
                 resp.tagged = line;
                 let after: string = line.substring(tag.len() + 1, line.len());
                 if after.starts_with("OK") { return ok(resp); }
+                resp.free();
                 return err("imap: ".concat(line));
             }
             resp.untagged.push(line);
@@ -447,18 +456,20 @@ impl ImapSession {
         let tag: string = self._next_tag();
         let _w: !i32 = self._write(tag.concat(" ").concat(cmd).concat("\r\n"));
         let resp: *ImapResponse = malloc(sizeof(ImapResponse)) as *ImapResponse;
+        if resp == null { return err("imap: out of memory"); }
         let v: *Vector<string> = Vector::new();
         resp.untagged = v;
         resp.tagged = "";
         resp.literal = "";
         while true {
             let lr: !string = self._read_line();
-            if !lr.ok { return err(lr.err); }
+            if !lr.ok { resp.free(); return err(lr.err); }
             let line: string = lr.val;
             if line.starts_with(tag.concat(" ")) {
                 resp.tagged = line;
                 let after: string = line.substring(tag.len() + 1, line.len());
                 if after.starts_with("OK") { return ok(resp); }
+                resp.free();
                 return err("imap: ".concat(line));
             }
             resp.untagged.push(line);
@@ -470,7 +481,7 @@ impl ImapSession {
                     let nr: !i32 = nstr.try_parse_int();
                     if nr.ok && nr.val > 0 {
                         let body: !string = self._read_exact(nr.val);
-                        if !body.ok { return err(body.err); }
+                        if !body.ok { resp.free(); return err(body.err); }
                         resp.literal = body.val;
                         // After the literal, more text on the same
                         // logical line follows on the next \r\n.
@@ -486,6 +497,17 @@ pub struct ImapResponse {
     pub untagged: *Vector<string>,
     pub tagged:   string,
     pub literal:  string,
+}
+
+impl ImapResponse {
+    /// Free the inner untagged Vector buffer and the response struct
+    /// itself. The `tagged`/`literal` strings are intentionally NOT
+    /// freed: callers that escape `literal` (e.g. `fetch`) rely on it
+    /// outliving this call.
+    pub fn free(self) {
+        self.untagged.free();
+        free(self as *void);
+    }
 }
 
 fn _last_index_of(s: string, needle: string) -> i32 {

@@ -162,6 +162,8 @@ pub fn tls12_attach(stream: *TcpStream, host: string, verify: bool) -> !*Tls12Co
     conn.inbuf = "";
     conn.closed = false;
     conn.is_server = false;
+    let mut _conn_ok: bool = false;
+    defer if !_conn_ok { free(conn as *void); }
 
     // 1. ClientHello.
     let crandr: !string = random_bytes(32);
@@ -189,6 +191,7 @@ pub fn tls12_attach(stream: *TcpStream, host: string, verify: bool) -> !*Tls12Co
     let ch: string = ((HS_CLIENT_HELLO & 255) as char).to_string().concat(_t12u24(chbody.len())).concat(chbody);
 
     let transcript: *ByteBuffer = ByteBuffer::new();
+    defer transcript.free();
     transcript.push_str(ch);
     let e1: !bool = _t12send(conn, 22, ch);
     if !e1.is_ok() { return err(e1.unwrap_err()); }
@@ -202,6 +205,7 @@ pub fn tls12_attach(stream: *TcpStream, host: string, verify: bool) -> !*Tls12Co
     let mut ske_pub: string = "";
     let mut done: bool = false;
     let hs_buf: *ByteBuffer = ByteBuffer::new();
+    defer hs_buf.free();
     while !done {
         let rec: !*T12Record = _t12next(conn);
         if !rec.is_ok() { return err(rec.unwrap_err()); }
@@ -336,9 +340,9 @@ pub fn tls12_attach(stream: *TcpStream, host: string, verify: bool) -> !*Tls12Co
         let expect: string = tls12_prf(master, "server finished", sha256(transcript.to_string()), 12);
         if !expect.eq(sfm.unwrap().body) { return err("tls12: server Finished mismatch"); }
         got = true;
+        _conn_ok = true;
     }
 
-    transcript.free();
     return ok(conn);
 }
 
@@ -460,6 +464,8 @@ pub fn tls12_server_handshake(stream: *TcpStream, cert_chain: *Vector<string>,
     conn.inbuf = "";
     conn.closed = false;
     conn.is_server = true;
+    let mut _conn_ok: bool = false;
+    defer if !_conn_ok { free(conn as *void); }
 
     // 1. ClientHello.
     let chrec: *T12Record = _t12next(conn)?;
@@ -467,6 +473,7 @@ pub fn tls12_server_handshake(stream: *TcpStream, cert_chain: *Vector<string>,
     let chm: *HsMessage = read_handshake(chrec.payload, 0)?;
     if chm.msg_type != HS_CLIENT_HELLO { return err("tls12: expected ClientHello"); }
     let transcript: *ByteBuffer = ByteBuffer::new();
+    defer transcript.free();
     transcript.push_str(chrec.payload.substring(0, chm.next));
     let chb: string = chm.body;
     let client_random: string = chb.substring(2, 34);
@@ -474,6 +481,7 @@ pub fn tls12_server_handshake(stream: *TcpStream, cert_chain: *Vector<string>,
     // it, else secp256r1 (parsed leniently; default secp256r1).
     let mut curve: i32 = GRP_SECP256R1;
     let cur_ch: *ClientHello = parse_client_hello(chb)?;   // reuse the 1.3 parser for groups/suites
+    defer { cur_ch.cipher_suites.free(); cur_ch.alpn.free(); free(cur_ch as *void); }
 
     // 2. Pick the cipher matching the cert type (must be client-offered).
     let want: i32 = if is_rsa { T12_ECDHE_RSA_AES128_GCM } else { T12_ECDHE_ECDSA_AES128_GCM };
@@ -580,6 +588,6 @@ pub fn tls12_server_handshake(stream: *TcpStream, cert_chain: *Vector<string>,
     conn.s_seq = conn.s_seq + 1;
     conn.stream.write(sfin_rec)?;
 
-    transcript.free();
+    _conn_ok = true;
     return ok(conn);
 }

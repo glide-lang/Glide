@@ -211,6 +211,13 @@ pub fn tls13_client_handshake(stream: *TcpStream, host: string,
     conn.alpn = "";
     conn.closed = false;
     conn.is_server = false;
+    let hbr: !bool = _tls13_client_handshake_body(conn, host, alpn, verify);
+    if !hbr.is_ok() { free(conn as *void); return err(hbr.unwrap_err()); }
+    return ok(conn);
+}
+
+fn _tls13_client_handshake_body(conn: *TlsConn, host: string,
+                                alpn: *Vector<string>, verify: bool) -> !bool {
 
     // 2. X25519 keypair + ClientHello.
     let skr: !string = x25519_generate();
@@ -380,7 +387,7 @@ pub fn tls13_client_handshake(stream: *TcpStream, host: string,
     conn.s_key = sak.unwrap().key; conn.s_iv = sak.unwrap().iv; conn.s_seq = 0;
 
     transcript.free();
-    return ok(conn);
+    return ok(true);
 }
 
 fn _clu24s(n: i32) -> string {
@@ -445,12 +452,14 @@ pub fn tls_read(conn: *TlsConn, max: i32) -> !string {
     while true {
         let rec: !*RawRecord = _clnext(conn);
         if !rec.is_ok() { return err(rec.unwrap_err()); }
-        if rec.unwrap().rtype == 20 { continue; }
+        let rp: *RawRecord = rec.unwrap();
+        if rp.rtype == 20 { free(rp as *void); continue; }
         // The endpoint reads with the peer's keys: server reads c_*, client reads s_*.
         let mut rk: string = conn.s_key; let mut riv: string = conn.s_iv; let mut rseq: u64 = conn.s_seq;
         if conn.is_server { rk = conn.c_key; riv = conn.c_iv; rseq = conn.c_seq; }
-        let dec: !*RecordPlain = tls13_open(conn.aead, rk, riv, rseq, rec.unwrap().raw);
-        if !dec.is_ok() { return err(dec.unwrap_err()); }
+        let dec: !*RecordPlain = tls13_open(conn.aead, rk, riv, rseq, rp.raw);
+        if !dec.is_ok() { free(rp as *void); return err(dec.unwrap_err()); }
+        free(rp as *void);
         if conn.is_server { conn.c_seq = conn.c_seq + 1; } else { conn.s_seq = conn.s_seq + 1; }
         if dec.unwrap().content_type == 23 {
             let data: string = dec.unwrap().content;
@@ -550,6 +559,13 @@ pub fn tls13_server_handshake_buffered(stream: *TcpStream, cert_chain: *Vector<s
     conn.alpn = "";
     conn.closed = false;
     conn.is_server = true;
+    let hbr: !bool = _tls13_server_handshake_body(conn, cert_chain, key, is_rsa, alpn_offer);
+    if !hbr.is_ok() { free(conn as *void); return err(hbr.unwrap_err()); }
+    return ok(conn);
+}
+
+fn _tls13_server_handshake_body(conn: *TlsConn, cert_chain: *Vector<string>,
+                                key: string, is_rsa: bool, alpn_offer: *Vector<string>) -> !bool {
 
     // 1. Read ClientHello.
     let chrec: !*RawRecord = _clnext(conn);
@@ -713,7 +729,7 @@ pub fn tls13_server_handshake_buffered(stream: *TcpStream, cert_chain: *Vector<s
     conn.c_key = cak.unwrap().key; conn.c_iv = cak.unwrap().iv; conn.c_seq = 0;
     conn.s_key = sak.unwrap().key; conn.s_iv = sak.unwrap().iv; conn.s_seq = 0;
     transcript.free();
-    return ok(conn);
+    return ok(true);
 }
 
 fn _clu24(n: i32) -> string {
@@ -753,11 +769,13 @@ pub fn tls13_load_identity(cert_path: string, key_path: string) -> !*ServerIdent
     }
     if key_der.len() == 0 { return err("tls13: no private key in ".concat(key_path)); }
 
+    // EC keys are reduced to the raw scalar; RSA keys are passed as DER to
+    // the signer, which parses n/d itself. Compute the (fallible) key before
+    // allocating id so a parse error can't leak the struct.
+    let key_final: string = if is_rsa { key_der } else { _parse_ec_key(key_der)? };
     let id: *ServerIdentity = malloc(sizeof(ServerIdentity)) as *ServerIdentity;
     id.cert_chain = chain;
     id.is_rsa = is_rsa;
-    // EC keys are reduced to the raw scalar; RSA keys are passed as DER to
-    // the signer, which parses n/d itself.
-    id.key = if is_rsa { key_der } else { _parse_ec_key(key_der)? };
+    id.key = key_final;
     return ok(id);
 }

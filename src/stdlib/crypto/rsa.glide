@@ -330,6 +330,7 @@ fn _pss_xor(a: string, b: string) -> string {
 /// length). Returns the k-byte signature.
 pub fn rsa_pss_sign(privkey_der: string, sel: i32, message: string) -> !string {
     let key: *RsaPrivKey = _rsa_priv_parse(privkey_der)?;
+    defer free(key as *void);
     let n: string = key.n;
     let d: string = key.d;
     let k: i32 = n.len();
@@ -394,6 +395,7 @@ pub fn rsa_pss_sign(privkey_der: string, sel: i32, message: string) -> !string {
 /// PKCS#1 form. Not constant-time (see rsa_pss_sign).
 pub fn rsa_pkcs1_sign(privkey_der: string, prefix: string, hash: string) -> !string {
     let key: *RsaPrivKey = _rsa_priv_parse(privkey_der)?;
+    defer free(key as *void);
     let n: string = key.n;
     let k: i32 = n.len();
     let tlen: i32 = prefix.len() + hash.len();

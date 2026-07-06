@@ -136,6 +136,7 @@ impl SmtpClient {
         // Banner
         let b: !*SmtpReply = s._read_reply();
         if !b.ok { s.close(); return err(b.err); }
+        defer free(b.val as *void);
         if b.val.code < 200 || b.val.code >= 300 {
             s.close();
             return err("smtp: banner ".concat(_smtp_itos(b.val.code)).concat(" ").concat(b.val.text));
@@ -228,6 +229,7 @@ impl SmtpSession {
         let _wend: !i32 = self._write("\r\n.\r\n");
         let final: !*SmtpReply = self._read_reply();
         if !final.ok { return err(final.err); }
+        defer free(final.val as *void);
         if final.val.code < 200 || final.val.code >= 300 {
             return err("smtp: ".concat(_smtp_itos(final.val.code)).concat(" ").concat(final.val.text));
         }
@@ -303,6 +305,7 @@ impl SmtpSession {
         let _: !i32 = self._write(cmd);
         let r: !*SmtpReply = self._read_reply();
         if !r.ok { return err(r.err); }
+        defer free(r.val as *void);
         if r.val.code != want {
             return err("smtp: expected ".concat(_smtp_itos(want))
                 .concat(", got ").concat(_smtp_itos(r.val.code))

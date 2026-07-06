@@ -405,6 +405,8 @@ impl ArgParser {
         self.short_of.free();
         self.types.free();
         self.helps.free();
+        self.order.free();
+        self.positional.free();
         free(self as *void);
     }
 }

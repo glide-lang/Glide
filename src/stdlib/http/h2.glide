@@ -297,7 +297,13 @@ impl H2Conn {
         write_frame_bytes(buf, FrameType::window_update(), 0, 0, wu);
 
         let w: !i32 = tls.write_bytes(buf.data, buf.len);
-        if !w.ok { return err(w.err); }
+        if !w.ok {
+            rx.free();
+            free(c.enc as *void);
+            free(c.dec as *void);
+            free(c as *void);
+            return err(w.err);
+        }
         return ok(c);
     }
 
@@ -354,7 +360,9 @@ impl H2Conn {
     fn _read_response(&mut self, stream_id: i32) -> !*H2Response {
         let mut headers_done: bool = false;
         let header_block: *ByteBuffer = ByteBuffer::new();
+        defer header_block.free();
         let body: *ByteBuffer = ByteBuffer::new();
+        defer body.free();
         let mut stream_closed: bool = false;
         while !stream_closed {
             // Pull until we have at least one full frame header.
@@ -381,7 +389,7 @@ impl H2Conn {
             self.rx_offset = self.rx_offset + total;
 
             // Anything not on our stream is connection-level; skip.
-            if h.stream_id != stream_id && h.stream_id != 0 { continue; }
+            if h.stream_id != stream_id && h.stream_id != 0 { payload.free(); continue; }
 
             if h.frame_type == FrameType::settings() {
                 // ACK if it's not already an ack.
@@ -392,9 +400,10 @@ impl H2Conn {
                     let _: !i32 = self.tls.write_bytes(ack.data, ack.len);
                     ack.free();
                 }
+                payload.free();
                 continue;
             }
-            if h.frame_type == FrameType::window_update() { continue; }
+            if h.frame_type == FrameType::window_update() { payload.free(); continue; }
             if h.frame_type == FrameType::ping() {
                 if (h.flags & FrameFlag::ack()) == 0 {
                     let pong: *ByteBuffer = ByteBuffer::new();
@@ -403,20 +412,24 @@ impl H2Conn {
                     let _: !i32 = self.tls.write_bytes(pong.data, pong.len);
                     pong.free();
                 }
+                payload.free();
                 continue;
             }
             if h.frame_type == FrameType::goaway() {
+                payload.free();
                 return err("h2: server sent GOAWAY");
             }
             if h.frame_type == FrameType::headers() {
                 _bb_append(header_block, payload);
                 if (h.flags & FrameFlag::end_headers()) != 0 { headers_done = true; }
                 if (h.flags & FrameFlag::end_stream()) != 0 { stream_closed = true; }
+                payload.free();
                 continue;
             }
             if h.frame_type == FrameType::continuation() {
                 _bb_append(header_block, payload);
                 if (h.flags & FrameFlag::end_headers()) != 0 { headers_done = true; }
+                payload.free();
                 continue;
             }
             if h.frame_type == FrameType::data() {
@@ -438,11 +451,14 @@ impl H2Conn {
                     frame.free();
                 }
                 if (h.flags & FrameFlag::end_stream()) != 0 { stream_closed = true; }
+                payload.free();
                 continue;
             }
             if h.frame_type == FrameType::rst_stream() {
+                payload.free();
                 return err("h2: server reset stream");
             }
+            payload.free();
             // Unknown frame type — skip.
         }
 
@@ -531,6 +547,9 @@ impl H2Conn {
         write_frame_bytes(buf, FrameType::goaway(), 0, 0, payload);
         let _: !i32 = self.tls.write_bytes(buf.data, buf.len);
         self.tls.close();
+        self.rx_buf.free();
+        free(self.enc as *void);
+        free(self.dec as *void);
         free(self as *void);
     }
 }

@@ -27,6 +27,14 @@ pub struct QuicKeys {
     pub hp: string,    // header-protection key
 }
 
+impl QuicKeys {
+    /// Free the derived-keys struct. The key/iv/hp strings it holds are
+    /// managed by Glide's allocator, not freed here. Pair with the
+    /// `quic_*_initial_keys` / `quic_derive_keys` constructors via
+    /// `defer ck.free();`.
+    pub fn free(self) { free(self as *void); }
+}
+
 fn _qb(s: string, i: i32) -> i32 { return s.at(i).to_int() & 255; }
 
 /// The Initial secret: HKDF-Extract(QUIC_V1_SALT, Destination CID).

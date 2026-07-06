@@ -594,6 +594,7 @@ impl Router {
         for let i: i32 = 0; i < self.routes.len(); i++ {
             let r: Route = self.routes.get(i);
             r.segments.free();
+            r.local_mws.free();
         }
         self.routes.free();
         free(self as *void);

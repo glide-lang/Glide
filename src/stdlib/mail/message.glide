@@ -83,6 +83,24 @@ impl Mail {
         return m;
     }
 
+    /// Free the Mail and all collections it owns (to/cc/bcc/attachments
+    /// and the headers map). The `*Attachment` structs pushed into
+    /// `attachments` are caller-owned and are NOT freed here — free those
+    /// yourself first if you allocated them.
+    ///
+    /// ```glide
+    /// let m: *Mail = Mail::new();
+    /// defer m.free();
+    /// ```
+    pub fn free(self) {
+        self.to.free();
+        self.cc.free();
+        self.bcc.free();
+        self.attachments.free();
+        self.headers.free();
+        free(self as *void);
+    }
+
     /// Serialise to the RFC 5322 wire format. Headers + blank line +
     /// body or multipart sections.
     ///

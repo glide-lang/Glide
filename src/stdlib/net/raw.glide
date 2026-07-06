@@ -31,6 +31,16 @@ pub struct RawRecv {
     pub from: *SocketAddr,
 }
 
+impl RawRecv {
+    /// Release the sender address and the RawRecv struct itself. `data`
+    /// is empty (recv_from fills a caller-owned buffer), so there is no
+    /// string to free — only the SocketAddr and this allocation.
+    pub fn free(self) {
+        self.from.free();
+        free(self as *void);
+    }
+}
+
 impl RawSocket {
     /// Open a raw IPv4 socket for `proto` (e.g. IPPROTO_ICMP). On a
     /// SOCK_RAW receive the kernel hands back the full IP datagram,

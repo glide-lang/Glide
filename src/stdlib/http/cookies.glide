@@ -91,6 +91,7 @@ impl CookieJar {
         for let i: i32 = 0; i < self.cookies.len(); i++ {
             let ex: *Cookie = self.cookies.get(i);
             if ex.name.eq(c.name) && ex.domain.eq(c.domain) && ex.path.eq(c.path) {
+                free(ex as *void);
                 self.cookies.set(i, c);
                 return;
             }
@@ -136,7 +137,12 @@ impl CookieJar {
     /// ```glide
     /// jar.clear();   // log everyone out
     /// ```
-    pub fn clear(&mut self) { self.cookies.clear(); }
+    pub fn clear(&mut self) {
+        for let i: i32 = 0; i < self.cookies.len(); i++ {
+            free(self.cookies.get(i) as *void);
+        }
+        self.cookies.clear();
+    }
 }
 
 // ---- parsing ----

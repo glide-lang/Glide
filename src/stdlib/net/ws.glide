@@ -86,6 +86,7 @@ impl WebSocket {
         let p: !*WsParsedUrl = _ws_parse_url(url);
         if !p.ok { return err(p.err); }
         let pu: *WsParsedUrl = p.val;
+        defer free(pu as *void);
 
         let ws: *WebSocket = malloc(sizeof(WebSocket)) as *WebSocket;
         ws.rng = Rng::from_clock();
@@ -94,11 +95,11 @@ impl WebSocket {
             let cfg: *TlsConfig = TlsConfig::client();
             let r: !*TlsStream = TlsStream::connect(pu.host, pu.port, cfg);
             cfg.free();
-            if !r.ok { free(ws as *void); return err(r.err); }
+            if !r.ok { free(ws.rng as *void); free(ws as *void); return err(r.err); }
             ws.stream = r.val as *dyn Stream;
         } else {
             let r: !*TcpStream = TcpStream::connect_host(pu.host, pu.port);
-            if !r.ok { free(ws as *void); return err(r.err); }
+            if !r.ok { free(ws.rng as *void); free(ws as *void); return err(r.err); }
             ws.stream = r.val as *dyn Stream;
         }
 
@@ -113,13 +114,14 @@ impl WebSocket {
         req = req.concat("Sec-WebSocket-Key: ").concat(key).concat("\r\n");
         req = req.concat("Sec-WebSocket-Version: 13\r\n\r\n");
         let w: !i32 = ws._write_all(req);
-        if !w.ok { ws._close_transport(); free(ws as *void); return err(w.err); }
+        if !w.ok { ws._close_transport(); free(ws.rng as *void); free(ws as *void); return err(w.err); }
 
         // Read the server response until \r\n\r\n.
         let head: !string = ws._read_until_blank_line();
-        if !head.ok { ws._close_transport(); free(ws as *void); return err(head.err); }
+        if !head.ok { ws._close_transport(); free(ws.rng as *void); free(ws as *void); return err(head.err); }
         if head.val.index_of("101") < 0 {
             ws._close_transport();
+            free(ws.rng as *void);
             free(ws as *void);
             return err("ws: server did not return 101 Switching Protocols");
         }
@@ -132,6 +134,7 @@ impl WebSocket {
         let ix: i32 = lower_head.index_of(needle);
         if ix < 0 {
             ws._close_transport();
+            free(ws.rng as *void);
             free(ws as *void);
             return err("ws: missing Sec-WebSocket-Accept header");
         }
@@ -141,6 +144,7 @@ impl WebSocket {
         if nl >= 0 { acc = after.substring(0, nl); }
         if !acc.eq(expected) {
             ws._close_transport();
+            free(ws.rng as *void);
             free(ws as *void);
             return err("ws: Sec-WebSocket-Accept mismatch");
         }

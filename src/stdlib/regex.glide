@@ -1056,6 +1056,14 @@ impl Match {
     pub fn n_groups(&self) -> i32 {
         return self.caps.len() / 2;
     }
+
+    /// Frees this match: the `caps` vector and the struct itself. Does NOT
+    /// free `input` (borrowed from the caller) nor `group_names`/`name_to_idx`
+    /// (borrowed from the owning `Regex`).
+    pub fn free(self) {
+        self.caps.free();
+        free(self as *void);
+    }
 }
 
 // ============================================================================
@@ -1417,6 +1425,20 @@ fn _run_sub_anchored(re: *Regex, input: string, start: i32, end: i32,
     }
 }
 
+// Recursively free an AST subtree. Frees node structs and their
+// `children` vectors; does NOT free `n.cls`, which _compile_node aliases
+// into the compiled program's `classes` (owned by the resulting `Regex`).
+// Freeing it here would double-free.
+fn _free_node(n: *RxNode) {
+    if n == null { return; }
+    for let i: i32 = 0; i < n.children.len(); i++ {
+        _free_node(n.children.get(i));
+    }
+    n.children.free();
+    _free_node(n.inner);
+    free(n as *void);
+}
+
 // ============================================================================
 // Regex impl
 // ============================================================================
@@ -1463,6 +1485,13 @@ impl Regex {
         re.classes = c.classes;
         re.group_names = p.group_names;
         re.name_to_idx = p.name_to_idx;
+        // `re` now holds every pointer it needs (op/a/b/classes from `c`,
+        // group_names/name_to_idx from `p`). Free the parse/compile
+        // scaffolding: the AST tree and the parser/compiler struct shells.
+        // `_free_node` leaves `n.cls` alone — it is aliased into re.classes.
+        _free_node(ast);
+        free(p as *void);
+        free(c as *void);
         return ok(re);
     }
 
@@ -1475,6 +1504,7 @@ impl Regex {
     /// ```
     pub fn matches(&self, s: string) -> bool {
         let m: ?*Match = self.find(s);
+        if m.has { m.val.free(); }
         return m.has;
     }
 
@@ -1482,7 +1512,9 @@ impl Regex {
     pub fn matches_full(&self, s: string) -> bool {
         let m: ?*Match = self.find(s);
         if !m.has { return false; }
-        return m.val.start == 0 && m.val.end == s.len();
+        let r: bool = m.val.start == 0 && m.val.end == s.len();
+        m.val.free();
+        return r;
     }
 
     /// First match, or `none`.
@@ -1543,13 +1575,15 @@ impl Regex {
         let mt: *Match = m.val;
         let before: string = s.substring(0, mt.start);
         let after: string = s.substring(mt.end, s.len());
-        return before.concat(_expand_repl(repl, mt)).concat(after);
+        let result: string = before.concat(_expand_repl(repl, mt)).concat(after);
+        mt.free();
+        return result;
     }
 
     /// Replace every non-overlapping match.
     pub fn replace_all(&self, s: string, repl: string) -> string {
         let all: *Vector<*Match> = self.find_all(s);
-        if all.len() == 0 { return s; }
+        if all.len() == 0 { all.free(); return s; }
         let mut out: string = "";
         let mut last: i32 = 0;
         for let i: i32 = 0; i < all.len(); i++ {
@@ -1559,13 +1593,15 @@ impl Regex {
             last = mt.end;
         }
         out = out.concat(s.substring(last, s.len()));
+        for let i: i32 = 0; i < all.len(); i++ { all.get(i).free(); }
+        all.free();
         return out;
     }
 
     /// Replace each match with the result of `f(match)`.
     pub fn replace_with(&self, s: string, f: fn(*Match) -> string) -> string {
         let all: *Vector<*Match> = self.find_all(s);
-        if all.len() == 0 { return s; }
+        if all.len() == 0 { all.free(); return s; }
         let mut out: string = "";
         let mut last: i32 = 0;
         for let i: i32 = 0; i < all.len(); i++ {
@@ -1575,6 +1611,8 @@ impl Regex {
             last = mt.end;
         }
         out = out.concat(s.substring(last, s.len()));
+        for let i: i32 = 0; i < all.len(); i++ { all.get(i).free(); }
+        all.free();
         return out;
     }
 
@@ -1589,7 +1627,24 @@ impl Regex {
             last = mt.end;
         }
         out.push(s.substring(last, s.len()));
+        for let i: i32 = 0; i < all.len(); i++ { all.get(i).free(); }
+        all.free();
         return out;
+    }
+
+    /// Frees the compiled program buffers held by this `Regex`. Call once
+    /// when the regex is no longer needed. The `CharClass` values in
+    /// `classes` are intentionally NOT freed: repetition compiles the same
+    /// class node several times, so one `CharClass` pointer can occupy
+    /// multiple program slots and freeing them individually would double-free.
+    pub fn free(self) {
+        self.op.free();
+        self.a.free();
+        self.b.free();
+        self.classes.free();
+        self.group_names.free();
+        self.name_to_idx.free();
+        free(self as *void);
     }
 }
 

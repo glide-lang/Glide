@@ -567,6 +567,10 @@ c_raw! {
             drp = &dr;
         }
         int rv = nghttp3_conn_submit_request(c->h3, stream_id, nva, nh, drp, c);
+        for (size_t i = 4; i < nh; i++) {
+            free((void*)nva[i].name);
+            free((void*)nva[i].value);
+        }
         free(nva);
         return rv == 0 ? 0 : -1;
     }
@@ -1416,7 +1420,12 @@ c_raw! {
             dr.read_data = __glide_h3_read_req_body_cb;
             drp = &dr;
         }
-        if (nghttp3_conn_submit_request(c->h3, stream_id, nva, nh, drp, c) != 0) {
+        int __glide_h3_rv = nghttp3_conn_submit_request(c->h3, stream_id, nva, nh, drp, c);
+        for (size_t i = 4; i < nh; i++) {
+            free((void*)nva[i].name);
+            free((void*)nva[i].value);
+        }
+        if (__glide_h3_rv != 0) {
             free(nva);
             return 0;
         }
@@ -2311,6 +2320,11 @@ c_raw! {
         nghttp3_data_reader* drp = (s->resp_body_len > 0 || s->streaming) ? &dr : NULL;
         int rv = nghttp3_conn_submit_response(s->h3, s->request_stream_id,
                                                 nva, nh, drp);
+        free((void*)nva[0].value);
+        for (size_t i = 1; i < nh; i++) {
+            free((void*)nva[i].name);
+            free((void*)nva[i].value);
+        }
         free(nva);
         return rv;
     }

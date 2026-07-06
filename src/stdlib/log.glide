@@ -479,6 +479,8 @@ impl Logger {
         for let i: i32 = 0; i < self.sinks.len(); i++ {
             self.sinks.get(i).write_line(line, entry.level);
         }
+        entry.fields.free();
+        free(entry as *void);
     }
 
     fn render(&self, entry: *LogEntry) -> string {
@@ -827,6 +829,8 @@ impl LogLine {
     /// Send through the global logger.
     pub fn emit(self) {
         Logger::global().logv(self.level, self.msg, self.kvs);
+        self.kvs.free();
+        free(self as *void);
     }
 
     /// Send through `lg` (not the global).

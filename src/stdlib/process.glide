@@ -275,8 +275,9 @@ c_raw! {
         for (;;) {
             if (len + 1 >= cap) {
                 cap *= 2;
-                buf = (char*)realloc(buf, cap);
-                if (!buf) return NULL;
+                char* nb = (char*)realloc(buf, cap);
+                if (!nb) { free(buf); return NULL; }
+                buf = nb;
             }
             ssize_t n = read(fd, buf + len, cap - 1 - len);
             if (n < 0) {
@@ -1375,6 +1376,25 @@ impl Child {
     /// ```
     pub fn kill(self, sig: i32) -> ! {
         if __glide_proc_kill(self.pid, sig) != 0 { return err("kill failed"); }
+    }
+
+    /// Free the pipe-handle structs allocated by `spawn()` when a `pipe_*`
+    /// builder was used. No-op for the fields left null. Does not wait for or
+    /// kill the child — call `.wait()` first. Pair with `defer` for leak-free
+    /// use.
+    ///
+    /// ```glide
+    /// let r: !Child = Command::new("cat").pipe_stdin().pipe_stdout().spawn();
+    /// if r.ok {
+    ///     defer r.val.free();
+    ///     r.val.stdin.close();
+    ///     r.val.wait();
+    /// }
+    /// ```
+    pub fn free(self) {
+        if self.stdin  != null { free(self.stdin  as *void); }
+        if self.stdout != null { free(self.stdout as *void); }
+        if self.stderr != null { free(self.stderr as *void); }
     }
 }
 

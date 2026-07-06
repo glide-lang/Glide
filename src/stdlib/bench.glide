@@ -76,6 +76,7 @@ impl Bencher {
 /// ```
 pub fn bench_run(name: string, f: fn(*Bencher)) {
     let b: *Bencher = malloc(sizeof(Bencher)) as *Bencher;
+    defer free(b as *void);
 
     // Warmup: dwarfs out one-time init (lazy module loaders, the
     // first malloc, jit-style hot-path priming on the C side).

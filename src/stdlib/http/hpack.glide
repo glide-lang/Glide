@@ -304,6 +304,19 @@ pub struct HpackHeader {
     pub value: string,
 }
 
+// Free every header struct pushed into a partial decode output plus the
+// backing vector, for the error-return paths in `decode_block` where `out`
+// never escapes to the caller. Only the malloc'd `HpackHeader` structs and
+// the vector are released; the `name`/`value` strings may alias static or
+// dynamic-table entries (via `_lookup`), so they are deliberately left
+// untouched to avoid corrupting the table.
+fn _drop_hdrs(out: *Vector<*HpackHeader>) {
+    for let i: i32 = 0; i < out.len(); i++ {
+        free(out.get(i) as *void);
+    }
+    out.free();
+}
+
 impl HpackDecoder {
     /// Create a decoder with the default 4 KiB dynamic table cap.
     /// Reuse one decoder across the connection so dynamic-table refs
@@ -354,19 +367,19 @@ impl HpackDecoder {
             if (b & 128) != 0 {
                 // Indexed header field (1xxxxxxx)
                 let idx_r: !*Pair<i32, i32> = _decode_integer(raw, pos, 7, len);
-                if !idx_r.ok { return err(idx_r.err); }
+                if !idx_r.ok { _drop_hdrs(out); return err(idx_r.err); }
                 pos = idx_r.val.first;
                 let idx: i32 = idx_r.val.second;
-                if idx == 0 { return err("hpack: index 0 in indexed field"); }
+                if idx == 0 { _drop_hdrs(out); return err("hpack: index 0 in indexed field"); }
                 let entry: !*HpackHeader = self._lookup(idx);
-                if !entry.ok { return err(entry.err); }
+                if !entry.ok { _drop_hdrs(out); return err(entry.err); }
                 out.push(entry.val);
                 continue;
             }
             if (b & 192) == 64 {
                 // Literal with incremental indexing (01xxxxxx)
                 let r: !*Pair<i32, *HpackHeader> = self._decode_literal(raw, pos, 6, len);
-                if !r.ok { return err(r.err); }
+                if !r.ok { _drop_hdrs(out); return err(r.err); }
                 pos = r.val.first;
                 self._add_dynamic(r.val.second.name, r.val.second.value);
                 out.push(r.val.second);
@@ -375,7 +388,7 @@ impl HpackDecoder {
             if (b & 224) == 32 {
                 // Dynamic table size update (001xxxxx)
                 let sz_r: !*Pair<i32, i32> = _decode_integer(raw, pos, 5, len);
-                if !sz_r.ok { return err(sz_r.err); }
+                if !sz_r.ok { _drop_hdrs(out); return err(sz_r.err); }
                 pos = sz_r.val.first;
                 let new_max: i32 = sz_r.val.second;
                 self.max_table_size = new_max;
@@ -386,7 +399,7 @@ impl HpackDecoder {
             // Both decode the same way; the difference matters only for
             // proxies that re-encode and we're not one.
             let r: !*Pair<i32, *HpackHeader> = self._decode_literal(raw, pos, 4, len);
-            if !r.ok { return err(r.err); }
+            if !r.ok { _drop_hdrs(out); return err(r.err); }
             pos = r.val.first;
             out.push(r.val.second);
         }

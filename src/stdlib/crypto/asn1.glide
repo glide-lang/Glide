@@ -135,6 +135,20 @@ pub fn der_into(t: *Tlv) -> *Der {
     return d;
 }
 
+/// Free a `Der` cursor allocated by `der_new` / `der_into`. Frees only the
+/// cursor struct; `buf` is a borrowed reference to the caller's string and
+/// is left untouched.
+pub fn der_free(d: *Der) {
+    free(d as *void);
+}
+
+/// Free a `Tlv` allocated by `der_read` / `der_expect`. Frees only the TLV
+/// struct; `buf` is a borrowed reference into the owning Der's buffer and is
+/// left untouched.
+pub fn tlv_free(t: *Tlv) {
+    free(t as *void);
+}
+
 /// Decode an OID's content bytes into dotted-decimal ("1.2.840.10045.2.1").
 pub fn der_oid_string(content: string) -> !string {
     let n: i32 = content.len();

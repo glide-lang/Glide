@@ -239,6 +239,7 @@ c_raw! {
         uint8_t rk[240];
         __glide_aes_expand((const uint8_t*)key, nk, rk, &nr);
         uint8_t* out = (uint8_t*)malloc(16);
+        if (!out) return 0;
         __glide_aes_encrypt(rk, nr, (const uint8_t*)in16, out);
         return out;
     }
@@ -254,6 +255,7 @@ pub fn aes_ecb_block(key: string, block: string) -> !string {
     if key.len() != 16 && key.len() != 32 { return err("aes-ecb: key must be 16 or 32 bytes"); }
     if block.len() != 16 { return err("aes-ecb: block must be 16 bytes"); }
     let p: *void = __glide_aes_ecb_block(key as *void, key.len(), block as *void);
+    if p == null { return err("aes-ecb: allocation failed"); }
     let s: string = __glide_string_from_buf(p, 16);
     free(p);
     return ok(s);

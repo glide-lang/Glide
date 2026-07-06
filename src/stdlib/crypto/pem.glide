@@ -60,6 +60,7 @@ pub fn pem_certificates(text: string) -> *Vector<string> {
     for let i: i32 = 0; i < blocks.len(); i++ {
         let b: *PemBlock = blocks.get(i);
         if b.label.eq("CERTIFICATE") { out.push(b.der); }
+        free(b as *void);
     }
     return out;
 }

@@ -440,7 +440,7 @@ c_raw! {
         fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
         if (n < 0) n = 0;
         unsigned char* buf = (unsigned char*)malloc((size_t)n + 1);
-        if (!buf) { *len_out = 0; return NULL; }
+        if (!buf) { fclose(f); *len_out = 0; return NULL; }
         size_t got = fread(buf, 1, (size_t)n, f); fclose(f);
         *len_out = (int)got;
         return buf;
