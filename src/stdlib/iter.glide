@@ -21,14 +21,14 @@
 
 pub trait Iterator {
     type Item;
-    fn next(self) -> ?Self::Item;
+    fn next(self: *Self) -> ?Self::Item;
 }
 
 // Plug VecIter (defined in builtins/vector.glide) into the trait so any
 // `fn f<I: Iterator>(it: *I)` accepts `v.iter()` after this import.
 impl<T> Iterator for VecIter<T> {
     type Item = T;
-    fn next(self) -> ?T {
+    fn next(self: *VecIter<T>) -> ?T {
         if self.idx >= self.vec.len { return none(); }
         let v: T = self.vec.data[self.idx];
         self.idx = self.idx + 1;

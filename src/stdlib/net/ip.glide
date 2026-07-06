@@ -104,14 +104,14 @@ impl IpAddr {
     /// ```glide
     /// IpAddr::v4(8, 8, 8, 8).is_v4();   // true
     /// ```
-    pub fn is_v4(&self) -> bool { return self.kind == 4; }
+    pub fn is_v4(self: *IpAddr) -> bool { return self.kind == 4; }
 
     /// `true` if this is a v6 address.
     ///
     /// ```glide
     /// IpAddr::loopback_v6().is_v6();   // true
     /// ```
-    pub fn is_v6(&self) -> bool { return self.kind == 6; }
+    pub fn is_v6(self: *IpAddr) -> bool { return self.kind == 6; }
 
     /// `true` for `127.0.0.0/8` (v4) or `::1` (v6).
     ///
@@ -119,7 +119,7 @@ impl IpAddr {
     /// IpAddr::v4(127, 0, 0, 1).is_loopback();   // true
     /// IpAddr::v4(8, 8, 8, 8).is_loopback();     // false
     /// ```
-    pub fn is_loopback(&self) -> bool {
+    pub fn is_loopback(self: *IpAddr) -> bool {
         if self.kind == 4 {
             return ((self.v4 >> 24) & 255) == 127;
         }
@@ -131,7 +131,7 @@ impl IpAddr {
     /// ```glide
     /// IpAddr::v4(0, 0, 0, 0).is_unspecified();   // true
     /// ```
-    pub fn is_unspecified(&self) -> bool {
+    pub fn is_unspecified(self: *IpAddr) -> bool {
         if self.kind == 4 { return self.v4 == 0; }
         return self.v6_hi == 0 && self.v6_lo == 0;
     }
@@ -143,7 +143,7 @@ impl IpAddr {
     /// IpAddr::v4(192, 168, 1, 5).is_private();   // true
     /// IpAddr::v4(8, 8, 8, 8).is_private();       // false
     /// ```
-    pub fn is_private(&self) -> bool {
+    pub fn is_private(self: *IpAddr) -> bool {
         if self.kind == 4 {
             let a: i32 = (self.v4 >> 24) & 255;
             let b: i32 = (self.v4 >> 16) & 255;
@@ -164,7 +164,7 @@ impl IpAddr {
     /// IpAddr::v4(8, 8, 8, 8).to_string();    // "8.8.8.8"
     /// IpAddr::loopback_v6().to_string();     // "::1"
     /// ```
-    pub fn to_string(self) -> string {
+    pub fn to_string(self: *IpAddr) -> string {
         if self.kind == 4 { return _v4_to_str(self.v4); }
         return _v6_to_str(self.v6_hi, self.v6_lo);
     }
@@ -194,7 +194,7 @@ impl IpAddr {
     /// let b: *IpAddr = IpAddr::v4(127, 0, 0, 1);
     /// a.eq(b);   // true
     /// ```
-    pub fn eq(self, other: *IpAddr) -> bool {
+    pub fn eq(self: *IpAddr, other: *IpAddr) -> bool {
         if self.kind != other.kind { return false; }
         if self.kind == 4 { return self.v4 == other.v4; }
         return self.v6_hi == other.v6_hi && self.v6_lo == other.v6_lo;
@@ -408,7 +408,7 @@ impl SocketAddr {
     /// SocketAddr::new(IpAddr::loopback_v4(), 80).to_string();   // "127.0.0.1:80"
     /// SocketAddr::new(IpAddr::loopback_v6(), 80).to_string();   // "[::1]:80"
     /// ```
-    pub fn to_string(self) -> string {
+    pub fn to_string(self: *SocketAddr) -> string {
         if self.ip.is_v6() {
             return "[".concat(self.ip.to_string())
                       .concat("]:").concat(_itos(self.port));
@@ -461,7 +461,7 @@ impl SocketAddr {
     /// let sa: *SocketAddr = SocketAddr::new(IpAddr::loopback_v4(), 80);
     /// defer sa.free();
     /// ```
-    pub fn free(self) {
+    pub fn free(self: *SocketAddr) {
         free(self.ip as *void);
         free(self as *void);
     }

@@ -66,18 +66,18 @@ impl Lexer {
         return l;
     }
 
-    pub fn free(self) {
+    pub fn free(self: *Lexer) {
         __glide_pfree(self as *void);
     }
 
-    fn peek(self) -> char {
+    fn peek(self: *Lexer) -> char {
         if self.pos >= self.src_len {
             return '\0';
         }
         return self.src.at(self.pos);
     }
 
-    fn peek_at(self, offset: i32) -> char {
+    fn peek_at(self: *Lexer, offset: i32) -> char {
         let i: i32 = self.pos + offset;
         if i >= self.src_len {
             return '\0';
@@ -85,7 +85,7 @@ impl Lexer {
         return self.src.at(i);
     }
 
-    fn advance(self) {
+    fn advance(self: *Lexer) {
         let c: char = self.peek();
         self.pos = self.pos + 1;
         if c.to_int() == 10 {
@@ -96,7 +96,7 @@ impl Lexer {
         }
     }
 
-    fn skip_trivia(self) {
+    fn skip_trivia(self: *Lexer) {
         let mut newlines_in_row: i32 = 0;
         let mut had_doc: bool = false;
         let mut total_nl: i32 = 0;
@@ -209,7 +209,7 @@ impl Lexer {
         }
     }
 
-    pub fn next_token(self) -> Token {
+    pub fn next_token(self: *Lexer) -> Token {
         self.skip_trivia();
         // Capture the doc-comment chain that just preceded this token, so it
         // travels alongside the token itself (Parser uses LL(2), so we can't

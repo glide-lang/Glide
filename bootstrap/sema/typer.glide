@@ -1458,7 +1458,7 @@ impl Typer {
         return t;
     }
 
-    fn is_visible(self, name: string) -> bool {
+    fn is_visible(self: *Typer, name: string) -> bool {
         if !self.enforce_visibility {
             return true;
         }
@@ -1476,7 +1476,7 @@ impl Typer {
     // current file is allowed to call into. Either the prefix matches
     // some loaded file's full module path (always allowed) OR the file
     // brought it into scope via `import x::y::<prefix>;`.
-    fn is_module_path_allowed(self, prefix: string) -> bool {
+    fn is_module_path_allowed(self: *Typer, prefix: string) -> bool {
         if !self.enforce_visibility {
             return true;
         }
@@ -1499,7 +1499,7 @@ impl Typer {
     // How many leading segments of `qual` form a module path that
     // suffix-matches some imported module (e.g. `http::client` against the
     // import `stdlib::http::client` -> 2). 0 when none do.
-    fn _module_suffix_segs(self, qual: string) -> i32 {
+    fn _module_suffix_segs(self: *Typer, qual: string) -> i32 {
         let mut best: i32 = 0;
         let mut end: i32 = qual.index_of("::");
         let mut segs: i32 = 1;
@@ -1532,7 +1532,7 @@ impl Typer {
         return best;
     }
 
-    fn _is_imported_module(self, name: string) -> bool {
+    fn _is_imported_module(self: *Typer, name: string) -> bool {
         if name == null || name.eq("") {
             return false;
         }
@@ -1549,7 +1549,7 @@ impl Typer {
     // `ip::SocketAddr` (module `ip` + type) resolves as the bare `SocketAddr`
     // via the normal type/method registry. Leaves non-module prefixes (a
     // bare `Type`, a type param) untouched.
-    fn _strip_mod_prefix(self, prefix: string) -> string {
+    fn _strip_mod_prefix(self: *Typer, prefix: string) -> string {
         if prefix == null {
             return prefix;
         }
@@ -1594,7 +1594,7 @@ impl Typer {
     // untouched. Recurses through pointer/borrow/option/result wrappers and
     // generic/tuple/fnptr element lists so `Vector<foo::Bar>`, `?foo::Bar`,
     // `(foo::A, foo::B)`, `fn(foo::A) -> foo::B` are all normalized.
-    fn _canon_type(self, ty: *Type) {
+    fn _canon_type(self: *Typer, ty: *Type) {
         if ty == null {
             return;
         }
@@ -1640,7 +1640,7 @@ impl Typer {
     }
 
     // Canonicalize every type annotation on a fn signature (params + return).
-    fn _canon_fn_sig(self, s: *Stmt) {
+    fn _canon_fn_sig(self: *Typer, s: *Stmt) {
         if s.fn_params != null {
             for let i: i32 = 0; i < s.fn_params.len(); i++ {
                 let p: Param = s.fn_params.get(i);
@@ -1658,7 +1658,7 @@ impl Typer {
     // AST before registration / checking / codegen all read them. Must run
     // with `current_origin` set per-stmt so `_is_imported_module` can resolve
     // origin-scoped imports.
-    fn _canon_decls(self, program: *Vector<Stmt>) {
+    fn _canon_decls(self: *Typer, program: *Vector<Stmt>) {
         for let i: i32 = 0; i < program.len(); i++ {
             let s: Stmt = program.get(i);
             let saved: string = self.current_origin;
@@ -1708,7 +1708,7 @@ impl Typer {
         }
     }
 
-    pub fn free(self) {
+    pub fn free(self: *Typer) {
         self.fns.free();
         self.structs.free();
         self.method_names.free();
@@ -1731,7 +1731,7 @@ impl Typer {
         __glide_pfree(self as *void);
     }
 
-    fn push_diag_tag(self, line: i32, col: i32, severity: i32, code: string, msg: string, tag: i32) {
+    fn push_diag_tag(self: *Typer, line: i32, col: i32, severity: i32, code: string, msg: string, tag: i32) {
         // Synth-position diagnostics (proc-macro outputs, builtin
         // surrogates) anchor at line 0 and render at line 1 in the
         // editor — useless to the user, since they can't fix the
@@ -1747,14 +1747,14 @@ impl Typer {
         self.diagnostics.push(e);
     }
 
-    fn push_diag(self, line: i32, col: i32, severity: i32, code: string, msg: string) {
+    fn push_diag(self: *Typer, line: i32, col: i32, severity: i32, code: string, msg: string) {
         self.push_diag_tag(line, col, severity, code, msg, 0);
     }
 
     // Attach a "this is why" location to the most recently pushed diagnostic.
     // No-op when no diagnostic has been emitted yet. Surfaced by the LSP as
     // relatedInformation; the CLI ignores it.
-    fn relate_last(self, origin: string, line: i32, col: i32, end_line: i32, end_col: i32, message: string) {
+    fn relate_last(self: *Typer, origin: string, line: i32, col: i32, end_line: i32, end_col: i32, message: string) {
         if self.diagnostics.len() == 0 {
             return;
         }
@@ -1766,14 +1766,14 @@ impl Typer {
         self.related.push(r);
     }
 
-    fn warn_unused(self, line: i32, col: i32, code: string, msg: string) {
+    fn warn_unused(self: *Typer, line: i32, col: i32, code: string, msg: string) {
         self.push_diag_tag(line, col, 2, code, msg, 1); // tag 1 = Unnecessary
     }
 
     // Same as warn_unused but with explicit end-column so the editor's
     // fade / strikethrough effect spans the whole identifier instead of a
     // single character. Pass the position of the name and its length.
-    fn warn_unused_range(self, line: i32, col: i32, len: i32, code: string, msg: string) {
+    fn warn_unused_range(self: *Typer, line: i32, col: i32, len: i32, code: string, msg: string) {
         let mut origin: string = self.current_origin;
         if origin == null {
             origin = "";
@@ -1790,7 +1790,7 @@ impl Typer {
     // reads the (fix_line, fix_col)..(fix_end_line, fix_end_col)
     // range and replaces it with `replacement`. Pass a zero-width
     // range to insert; an empty replacement to delete.
-    fn warn_with_fix(self, line: i32, col: i32, end_len: i32, code: string, msg: string, fl: i32, fc: i32, fel: i32, fec: i32, repl: string) {
+    fn warn_with_fix(self: *Typer, line: i32, col: i32, end_len: i32, code: string, msg: string, fl: i32, fc: i32, fel: i32, fec: i32, repl: string) {
         let mut origin: string = self.current_origin;
         if origin == null {
             origin = "";
@@ -1803,7 +1803,7 @@ impl Typer {
         self.diagnostics.push(e);
     }
 
-    fn err(self, line: i32, col: i32, msg: string) {
+    fn err(self: *Typer, line: i32, col: i32, msg: string) {
         if self.demote_errors {
             self.push_diag(line, col, 2, "", msg);
             return;
@@ -1812,7 +1812,7 @@ impl Typer {
         self.error_count = self.error_count + 1;
     }
 
-    fn err_code(self, line: i32, col: i32, code: string, msg: string) {
+    fn err_code(self: *Typer, line: i32, col: i32, code: string, msg: string) {
         if self.demote_errors {
             self.push_diag(line, col, 2, code, msg);
             return;
@@ -1821,7 +1821,7 @@ impl Typer {
         self.error_count = self.error_count + 1;
     }
 
-    fn err_code_range(self, line: i32, col: i32, span: i32, code: string, msg: string) {
+    fn err_code_range(self: *Typer, line: i32, col: i32, span: i32, code: string, msg: string) {
         let mut e_len: i32 = span;
         if e_len < 1 {
             e_len = 1;
@@ -1840,7 +1840,7 @@ impl Typer {
 
     // Error (severity 1) carrying a mechanical fix the LSP turns into a
     // quick fix: splice `repl` over the range (fl,fc)..(fel,fec) (1-indexed).
-    fn err_code_range_fix(self, line: i32, col: i32, span: i32, code: string, msg: string, fl: i32, fc: i32, fel: i32, fec: i32, repl: string) {
+    fn err_code_range_fix(self: *Typer, line: i32, col: i32, span: i32, code: string, msg: string, fl: i32, fc: i32, fel: i32, fec: i32, repl: string) {
         let mut e_len: i32 = span;
         if e_len < 1 {
             e_len = 1;
@@ -1857,14 +1857,14 @@ impl Typer {
         }
     }
 
-    fn warn(self, line: i32, col: i32, code: string, msg: string) {
+    fn warn(self: *Typer, line: i32, col: i32, code: string, msg: string) {
         self.push_diag(line, col, 2, code, msg);
     }
 
     // Warning (severity 2) underlining a `span`-wide range instead of a
     // single char, so the squiggle covers the whole offending expression
     // (e.g. `r.val`) rather than just its first character.
-    fn warn_range(self, line: i32, col: i32, span: i32, code: string, msg: string) {
+    fn warn_range(self: *Typer, line: i32, col: i32, span: i32, code: string, msg: string) {
         let mut e_len: i32 = span;
         if e_len < 1 {
             e_len = 1;

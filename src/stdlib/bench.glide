@@ -63,7 +63,7 @@ impl Bencher {
     ///     b.consume(&total);   // keep `total` alive
     /// }
     /// ```
-    pub fn consume(&self, p: *void) {
+    pub fn consume(self: *Bencher, p: *void) {
         __glide_bench_consume(p);
     }
 }

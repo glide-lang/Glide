@@ -93,7 +93,7 @@ impl HttpRequest {
     /// ```glide
     /// let host: string = req.header("Host");
     /// ```
-    pub fn header(self, name: string) -> string {
+    pub fn header(self: *HttpRequest, name: string) -> string {
         if self.headers_cache == null {
             self.headers_cache = _build_header_cache(self.headers_block);
         }
@@ -111,7 +111,7 @@ impl HttpRequest {
     /// req.param("id");   // "42"
     /// req.param("zzz");  // ""
     /// ```
-    pub fn param(self, name: string) -> string {
+    pub fn param(self: *HttpRequest, name: string) -> string {
         if self.params == null { return ""; }
         if !self.params.contains(name) { return ""; }
         return self.params.get(name);
@@ -127,7 +127,7 @@ impl HttpRequest {
     /// req.query("page");   // "2"
     /// req.query("zzz");    // ""
     /// ```
-    pub fn query(self, name: string) -> string {
+    pub fn query(self: *HttpRequest, name: string) -> string {
         if self.queries == null {
             self.queries = _parse_query(self.path);
         }
@@ -142,7 +142,7 @@ impl HttpRequest {
     /// // path = "/users/42?fields=name"
     /// req.path_only();   // "/users/42"
     /// ```
-    pub fn path_only(self) -> string {
+    pub fn path_only(self: *HttpRequest) -> string {
         let q: i32 = _find(self.path, "?", 0);
         if q < 0 { return self.path; }
         return self.path.substring(0, q);
@@ -155,7 +155,7 @@ impl HttpRequest {
     /// ```glide
     /// if req.is_method("GET") { /* ... */ }
     /// ```
-    pub fn is_method(self, m: string) -> bool {
+    pub fn is_method(self: *HttpRequest, m: string) -> bool {
         return self.method.to_upper().eq(m.to_upper());
     }
 
@@ -169,7 +169,7 @@ impl HttpRequest {
     /// if !v.ok { return HttpResponse::with_status(400).text(v.err); }
     /// let nome: !string = v.val.get_string("nome");
     /// ```
-    pub fn body_json(self) -> !*JsonValue {
+    pub fn body_json(self: *HttpRequest) -> !*JsonValue {
         if self.body.len() == 0 { return err("empty body"); }
         let v: *JsonValue = JsonValue::parse(self.body);
         if v == null { return err("invalid json"); }
@@ -206,7 +206,7 @@ impl HttpRequest {
 /// }
 /// ```
 pub trait ChunkSource {
-    fn next_chunk(self) -> ?string;
+    fn next_chunk(self: *Self) -> ?string;
 }
 
 /// Outgoing response. Build with `HttpResponse::ok()` /
@@ -473,7 +473,7 @@ impl HttpResponse {
     /// let ct: string = resp.header("Content-Type");
     /// if ct.starts_with("application/json") { /* parse JSON */ }
     /// ```
-    pub fn header(self, name: string) -> string {
+    pub fn header(self: *HttpResponse, name: string) -> string {
         let want: string = name.to_lower();
         let lines: *Vector<string> = self.headers_block.split("\r\n");
         for let i: i32 = 0; i < lines.len(); i++ {
@@ -495,7 +495,7 @@ impl HttpResponse {
     /// let cookies: *Vector<string> = resp.headers("Set-Cookie");
     /// for let i: i32 = 0; i < cookies.len(); i++ { println!(cookies.get(i)); }
     /// ```
-    pub fn headers(self, name: string) -> *Vector<string> {
+    pub fn headers(self: *HttpResponse, name: string) -> *Vector<string> {
         let want: string = name.to_lower();
         let out: *Vector<string> = Vector::new();
         let lines: *Vector<string> = self.headers_block.split("\r\n");

@@ -1793,7 +1793,7 @@ impl CG {
     // emit when (file, line) changed from the previous directive, and
     // we forward-slash the path so the C preprocessor accepts it on
     // Windows without escape headaches.
-    fn emit_line_dir(self, line: i32, origin: string) {
+    fn emit_line_dir(self: *CG, line: i32, origin: string) {
         if line <= 0 {
             return;
         }
@@ -1837,7 +1837,7 @@ impl CG {
     // returning `err(...)` and from the `?` propagation lowering. Fires
     // BEFORE regular defers so the err handler sees the same outer state
     // as the regular path.
-    fn emit_err_defers_reverse(self, depth: i32) {
+    fn emit_err_defers_reverse(self: *CG, depth: i32) {
         let n: i32 = self.err_defer_stack.len();
         for let i: i32 = n - 1; i >= 0; i = i - 1 {
             ind(depth);
@@ -1854,7 +1854,7 @@ impl CG {
     // `skip_name` names a local being returned (`return v`): its ownership
     // moves to the caller, so its auto-drop is skipped here (otherwise the
     // returned pointer would dangle). Empty string = drop everything.
-    fn emit_deferred_reverse(self, depth: i32, skip_name: string) {
+    fn emit_deferred_reverse(self: *CG, depth: i32, skip_name: string) {
         let na: i32 = self.auto_drop_stack.len();
         for let i: i32 = na - 1; i >= 0; i = i - 1 {
             let ex: Expr = self.auto_drop_stack.get(i);
@@ -1881,7 +1881,7 @@ impl CG {
 
     // Block-exit cleanup: emit (in reverse) and pop only auto-drop entries
     // pushed since `saved`. Explicit defers stay on their own stack.
-    fn emit_block_drops(self, saved: i32, depth: i32) {
+    fn emit_block_drops(self: *CG, saved: i32, depth: i32) {
         let n: i32 = self.auto_drop_stack.len();
         for let i: i32 = n - 1; i >= saved; i = i - 1 {
             let ex: Expr = self.auto_drop_stack.get(i);
@@ -1898,7 +1898,7 @@ impl CG {
         }
     }
 
-    pub fn free(self) {
+    pub fn free(self: *CG) {
         self.scope.free();
         self.generic_structs.free();
         self.generic_fns.free();
@@ -1909,13 +1909,13 @@ impl CG {
         free(self as *void);
     }
 
-    fn declare(self, name: string, ty: *Type) {
+    fn declare(self: *CG, name: string, ty: *Type) {
         if ty != null {
             self.scope.insert(name, *ty);
         }
     }
 
-    fn lookup(self, name: string) -> *Type {
+    fn lookup(self: *CG, name: string) -> *Type {
         if !self.scope.contains(name) {
             return null;
         }

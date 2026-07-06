@@ -47,7 +47,7 @@ impl Rng {
 
     /// Release the `Rng`. Called automatically for a `let r* = …`
     /// binding, so you rarely write it by hand.
-    pub fn free(self) { free(self as *void); }
+    pub fn free(self: *Rng) { free(self as *void); }
 
     /// Next raw 64-bit value. Wraps. Use this when you want all 64 bits
     /// of entropy (hashing, jitter); for ranged ints prefer `range`.
@@ -55,7 +55,7 @@ impl Rng {
     /// ```glide
     /// let raw: i64 = r.next_i64();
     /// ```
-    pub fn next_i64(&mut self) -> i64 {
+    pub fn next_i64(self: *Rng) -> i64 {
         let mut x: u64 = self.state as u64;
         x = x ^ (x << 13);
         x = x ^ (x >> 7);
@@ -76,7 +76,7 @@ impl Rng {
     /// ```glide
     /// let n: i32 = r.next_int();        // 0 .. 2^31-1
     /// ```
-    pub fn next_int(&mut self) -> i32 {
+    pub fn next_int(self: *Rng) -> i32 {
         let v: i64 = self.next_i64();
         let one: i64 = 1;
         let mask: i64 = (one << 31) - 1;
@@ -91,7 +91,7 @@ impl Rng {
     /// let dice: i32 = r.range(1, 7);    // d6 → 1..=6
     /// let pct:  i32 = r.range(0, 100);  // 0..=99
     /// ```
-    pub fn range(&mut self, lo: i32, hi: i32) -> i32 {
+    pub fn range(self: *Rng, lo: i32, hi: i32) -> i32 {
         if hi <= lo { return lo; }
         let span: i32 = hi - lo;
         return lo + (self.next_int() % span);
@@ -105,7 +105,7 @@ impl Rng {
     /// let p: f64 = r.next_f64();
     /// if p < 0.1 { /* 10% branch */ }
     /// ```
-    pub fn next_f64(&mut self) -> f64 {
+    pub fn next_f64(self: *Rng) -> f64 {
         let v: i64 = self.next_i64();
         // 53-bit mantissa mask, built as `(1 << 53) - 1` to stay inside
         // i32 literal range at every intermediate step.
@@ -120,5 +120,5 @@ impl Rng {
     /// ```glide
     /// if r.next_bool() { println!("heads"); } else { println!("tails"); }
     /// ```
-    pub fn next_bool(&mut self) -> bool { return (self.next_i64() & 1) == 1; }
+    pub fn next_bool(self: *Rng) -> bool { return (self.next_i64() & 1) == 1; }
 }

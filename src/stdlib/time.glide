@@ -1017,7 +1017,7 @@ impl Stopwatch {
     /// step_two();   let b: Duration = sw.reset();
     /// println!("a =", a.to_string(), " b =", b.to_string());
     /// ```
-    pub fn reset(&mut self) -> Duration {
+    pub fn reset(self: *Stopwatch) -> Duration {
         let prev: i64 = self.start_ns;
         let now: i64 = now_ns();
         self.start_ns = now;

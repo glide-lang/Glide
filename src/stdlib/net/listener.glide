@@ -68,7 +68,7 @@ impl TcpListener {
     ///     spawn handle(conn);
     /// }
     /// ```
-    pub fn accept(&self) -> !*TcpStream {
+    pub fn accept(self: *TcpListener) -> !*TcpStream {
         let mut f: i32 = 0;
         let mut v4: i64 = 0;
         let mut hi: i64 = 0;
@@ -80,7 +80,7 @@ impl TcpListener {
     }
 
     /// Close the listening socket and free the struct. Pair with `defer`.
-    pub fn close(self) {
+    pub fn close(self: *TcpListener) {
         gnet_close(self.fd);
         free(self as *void);
     }

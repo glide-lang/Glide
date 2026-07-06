@@ -91,12 +91,12 @@ impl CharClass {
         return c;
     }
 
-    pub fn add(self, lo: i32, hi: i32) {
+    pub fn add(self: *CharClass, lo: i32, hi: i32) {
         self.ranges.push(lo);
         self.ranges.push(hi);
     }
 
-    pub fn contains(&self, b: i32) -> bool {
+    pub fn contains(self: *CharClass, b: i32) -> bool {
         let n: i32 = self.ranges.len();
         let mut i: i32 = 0;
         while i < n {
@@ -1009,14 +1009,14 @@ impl Match {
     /// let m: *Match = re.find("hi world").val;
     /// m.full();   // "hi"
     /// ```
-    pub fn full(&self) -> string {
+    pub fn full(self: *Match) -> string {
         return self.input.substring(self.start, self.end);
     }
 
     /// Returns the capture for group `i`. Group 0 is the full match.
     /// Returns "" for missing/uncaptured groups (use `group_opt` to
     /// distinguish missing from empty).
-    pub fn group(&self, i: i32) -> string {
+    pub fn group(self: *Match, i: i32) -> string {
         if i == 0 { return self.full(); }
         let idx: i32 = (i - 1) * 2;
         if idx + 1 >= self.caps.len() { return ""; }
@@ -1027,7 +1027,7 @@ impl Match {
     }
 
     /// Returns `some` if group `i` participated in the match.
-    pub fn group_opt(&self, i: i32) -> ?string {
+    pub fn group_opt(self: *Match, i: i32) -> ?string {
         if i == 0 { return some(self.full()); }
         let idx: i32 = (i - 1) * 2;
         if idx + 1 >= self.caps.len() { return none(); }
@@ -1038,14 +1038,14 @@ impl Match {
     }
 
     /// Named capture lookup.
-    pub fn named(&self, name: string) -> string {
+    pub fn named(self: *Match, name: string) -> string {
         if self.name_to_idx.contains(name) {
             return self.group(self.name_to_idx.get(name));
         }
         return "";
     }
 
-    pub fn named_opt(&self, name: string) -> ?string {
+    pub fn named_opt(self: *Match, name: string) -> ?string {
         if self.name_to_idx.contains(name) {
             return self.group_opt(self.name_to_idx.get(name));
         }
@@ -1053,14 +1053,14 @@ impl Match {
     }
 
     /// Number of capturing groups (excluding group 0).
-    pub fn n_groups(&self) -> i32 {
+    pub fn n_groups(self: *Match) -> i32 {
         return self.caps.len() / 2;
     }
 
     /// Frees this match: the `caps` vector and the struct itself. Does NOT
     /// free `input` (borrowed from the caller) nor `group_names`/`name_to_idx`
     /// (borrowed from the owning `Regex`).
-    pub fn free(self) {
+    pub fn free(self: *Match) {
         self.caps.free();
         free(self as *void);
     }
@@ -1502,14 +1502,14 @@ impl Regex {
     /// r.matches("hi 42 there");   // true
     /// r.matches("nothing");        // false
     /// ```
-    pub fn matches(&self, s: string) -> bool {
+    pub fn matches(self: *Regex, s: string) -> bool {
         let m: ?*Match = self.find(s);
         if m.has { m.val.free(); }
         return m.has;
     }
 
     /// `true` if the pattern matches the entire string (anchored).
-    pub fn matches_full(&self, s: string) -> bool {
+    pub fn matches_full(self: *Regex, s: string) -> bool {
         let m: ?*Match = self.find(s);
         if !m.has { return false; }
         let r: bool = m.val.start == 0 && m.val.end == s.len();
@@ -1518,12 +1518,12 @@ impl Regex {
     }
 
     /// First match, or `none`.
-    pub fn find(&self, s: string) -> ?*Match {
+    pub fn find(self: *Regex, s: string) -> ?*Match {
         return self.find_at(s, 0);
     }
 
     /// First match starting at byte offset `from`.
-    pub fn find_at(&self, s: string, from: i32) -> ?*Match {
+    pub fn find_at(self: *Regex, s: string, from: i32) -> ?*Match {
         let mut i: i32 = from;
         let len: i32 = s.len();
         while true {
@@ -1551,7 +1551,7 @@ impl Regex {
 
     /// All non-overlapping matches. Empty matches advance by one byte
     /// to avoid infinite loops.
-    pub fn find_all(&self, s: string) -> *Vector<*Match> {
+    pub fn find_all(self: *Regex, s: string) -> *Vector<*Match> {
         let out: *Vector<*Match> = Vector::new();
         let mut i: i32 = 0;
         let len: i32 = s.len();
@@ -1569,7 +1569,7 @@ impl Regex {
 
     /// Replace the first match. `repl` supports `$0..$9` backreferences
     /// and `$$` for a literal `$`.
-    pub fn replace(&self, s: string, repl: string) -> string {
+    pub fn replace(self: *Regex, s: string, repl: string) -> string {
         let m: ?*Match = self.find(s);
         if !m.has { return s; }
         let mt: *Match = m.val;
@@ -1581,7 +1581,7 @@ impl Regex {
     }
 
     /// Replace every non-overlapping match.
-    pub fn replace_all(&self, s: string, repl: string) -> string {
+    pub fn replace_all(self: *Regex, s: string, repl: string) -> string {
         let all: *Vector<*Match> = self.find_all(s);
         if all.len() == 0 { all.free(); return s; }
         let mut out: string = "";
@@ -1599,7 +1599,7 @@ impl Regex {
     }
 
     /// Replace each match with the result of `f(match)`.
-    pub fn replace_with(&self, s: string, f: fn(*Match) -> string) -> string {
+    pub fn replace_with(self: *Regex, s: string, f: fn(*Match) -> string) -> string {
         let all: *Vector<*Match> = self.find_all(s);
         if all.len() == 0 { all.free(); return s; }
         let mut out: string = "";
@@ -1617,7 +1617,7 @@ impl Regex {
     }
 
     /// Split `s` on every non-overlapping match of this regex.
-    pub fn split(&self, s: string) -> *Vector<string> {
+    pub fn split(self: *Regex, s: string) -> *Vector<string> {
         let out: *Vector<string> = Vector::new();
         let all: *Vector<*Match> = self.find_all(s);
         let mut last: i32 = 0;
@@ -1637,7 +1637,7 @@ impl Regex {
     /// `classes` are intentionally NOT freed: repetition compiles the same
     /// class node several times, so one `CharClass` pointer can occupy
     /// multiple program slots and freeing them individually would double-free.
-    pub fn free(self) {
+    pub fn free(self: *Regex) {
         self.op.free();
         self.a.free();
         self.b.free();

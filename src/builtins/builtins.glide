@@ -123,7 +123,7 @@ extern fn make_chan(cap: i32);
 /// Structs without a `Display` impl fall back to an automatic
 /// `Name { field: value, ... }` rendering, so printing always works.
 pub trait Display {
-    fn to_string(self) -> string;
+    fn to_string(self: *Self) -> string;
 }
 
 // ---- Operator traits -----------------------------------------------------
@@ -132,7 +132,7 @@ pub trait Display {
 /// automatically, so you only implement `Eq` to override that or to bound a
 /// generic (`fn contains<T: Eq>(...)`).
 pub trait Eq {
-    fn eq(self, other: *Self) -> bool;
+    fn eq(self: *Self, other: *Self) -> bool;
 }
 
 /// Ordering for `<` `<=` `>` `>=`. `cmp` returns a negative / zero / positive
@@ -149,32 +149,32 @@ pub trait Eq {
 /// if v1 < v2 { ... }
 /// ```
 pub trait Ord {
-    fn cmp(self, other: *Self) -> i32;
+    fn cmp(self: *Self, other: *Self) -> i32;
 }
 
 /// `+` operator. `a + b` lowers to `a.add(b)` and takes its return type.
 pub trait Add {
-    fn add(self, other: *Self) -> *Self;
+    fn add(self: *Self, other: *Self) -> *Self;
 }
 
 /// `-` operator (`a - b` -> `a.sub(b)`).
 pub trait Sub {
-    fn sub(self, other: *Self) -> *Self;
+    fn sub(self: *Self, other: *Self) -> *Self;
 }
 
 /// `*` operator (`a * b` -> `a.mul(b)`).
 pub trait Mul {
-    fn mul(self, other: *Self) -> *Self;
+    fn mul(self: *Self, other: *Self) -> *Self;
 }
 
 /// `/` operator (`a / b` -> `a.div(b)`).
 pub trait Div {
-    fn div(self, other: *Self) -> *Self;
+    fn div(self: *Self, other: *Self) -> *Self;
 }
 
 /// `%` operator (`a % b` -> `a.rem(b)`).
 pub trait Rem {
-    fn rem(self, other: *Self) -> *Self;
+    fn rem(self: *Self, other: *Self) -> *Self;
 }
 
 // ---- C runtime escape hatches --------------------------------------------

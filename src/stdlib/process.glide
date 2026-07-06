@@ -958,7 +958,7 @@ impl ChildStdin {
     /// child.stdin.write("input line\n");
     /// child.stdin.close();   // signal EOF
     /// ```
-    pub fn write(self, s: string) -> !i32 {
+    pub fn write(self: *ChildStdin, s: string) -> !i32 {
         let n: i32 = __glide_pipe_write(self.handle, s, s.len());
         if n < 0 { return err("write to child stdin failed"); }
         return ok(n);
@@ -969,7 +969,7 @@ impl ChildStdin {
     /// child.stdin.write("data");
     /// child.stdin.close();
     /// ```
-    pub fn close(self) -> ! {
+    pub fn close(self: *ChildStdin) -> ! {
         if __glide_pipe_close(self.handle) != 0 { return err("close stdin failed"); }
         self.handle = 0 - 1;
     }
@@ -982,7 +982,7 @@ impl ChildStdout {
     /// let r: !string = child.stdout.read(4096);
     /// if r.ok && r.val.len() > 0 { print!(r.val); }
     /// ```
-    pub fn read(self, n: i32) -> !string {
+    pub fn read(self: *ChildStdout, n: i32) -> !string {
         let mut out: string = "";
         let got: i32 = __glide_pipe_read(self.handle, n, &mut out);
         if got < 0 { return err("read from child stdout failed"); }
@@ -994,7 +994,7 @@ impl ChildStdout {
     /// let r: !string = child.stdout.read_all();
     /// if r.ok { println!("got", r.val.len(), "bytes"); }
     /// ```
-    pub fn read_all(self) -> !string {
+    pub fn read_all(self: *ChildStdout) -> !string {
         let mut out: string = "";
         let got: i32 = __glide_pipe_read_all(self.handle, &mut out);
         if got < 0 { return err("read_all from child stdout failed"); }
@@ -1005,7 +1005,7 @@ impl ChildStdout {
     /// ```glide
     /// child.stdout.close();
     /// ```
-    pub fn close(self) -> ! {
+    pub fn close(self: *ChildStdout) -> ! {
         if __glide_pipe_close(self.handle) != 0 { return err("close stdout failed"); }
         self.handle = 0 - 1;
     }
@@ -1018,7 +1018,7 @@ impl ChildStderr {
     /// let r: !string = child.stderr.read(4096);
     /// if r.ok && r.val.len() > 0 { eprintln(r.val); }
     /// ```
-    pub fn read(self, n: i32) -> !string {
+    pub fn read(self: *ChildStderr, n: i32) -> !string {
         let mut out: string = "";
         let got: i32 = __glide_pipe_read(self.handle, n, &mut out);
         if got < 0 { return err("read from child stderr failed"); }
@@ -1030,14 +1030,14 @@ impl ChildStderr {
     /// let r: !string = child.stderr.read_all();
     /// if r.ok && r.val.len() > 0 { eprintln(r.val); }
     /// ```
-    pub fn read_all(self) -> !string {
+    pub fn read_all(self: *ChildStderr) -> !string {
         let mut out: string = "";
         let got: i32 = __glide_pipe_read_all(self.handle, &mut out);
         if got < 0 { return err("read_all from child stderr failed"); }
         return ok(out);
     }
     /// Close the stderr pipe.
-    pub fn close(self) -> ! {
+    pub fn close(self: *ChildStderr) -> ! {
         if __glide_pipe_close(self.handle) != 0 { return err("close stderr failed"); }
         self.handle = 0 - 1;
     }
@@ -1074,7 +1074,7 @@ impl Command {
     /// ```glide
     /// Command::new("ls").arg("-la").arg("/tmp").run();
     /// ```
-    pub fn arg(self, a: string) -> *Command { self.args.push(a); return self; }
+    pub fn arg(self: *Command, a: string) -> *Command { self.args.push(a); return self; }
 
     /// Add multiple positional arguments at once.
     ///
@@ -1083,7 +1083,7 @@ impl Command {
     /// extras.push_all!("--verbose", "input.txt");
     /// Command::new("tool").args(extras).run();
     /// ```
-    pub fn args(self, vs: *Vector<string>) -> *Command {
+    pub fn args(self: *Command, vs: *Vector<string>) -> *Command {
         for let i: i32 = 0; i < vs.len(); i++ { self.args.push(vs.get(i)); }
         return self;
     }
@@ -1095,7 +1095,7 @@ impl Command {
     /// ```glide
     /// Command::new("python").env("PYTHONUNBUFFERED", "1").arg("script.py").run();
     /// ```
-    pub fn env(self, key: string, value: string) -> *Command {
+    pub fn env(self: *Command, key: string, value: string) -> *Command {
         self.env_kv.push(key.concat("=").concat(value));
         return self;
     }
@@ -1113,7 +1113,7 @@ impl Command {
     ///     .env("LANG", "C.UTF-8")
     ///     .run();
     /// ```
-    pub fn env_clear(self) -> *Command {
+    pub fn env_clear(self: *Command) -> *Command {
         self.flags = self.flags | 4;
         return self;
     }
@@ -1123,7 +1123,7 @@ impl Command {
     /// ```glide
     /// Command::new("git").arg("status").cwd("/tmp/repo").run();
     /// ```
-    pub fn cwd(self, path: string) -> *Command { self.cwd_path = path; return self; }
+    pub fn cwd(self: *Command, path: string) -> *Command { self.cwd_path = path; return self; }
 
     /// Pipe `s` to the child's stdin. The pipe is closed once `s` is fully
     /// written, signaling EOF to the child.
@@ -1135,7 +1135,7 @@ impl Command {
     /// let r: !ProcessResult = cmd.run();
     /// if r.ok { println!(r.val.stdout.trim()); }   // "3"
     /// ```
-    pub fn stdin_str(self, s: string) -> *Command { self.stdin_payload = s; return self; }
+    pub fn stdin_str(self: *Command, s: string) -> *Command { self.stdin_payload = s; return self; }
 
     /// Capture stdout into the returned `ProcessResult.stdout`.
     ///
@@ -1145,7 +1145,7 @@ impl Command {
     /// let r: !ProcessResult = cmd.run();
     /// if r.ok { println!(r.val.stdout.trim()); }
     /// ```
-    pub fn capture_out(self) -> *Command { self.flags = self.flags | 1; return self; }
+    pub fn capture_out(self: *Command) -> *Command { self.flags = self.flags | 1; return self; }
 
     /// Capture stderr into the returned `ProcessResult.stderr`.
     ///
@@ -1155,7 +1155,7 @@ impl Command {
     /// let r: !ProcessResult = cmd.run();
     /// if r.ok && r.val.exit_code != 0 { eprintln(r.val.stderr); }
     /// ```
-    pub fn capture_err(self) -> *Command { self.flags = self.flags | 2; return self; }
+    pub fn capture_err(self: *Command) -> *Command { self.flags = self.flags | 2; return self; }
 
     /// Capture both stdout and stderr.
     ///
@@ -1166,7 +1166,7 @@ impl Command {
     ///     eprintln(r.val.stderr);
     /// }
     /// ```
-    pub fn capture(self) -> *Command { self.flags = self.flags | 3; return self; }
+    pub fn capture(self: *Command) -> *Command { self.flags = self.flags | 3; return self; }
 
     /// Request a live pipe for the child's stdin, returned as `Child.stdin`
     /// after `spawn()`. Use it with `child.stdin.write(s)` and `.close()`.
@@ -1183,7 +1183,7 @@ impl Command {
     ///     r.val.wait();
     /// }
     /// ```
-    pub fn pipe_stdin(self) -> *Command { self.flags = self.flags | 8; return self; }
+    pub fn pipe_stdin(self: *Command) -> *Command { self.flags = self.flags | 8; return self; }
 
     /// Request a live pipe for the child's stdout. Read with
     /// `child.stdout.read(n)` or `.read_all()`.
@@ -1196,7 +1196,7 @@ impl Command {
     ///     r.val.wait();
     /// }
     /// ```
-    pub fn pipe_stdout(self) -> *Command { self.flags = self.flags | 16; return self; }
+    pub fn pipe_stdout(self: *Command) -> *Command { self.flags = self.flags | 16; return self; }
 
     /// Request a live pipe for the child's stderr.
     ///
@@ -1208,7 +1208,7 @@ impl Command {
     ///     r.val.wait();
     /// }
     /// ```
-    pub fn pipe_stderr(self) -> *Command { self.flags = self.flags | 32; return self; }
+    pub fn pipe_stderr(self: *Command) -> *Command { self.flags = self.flags | 32; return self; }
 
     /// Run the command synchronously. Blocks until the child exits.
     /// Returns `Err` only if the spawn itself failed (program not found,
@@ -1222,7 +1222,7 @@ impl Command {
     ///     println!("out:",  r.val.stdout.trim());   // "hi"
     /// }
     /// ```
-    pub fn run(self) -> !ProcessResult {
+    pub fn run(self: *Command) -> !ProcessResult {
         let args_packed: string = _proc_join(self.args);
         let env_packed:  string = _proc_join(self.env_kv);
         let mut exit_code: i32 = 0;
@@ -1268,7 +1268,7 @@ impl Command {
     ///     r.val.wait();
     /// }
     /// ```
-    pub fn spawn(self) -> !Child {
+    pub fn spawn(self: *Command) -> !Child {
         let args_packed: string = _proc_join(self.args);
         let env_packed:  string = _proc_join(self.env_kv);
         let env_clear:   i32 = (self.flags >> 2) & 1;
@@ -1336,7 +1336,7 @@ impl Command {
     /// defer cmd.free();
     /// cmd.arg("hi").run();
     /// ```
-    pub fn free(self) {
+    pub fn free(self: *Command) {
         if self.args != null { self.args.free(); }
         if self.env_kv != null { self.env_kv.free(); }
         free(self as *void);
@@ -1354,7 +1354,7 @@ impl Child {
     ///     if res.ok { println!("exited", res.val.exit_code); }
     /// }
     /// ```
-    pub fn wait(self) -> !ProcessResult {
+    pub fn wait(self: *Child) -> !ProcessResult {
         let mut exit_code: i32 = 0;
         let mut signaled:  i32 = 0;
         let mut sig:       i32 = 0;
@@ -1374,7 +1374,7 @@ impl Child {
     /// child.kill(15);   // SIGTERM (POSIX); ignored arg on Windows
     /// child.wait();
     /// ```
-    pub fn kill(self, sig: i32) -> ! {
+    pub fn kill(self: *Child, sig: i32) -> ! {
         if __glide_proc_kill(self.pid, sig) != 0 { return err("kill failed"); }
     }
 
@@ -1391,7 +1391,7 @@ impl Child {
     ///     r.val.wait();
     /// }
     /// ```
-    pub fn free(self) {
+    pub fn free(self: *Child) {
         if self.stdin  != null { free(self.stdin  as *void); }
         if self.stdout != null { free(self.stdout as *void); }
         if self.stderr != null { free(self.stderr as *void); }

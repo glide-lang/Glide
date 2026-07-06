@@ -3092,19 +3092,19 @@ impl H3SessionCache {
         c.handle = __glide_h3_session_cache_new();
         return c;
     }
-    pub fn free(self) {
+    pub fn free(self: *H3SessionCache) {
         __glide_h3_session_cache_free(self.handle);
         self.handle = null;
     }
     /// How many connect calls found a cached session for their target
     /// (host, port) and installed it on the SSL — i.e. how many tried
     /// 0-RTT. Doesn't say whether the server accepted; see `accepted`.
-    pub fn attempts(&self) -> i32 {
+    pub fn attempts(self: *H3SessionCache) -> i32 {
         return __glide_h3_session_cache_attempts(self.handle);
     }
     /// How many connects had their 0-RTT data accepted by the server
     /// (i.e. saved 1 RTT). `attempts - accepted` is the rejection count.
-    pub fn accepted(&self) -> i32 {
+    pub fn accepted(self: *H3SessionCache) -> i32 {
         return __glide_h3_session_cache_accepted(self.handle);
     }
     /// Serialise the cache to a binary file (magic + version + N entries).
@@ -3116,14 +3116,14 @@ impl H3SessionCache {
     /// // ...do work...
     /// c.save("h3-sessions.bin");
     /// ```
-    pub fn save(&self, path: string) -> bool {
+    pub fn save(self: *H3SessionCache, path: string) -> bool {
         return __glide_h3_session_cache_save(self.handle, path) != 0;
     }
     /// Read entries from a binary file produced by `save`. Expired
     /// entries are dropped on load. Wipes whatever the cache held first.
     /// Returns the number of entries loaded (0 on missing file or
     /// corrupt format — safe to call before save has ever run).
-    pub fn load(&mut self, path: string) -> i32 {
+    pub fn load(self: *H3SessionCache, path: string) -> i32 {
         return __glide_h3_session_cache_load(self.handle, path);
     }
 }
