@@ -1341,6 +1341,9 @@ impl TlsListener {
         if h == null { return err("tls_listener: accept/handshake failure"); }
         let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
         s.handle = h;
+        s.backend = 0;
+        s.gconn = null as *TlsConn;
+        s.gconn12 = null as *Tls12Conn;
         return ok(s);
     }
 
@@ -1375,6 +1378,9 @@ impl TlsListener {
         if h == null { return err("tls_listener: handshake failed on attached fd"); }
         let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
         s.handle = h;
+        s.backend = 0;
+        s.gconn = null as *TlsConn;
+        s.gconn12 = null as *Tls12Conn;
         return ok(s);
     }
 
@@ -1408,6 +1414,9 @@ pub fn tls_attach_server(conn_fd: i32, cert_path: string,
     if h == null { return err("tls: server attach handshake failed"); }
     let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
     s.handle = h;
+    s.backend = 0;
+    s.gconn = null as *TlsConn;
+    s.gconn12 = null as *Tls12Conn;
     return ok(s);
 }
 

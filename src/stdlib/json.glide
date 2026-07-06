@@ -597,6 +597,11 @@ fn _jp_object(p: *JsonParser) -> *JsonValue {
         if v == null { v = JsonValue::null(); }
         obj.obj_keys.push(k.s);
         obj.obj_vals.push(*v);
+        // k and v are internal parser temps: the pushes copied k.s (the key
+        // string) and *v (the struct, sharing its inner pointers) into obj, so
+        // the wrapper nodes are now unreachable -> free them (not their contents).
+        free(k as *void);
+        free(v as *void);
         _jp_skip_ws(p);
         let c: i32 = _jp_peek(p);
         if c == 44 { p.pos = p.pos + 1; continue; } // ','
@@ -615,6 +620,7 @@ fn _jp_array(p: *JsonParser) -> *JsonValue {
         let v: *JsonValue = _jp_value(p);
         if v == null { return arr; }
         arr.arr.push(*v);
+        free(v as *void);   // internal temp: push(*v) copied the struct into arr
         _jp_skip_ws(p);
         let c: i32 = _jp_peek(p);
         if c == 44 { p.pos = p.pos + 1; continue; }

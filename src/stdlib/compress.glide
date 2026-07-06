@@ -353,6 +353,16 @@ fn _inf_new(src: string, inlen: i32, start: i32) -> *Inf {
     return s;
 }
 
+// Free an Inf's owned state: the four escaping lookup vectors + the raw struct.
+// NOT s.out (that ByteBuffer's data is the decoder's result, handed to the caller).
+fn _inf_drop(s: *Inf) {
+    s.lbase.free();
+    s.lext.free();
+    s.dbase.free();
+    s.dext.free();
+    free(s as *void);
+}
+
 // Run the DEFLATE block loop. Returns the decoded output, or null on error.
 fn _inflate_raw(src: string, inlen: i32, start: i32) -> *ByteBuffer {
     let s: *Inf = _inf_new(src, inlen, start);
@@ -361,7 +371,7 @@ fn _inflate_raw(src: string, inlen: i32, start: i32) -> *ByteBuffer {
         last = _inf_bits(s, 1);
         let btype: i32 = _inf_bits(s, 2);
         if s.err {
-            return null;
+            s.out.free(); _inf_drop(s); return null;
         }
         if btype == 0 {
             _inf_stored(s);
@@ -372,15 +382,17 @@ fn _inflate_raw(src: string, inlen: i32, start: i32) -> *ByteBuffer {
                 if btype == 2 {
                     _inf_dynamic(s);
                 } else {
-                    return null;
+                    s.out.free(); _inf_drop(s); return null;
                 }
             }
         }
         if s.err {
-            return null;
+            s.out.free(); _inf_drop(s); return null;
         }
     }
-    return s.out;
+    let out: *ByteBuffer = s.out;
+    _inf_drop(s);
+    return out;
 }
 
 // Locate the start of the DEFLATE payload: skip a gzip (RFC 1952) or zlib
@@ -680,5 +692,10 @@ pub fn gzip_encode(input: string, in_len: i32, out_len: *i32) -> *void {
     w.out.push((in_len >> 16 & 255) as u8);
     w.out.push((in_len >> 24 & 255) as u8);
     *out_len = w.out.len();
-    return w.out.data as *void;
+    // Hand the payload buffer (w.out.data) to the caller; free the two wrapper
+    // structs (the ByteBuffer header + the BitW state), NOT the data itself.
+    let ret: *void = w.out.data as *void;
+    free(w.out as *void);
+    free(w as *void);
+    return ret;
 }
