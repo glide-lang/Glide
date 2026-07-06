@@ -411,6 +411,42 @@ c_raw! {
     static _Thread_local PArena* g_palloc_run = NULL;
     static int g_palloc_run_on = 1;
     void __glide_disable_run_bump(void) { g_palloc_run_on = 0; }
+
+    // Global registry of every run-bump chunk, across all threads. __glide_pfree
+    // must recognize bump pointers (skip free()) no matter which thread frees
+    // them, but g_palloc_run is thread-local — so each new run chunk is also
+    // published here. Run chunks are process-lifetime (never unmapped), so
+    // readers may walk the list lock-free; writers prepend with a CAS. Chunk
+    // creation is rare (sizes double), so contention is a non-issue.
+    typedef struct PRunChunk {
+        unsigned char* base;
+        int cap;
+        struct PRunChunk* next;
+    } PRunChunk;
+    static PRunChunk* g_palloc_run_chunks = NULL;
+    static void __glide_palloc_run_register(PArena* c) {
+        PRunChunk* n = (PRunChunk*)malloc(sizeof(PRunChunk));
+        n->base = c->head;
+        n->cap = c->cap;
+        PRunChunk* head = __atomic_load_n(&g_palloc_run_chunks, __ATOMIC_ACQUIRE);
+        do {
+            n->next = head;
+        } while (!__atomic_compare_exchange_n(&g_palloc_run_chunks, &head, n,
+                                              0, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE));
+    }
+    // True when `p` points into any thread's run-bump chunk. The counterpart
+    // of __glide_palloc_owns for the no-arena bump path: every pointer
+    // __glide_palloc can hand out must be recognized by __glide_pfree, else
+    // pfree calls glibc free() on an interior mmap pointer (invalid free).
+    static int __glide_palloc_run_owns(void* p) {
+        PRunChunk* c = __atomic_load_n(&g_palloc_run_chunks, __ATOMIC_ACQUIRE);
+        while (c != NULL) {
+            unsigned char* base = c->base;
+            if ((unsigned char*)p >= base && (unsigned char*)p < base + c->cap) return 1;
+            c = c->next;
+        }
+        return 0;
+    }
     void* __glide_palloc(int size) {
         if (size <= 0) size = 1;
         PArena* a = __glide_active_arena();
@@ -421,11 +457,13 @@ c_raw! {
                 PArena* r = g_palloc_run;
                 if (r == NULL) {
                     r = __glide_palloc_chunk(NULL, size);
+                    __glide_palloc_run_register(r);
                     g_palloc_run = r;
                 }
                 int aligned_r = (size + 7) & ~7;
                 if (r->used + aligned_r > r->cap) {
                     r = __glide_palloc_chunk(r, aligned_r);
+                    __glide_palloc_run_register(r);
                     g_palloc_run = r;
                 }
                 void* pr = r->head + r->used;
@@ -491,6 +529,11 @@ c_raw! {
     void __glide_pfree(void* p) {
         if (p == NULL) return;
         if (__glide_palloc_owns(p)) return;
+        // Run-bump pointers (build/run mode, no active arena) are handed out
+        // by __glide_palloc too; they live in mmap'd chunks and must never
+        // reach glibc free(). __glide_palloc_owns keeps its active-arena-only
+        // semantics (the LSP relies on it), so check the run chain here.
+        if (__glide_palloc_run_owns(p)) return;
         free(p);
     }
 
