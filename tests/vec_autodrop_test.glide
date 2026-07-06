@@ -1,0 +1,44 @@
+// Inferred collection auto-drop: a `let v = Vector::new()` used only locally
+// (pushed, read via receiver methods, never returned/stored/aliased/freed) is
+// freed at scope end AUTOMATICALLY — no manual .free() needed, no leak. A wrong
+// auto-drop of a hand-freed vector would double-free (abort); a dropped-then-used
+// vector would UAF. Real values are asserted so either fault surfaces.
+
+fn sum_local() -> i64 {
+    let v: *Vector<i32> = Vector::new();   // no .free(), no escape -> auto-dropped
+    v.push(10); v.push(20); v.push(30);
+    return (v.get(0) + v.get(1) + v.get(2)) as i64;
+}
+
+fn test_local_vector_autodrops() -> i32 {
+    assert!(sum_local() == 60);
+    return 0;
+}
+
+// A vector freed BY HAND must NOT also be auto-dropped (the .free() disqualifies
+// it in the escape walker). Still correct, no double free.
+fn sum_manual_free() -> i64 {
+    let v: *Vector<i32> = Vector::new();
+    defer v.free();
+    v.push(5); v.push(7);
+    return (v.get(0) + v.get(1)) as i64;
+}
+
+fn test_manual_free_not_double() -> i32 {
+    assert!(sum_manual_free() == 12);
+    return 0;
+}
+
+// A vector RETURNED escapes -> must NOT be auto-dropped (caller owns it).
+fn make_vec() -> *Vector<i32> {
+    let v: *Vector<i32> = Vector::new();
+    v.push(1); v.push(2);
+    return v;
+}
+
+fn test_returned_vector_survives() -> i32 {
+    let v: *Vector<i32> = make_vec();
+    defer v.free();
+    assert!(v.get(0) + v.get(1) == 3);
+    return 0;
+}

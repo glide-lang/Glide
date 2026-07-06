@@ -1259,6 +1259,156 @@ fn _str_stmt_escapes(g: *CG, name: string, st: *Stmt) -> bool {
     if _str_args_escape(g, name, st.asm_in_exprs) { return true; }
     return false;
 }
+// ---- Owned-collection auto-drop (Vector / HashMap) -----------------------
+// A `let v: *Vector<T> = Vector::new()` (or vec_of! / with_capacity / HashMap::
+// new) is freed at scope end IFF v never escapes: every use is a method call /
+// index / field read ON v as the RECEIVER (mutation included — push/pop/set are
+// fine), a borrow `&v`, or a pass to a callee that provably doesn't retain it.
+// ANY other use — returned, stored in a field/container, aliased (`let w = v`),
+// rebound (`v = ..`), passed to a retaining/unknown callee, or freed by hand
+// (`v.free()` / `free(v)` / `defer v.free()`) — disqualifies. The manual-free
+// disqualifier is what prevents a double free with code that already frees v.
+// Conservative: an unproven node counts as escape (leaves v to manual free).
+fn _own_args_escape(g: *CG, name: string, args: *Vector<Expr>) -> bool {
+    if args == null { return false; }
+    for let i: i32 = 0; i < args.len(); i = i + 1 {
+        let a: Expr = args.get(i);
+        if _own_expr_escapes(g, name, &a) { return true; }
+    }
+    return false;
+}
+fn _own_call_args_escape(g: *CG, name: string, call: *Expr) -> bool {
+    if call.args == null { return false; }
+    for let i: i32 = 0; i < call.args.len(); i = i + 1 {
+        let a: Expr = call.args.get(i);
+        // Passing the collection to ANY function escapes: unlike a string (readers
+        // never free), a callee may take ownership and free it (`consume(v){ v.
+        // free() }`) — the retention summary tracks store/return, NOT free, so it
+        // can't prove the pass safe. Conservative: any by-value pass disqualifies.
+        if a.kind == EX_IDENT && a.str_val != null && a.str_val.eq(name) { return true; }
+        if _own_expr_escapes(g, name, &a) { return true; }
+    }
+    return false;
+}
+fn _own_arms_escape(g: *CG, name: string, arms: *Vector<MatchArm>) -> bool {
+    if arms == null { return false; }
+    for let i: i32 = 0; i < arms.len(); i = i + 1 {
+        let ar: MatchArm = arms.get(i);
+        if _own_expr_escapes(g, name, ar.lit) { return true; }
+        if _own_stmts_escape(g, name, ar.body) { return true; }
+    }
+    return false;
+}
+fn _own_selectarms_escape(g: *CG, name: string, arms: *Vector<SelectArm>) -> bool {
+    if arms == null { return false; }
+    for let i: i32 = 0; i < arms.len(); i = i + 1 {
+        let ar: SelectArm = arms.get(i);
+        if _own_expr_escapes(g, name, ar.chan_expr) { return true; }
+        if _own_expr_escapes(g, name, ar.send_value) { return true; }
+        if _own_stmts_escape(g, name, ar.body) { return true; }
+    }
+    return false;
+}
+fn _own_expr_escapes(g: *CG, name: string, e: *Expr) -> bool {
+    if e == null { return false; }
+    if e.kind == EX_IDENT { return e.str_val != null && e.str_val.eq(name); }
+    // &v / &mut v — second-class borrow, cannot be stored or returned.
+    if e.kind == EX_UNARY && (e.op_code == UN_ADDR || e.op_code == UN_ADDR_MUT) && e.operand != null && e.operand.kind == EX_IDENT && e.operand.str_val != null && e.operand.str_val.eq(name) { return false; }
+    // `v.method(args)` with v the receiver: the collection op doesn't leak the
+    // container pointer, so v-as-receiver is safe — EXCEPT `.free()`, which means
+    // the code already frees v (disqualify, else we double-free). Check the args.
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER
+        && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT && e.lhs.lhs.str_val != null
+        && e.lhs.lhs.str_val.eq(name) {
+        if e.lhs.field != null && e.lhs.field.eq("free") { return true; }
+        return _own_args_escape(g, name, e.args);
+    }
+    // v[i] index read / v.field read — receiver safe; check the index expr.
+    if e.kind == EX_INDEX && e.lhs != null && e.lhs.kind == EX_IDENT && e.lhs.str_val != null && e.lhs.str_val.eq(name) {
+        return _own_expr_escapes(g, name, e.rhs);
+    }
+    if e.kind == EX_MEMBER && e.lhs != null && e.lhs.kind == EX_IDENT && e.lhs.str_val != null && e.lhs.str_val.eq(name) {
+        return false;
+    }
+    // general call: callee expr + retention-aware argument positions.
+    if e.kind == EX_CALL {
+        if _own_expr_escapes(g, name, e.lhs) { return true; }
+        if _own_call_args_escape(g, name, e) { return true; }
+        return false;
+    }
+    if _own_expr_escapes(g, name, e.lhs) { return true; }
+    if _own_expr_escapes(g, name, e.rhs) { return true; }
+    if _own_expr_escapes(g, name, e.operand) { return true; }
+    if _own_expr_escapes(g, name, e.macro_recv) { return true; }
+    if _own_args_escape(g, name, e.args) { return true; }
+    if _own_stmts_escape(g, name, e.block_stmts) { return true; }
+    if _own_stmts_escape(g, name, e.fn_expr_body) { return true; }
+    if _own_arms_escape(g, name, e.match_arms) { return true; }
+    return false;
+}
+fn _own_stmts_escape(g: *CG, name: string, list: *Vector<Stmt>) -> bool {
+    if list == null { return false; }
+    for let i: i32 = 0; i < list.len(); i = i + 1 {
+        let st: Stmt = list.get(i);
+        if _own_stmt_escapes(g, name, &st) { return true; }
+    }
+    return false;
+}
+fn _own_stmt_escapes(g: *CG, name: string, st: *Stmt) -> bool {
+    if st == null { return false; }
+    if _own_expr_escapes(g, name, st.let_value) { return true; }
+    if _own_expr_escapes(g, name, st.expr_value) { return true; }
+    if _own_expr_escapes(g, name, st.cond) { return true; }
+    if _own_expr_escapes(g, name, st.for_step) { return true; }
+    if _own_expr_escapes(g, name, st.scrutinee) { return true; }
+    if st.for_init != null && _own_stmt_escapes(g, name, st.for_init) { return true; }
+    if _own_stmts_escape(g, name, st.then_body) { return true; }
+    if _own_stmts_escape(g, name, st.else_body) { return true; }
+    if _own_stmts_escape(g, name, st.fn_body) { return true; }
+    if _own_arms_escape(g, name, st.arms) { return true; }
+    if _own_selectarms_escape(g, name, st.select_arms) { return true; }
+    if _own_args_escape(g, name, st.asm_out_exprs) { return true; }
+    if _own_args_escape(g, name, st.asm_in_exprs) { return true; }
+    return false;
+}
+// A fresh, sole-owner collection constructor: `Vector::new()` /
+// `Vector::with_capacity(n)` / `HashMap::new()` / `vec_of!(...)`.
+fn _vec_fresh_ctor(e: *Expr, tyname: string) -> bool {
+    if e == null || e.kind != EX_CALL || e.lhs == null { return false; }
+    // Pre-mono form: `Vector::new()` is EX_PATH "Vector"::"new".
+    if e.lhs.kind == EX_PATH && e.lhs.str_val != null && e.lhs.field != null {
+        if e.lhs.str_val.eq(tyname) && (e.lhs.field.eq("new") || e.lhs.field.eq("with_capacity")) { return true; }
+    }
+    // Post-mono form: the prescan rewrites it to a bare call `Vector_new__i32()` /
+    // `Vector_with_capacity__i32()` BEFORE this runs, so match that too — this is
+    // the form actually seen at emit time. (vec_of! is intentionally NOT matched:
+    // it lowers to a stmt-expr whose yielded temp must not be dropped.)
+    if e.lhs.kind == EX_IDENT && e.lhs.str_val != null {
+        let nm: string = e.lhs.str_val;
+        if nm.starts_with(tyname.concat("_new")) || nm.starts_with(tyname.concat("_with_capacity")) { return true; }
+    }
+    return false;
+}
+// `let v: *Vector<T>/*HashMap<K,V> = <fresh ctor>` with no escaping use in the
+// enclosing fn body auto-drops (v.free() at scope end) — so the collection needs
+// no manual free. Not for explicit `let v*` (already auto-owned) or code that
+// frees v by hand (the escape walker's .free() disqualifier).
+fn _vec_let_droppable(g: *CG, st: *Stmt) -> bool {
+    if st == null || st.kind != ST_LET { return false; }
+    if st.is_auto_owned { return false; }
+    if st.let_ty == null || st.let_ty.kind != TY_POINTER || st.let_ty.inner == null { return false; }
+    let inner: *Type = st.let_ty.inner;
+    if inner.kind != TY_GENERIC || inner.name == null { return false; }
+    if !(inner.name.eq("Vector") || inner.name.eq("HashMap")) { return false; }
+    if !_vec_fresh_ctor(st.let_value, inner.name) { return false; }
+    if st.name == null || st.name.eq("") { return false; }
+    // Compiler-synthesized temps (e.g. `__vec_of_L_C = Vector::new()` from the
+    // vec_of! lowering) are yielded out of their block — never auto-drop them.
+    if st.name.starts_with("__") { return false; }
+    if g.cur_fn_body == null { return false; }
+    if _own_stmts_escape(g, st.name, g.cur_fn_body) { return false; }
+    return true;
+}
 // Droppable IFF opt-in `let s*`, string-typed, disjoint-alloc RHS, and no
 // escaping use anywhere in the enclosing function body.
 // A producer whose result is ALWAYS a fresh, unaliased string (never returns an
@@ -5737,6 +5887,11 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
             }
         }
         let mut auto_owned: bool = struct_lit_auto || s.is_auto_owned;
+        // Inferred collection auto-drop: `let v = Vector::new()` (no manual free,
+        // no escape) frees v at scope end via the same v.free() cleanup below.
+        if !auto_owned && _vec_let_droppable(g, s) {
+            auto_owned = true;
+        }
         // Caller-side move: `let x: *T = make()` where `make` returns a value it
         // owns (a struct-literal local it moved out) takes ownership of that
         // value, so x is auto-dropped at scope end and the caller never frees it
