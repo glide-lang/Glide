@@ -248,9 +248,9 @@ extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
 /// Read up to `max` bytes from any Stream and return them as a string.
 pub fn stream_read(s: *dyn Stream, max: i32) -> !string {
     let buf: *u8 = malloc(max) as *u8;
+    defer free(buf as *void);   // fires on the `?` error path too, not just success
     let n: i32 = s.read_bytes(buf, max)?;
     let out: string = __glide_string_from_buf(buf as *void, n);
-    free(buf as *void);
     return ok(out);
 }
 
@@ -259,10 +259,10 @@ pub fn stream_read(s: *dyn Stream, max: i32) -> !string {
 pub fn stream_write_all(s: *dyn Stream, data: string) -> !i32 {
     let n: i32 = data.len();
     let buf: *u8 = malloc(n) as *u8;
+    defer free(buf as *void);   // fires on the `?` error path too, not just success
     for let i: i32 = 0; i < n; i++ {
         buf[i] = data.at(i).to_int() as u8;
     }
     let w: i32 = s.write_bytes(buf, n)?;
-    free(buf as *void);
     return ok(w);
 }
