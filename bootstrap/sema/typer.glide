@@ -4175,6 +4175,12 @@ fn check_stmt(t: *Typer, s: *Stmt) {
         } else {
             t.err(s.line, s.column, "while-let RHS must be a `chan<T>.recv()` call");
         }
+        // A rejected RHS leaves the binder untyped; bind it to the
+        // `__unknown__` placeholder anyway so the body doesn't cascade a
+        // spurious unknown-name for every use of the binder.
+        if binder_ty == null {
+            binder_ty = ty_named("__unknown__");
+        }
         if binder_ty != null {
             t.scope.insert(s.name, *binder_ty);
             // The while-let binder is rebound by the loop itself, never by
