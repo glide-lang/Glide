@@ -3405,6 +3405,20 @@ fn check_fn(t: *Typer, s: *Stmt) {
             }
         }
     }
+    // A `naked fn` has no prologue/epilogue — ordinary statements compile
+    // under __attribute__((naked)) but execute with no stack frame and
+    // SIGILL at runtime. The documented contract (asm-only body) finally
+    // gets its checker. `c_raw!` stays allowed: it's the manual escape
+    // hatch and emits verbatim.
+    if s.is_naked && s.fn_body != null {
+        for let ni: i32 = 0; ni < s.fn_body.len(); ni++ {
+            let nb: Stmt = s.fn_body.get(ni);
+            if nb.kind != ST_ASM && nb.kind != ST_CRAW && nb.kind != ST_COMMENT {
+                t.err_code_range(nb.line, nb.column, 1, "naked-body", "`naked fn ".concat(s.name).concat("` body must contain only `asm!` blocks — it has no prologue/epilogue, so ordinary statements execute without a stack frame"));
+                break;
+            }
+        }
+    }
     if s.fn_body != null {
         for let i: i32 = 0; i < s.fn_body.len(); i++ {
             let b: Stmt = s.fn_body.get(i);
