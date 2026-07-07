@@ -40,6 +40,28 @@ pub struct Tls12Conn {
     pub is_server: bool,   // server writes with s_*, reads with c_*
 }
 
+// Error-path cleanup for the handshake fns: `defer _free_conn_if_failed(conn,
+// _conn_ok)` frees the half-built conn if the handshake bailed before setting
+// `_conn_ok = true`. `defer` evaluates its argument at scope EXIT, so `ok`
+// carries the final flag value (not the `false` it held at registration) —
+// no free on the success path. Replaces a `defer if !ok { free }` form the
+// parser never accepted, so this cleanup previously did not exist at all.
+fn _free_conn_if_failed(conn: *Tls12Conn, ok: bool) {
+    if !ok {
+        free(conn as *void);
+    }
+}
+
+// Reclaim a parsed ClientHello (its two owned Vectors + the struct). Deferred
+// as `defer _free_client_hello(ch)` — again replacing a `defer { … }` block the
+// parser never accepted, so these frees previously never ran (a leak per 1.2
+// server handshake).
+fn _free_client_hello(ch: *ClientHello) {
+    ch.cipher_suites.free();
+    ch.alpn.free();
+    free(ch as *void);
+}
+
 fn _t12cb(s: string, i: i32) -> i32 { return s.at(i).to_int() & 255; }
 fn _t12u16(n: i32) -> string {
     let bb: *ByteBuffer = ByteBuffer::new();
@@ -163,7 +185,7 @@ pub fn tls12_attach(stream: *TcpStream, host: string, verify: bool) -> !*Tls12Co
     conn.closed = false;
     conn.is_server = false;
     let mut _conn_ok: bool = false;
-    defer if !_conn_ok { free(conn as *void); }
+    defer _free_conn_if_failed(conn, _conn_ok);
 
     // 1. ClientHello.
     let crandr: !string = random_bytes(32);
@@ -475,7 +497,7 @@ pub fn tls12_server_handshake(stream: *TcpStream, cert_chain: *Vector<string>,
     conn.closed = false;
     conn.is_server = true;
     let mut _conn_ok: bool = false;
-    defer if !_conn_ok { free(conn as *void); }
+    defer _free_conn_if_failed(conn, _conn_ok);
 
     // 1. ClientHello.
     let chrec: *T12Record = _t12next(conn)?;
@@ -493,7 +515,7 @@ pub fn tls12_server_handshake(stream: *TcpStream, cert_chain: *Vector<string>,
     // it, else secp256r1 (parsed leniently; default secp256r1).
     let mut curve: i32 = GRP_SECP256R1;
     let cur_ch: *ClientHello = parse_client_hello(chb)?;   // reuse the 1.3 parser for groups/suites
-    defer { cur_ch.cipher_suites.free(); cur_ch.alpn.free(); free(cur_ch as *void); }
+    defer _free_client_hello(cur_ch);
 
     // 2. Pick the cipher matching the cert type (must be client-offered).
     let want: i32 = if is_rsa { T12_ECDHE_RSA_AES128_GCM } else { T12_ECDHE_ECDSA_AES128_GCM };
