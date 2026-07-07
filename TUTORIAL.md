@@ -92,7 +92,9 @@ passes bare.
 ## memory
 
 You rarely manage memory by hand. A heap value is **owned by default**, **moves**
-when you transfer it, and **frees itself at the end of its scope**.
+when you transfer it, and **frees itself at the end of its scope**. (A few
+reclamation gaps remain — e.g. strings and values handed across a call are not
+freed yet; see the "known gaps" note in `LANGUAGE.md`'s memory model.)
 
 **stack** — primitives and pure-data structs, automatic and copied by value:
 

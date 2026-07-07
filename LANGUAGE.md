@@ -171,6 +171,17 @@ moves when you transfer it, and it frees itself at the end of its scope. You
 never write `malloc` / `free` for the common case, and the compiler catches
 use-after-move and double-free at compile time.
 
+> **Known gaps (in progress).** The ownership *checks* above are enforced, but
+> the reclamation side is not complete yet. Today: `string` values are never
+> freed; a value whose ownership moved into a callee is not auto-freed there;
+> reassigning an owned binding does not free the old value; values moved into
+> the builtin containers (`Vector`, `HashMap`) leave move tracking; and a
+> borrow coerced to `*T` at a call site can escape the borrow checker.
+> Separately, `glide check` / `glide build` report diagnostics for the entry
+> file — latent errors inside imported files may not all surface yet. For
+> long-lived processes, prefer arenas or explicit `free()` on hot paths until
+> these land.
+
 ### stack values
 
 Plain primitives and pure-data structs (`let p: T = T { ... }`, no pointer) live
@@ -204,8 +215,9 @@ Ownership moves on every transfer:
 - a struct literal `T { f: v }` moves `v` into the field.
 
 Reading a binding after its value was moved is a `use-after-move` compile error.
-Reassigning the binding revives it. `c = d` where `c` already owned a value frees
-the old value first, so reassignment never leaks.
+Reassigning the binding revives it. Note: today `c = d` where `c` already owned
+a value does **not** free the old value — that reclamation is one of the known
+gaps below, so reassignment in a loop currently leaks.
 
 ### `own` fields and recursive drop
 
