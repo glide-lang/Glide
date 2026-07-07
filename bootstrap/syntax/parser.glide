@@ -455,6 +455,18 @@ pub fn parse_top_stmt(p: *Parser) -> *Stmt {
         }
         return s;
     }
+    // `type X = i32;` at top level — the alias form doesn't exist. Consume
+    // the whole decl so it yields ONE targeted error instead of a cascade of
+    // "unexpected token" + phantom-type follow-ups.
+    if p.at_kw("type") {
+        p.err_code("type-alias-unsupported", "top-level type aliases are not supported; `type` only declares associated types inside trait/impl blocks");
+        while !p.at_op(";") && !p.at_eof() {
+            p.advance();
+        }
+        // Leave the `;` for parse_program's advance-on-null, which always
+        // consumes one token after a null return.
+        return null;
+    }
     p.err("unexpected token at top level");
     return null;
 }
