@@ -959,6 +959,13 @@ pub struct CG {
     pub str_acc_ctr: i32,           // unique suffix for shadow vars
     pub str_retains: *HashMap<bool>, // "fn#argidx" -> does that fn retain that string arg
     pub str_retain_building: bool,   // true while computing the summary (forces all-retain)
+    // "fn" -> does that fn return a FRESHLY-OWNED string on every return path
+    // (so the caller may drop `let s = f(...)`). Conservative: only fresh
+    // producers + calls to other returns-owned fns qualify; a returned param /
+    // field / "" / uncertain expr disqualifies. Computed by a monotone fixpoint
+    // like str_retains; consulted only after it finishes (str_ret_building=false).
+    pub str_ret_owned: *HashMap<bool>,
+    pub str_ret_building: bool,
     // Associated-type lookup for `<Trait>::<Concrete>::<Item>`. Populated
     // up front from every `impl Trait for Type { type Item = X; }`.
     pub assoc_table: *HashMap<Type>,
@@ -1580,6 +1587,12 @@ fn _str_rhs_fresh(g: *CG, e: *Expr) -> bool {
     if e == null { return false; }
     if _str_rhs_disjoint_alloc(e) { return true; }
     if e.kind == EX_CALL && e.lhs != null {
+        // A direct call to a user fn that returns a freshly-owned string hands
+        // ownership to the caller — `let s = make(i)` is droppable here. Guarded
+        // by the returns-owned summary (empty until compute_str_ret_owned runs,
+        // so this is inert during earlier passes). Bare-ident callee only: a
+        // method/generic/indirect call is never classified owned.
+        if e.lhs.kind == EX_IDENT && e.lhs.str_val != null && _call_returns_owned_str(g, e.lhs.str_val) { return true; }
         if e.lhs.kind == EX_IDENT && e.lhs.str_val != null && e.lhs.str_val.eq("int_to_str") { return true; }
         // A string-transform builtin on a STRING receiver (gate excludes a same-
         // named method of another type, e.g. Vector.reverse).
@@ -1673,6 +1686,92 @@ fn compute_str_retention(g: *CG) {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+// Does `name` name a user fn known to return a freshly-owned string? Absent /
+// unresolved => false (conservative: the caller must NOT drop what it may not
+// own). Monotone table (false->true only) => sound at the fixpoint.
+fn _call_returns_owned_str(g: *CG, name: string) -> bool {
+    if name == null || name.eq("") { return false; }
+    if g.str_ret_owned.contains(name) { return g.str_ret_owned.get(name); }
+    return false;
+}
+
+// True if ANY `return <expr>` in the body (recursing into control-flow blocks,
+// but NOT into nested fn-expr closures — those have their own returns) yields a
+// string the caller could NOT safely free: not a fresh producer and not a call
+// to another returns-owned fn. A `return "";` (empty static) is NOT owned.
+fn _ret_any_bad_owned(g: *CG, list: *Vector<Stmt>) -> bool {
+    if list == null { return false; }
+    for let i: i32 = 0; i < list.len(); i = i + 1 {
+        let st: Stmt = list.get(i);
+        if st.kind == ST_RETURN && st.expr_value != null {
+            if !_str_rhs_fresh(g, st.expr_value) { return true; }
+        }
+        if _ret_any_bad_owned(g, st.then_body) { return true; }
+        if _ret_any_bad_owned(g, st.else_body) { return true; }
+        if st.for_init != null && _ret_any_bad_owned(g, st.for_init.then_body) { return true; }
+        if st.arms != null {
+            for let a: i32 = 0; a < st.arms.len(); a = a + 1 {
+                let ar: MatchArm = st.arms.get(a);
+                if _ret_any_bad_owned(g, ar.body) { return true; }
+            }
+        }
+    }
+    return false;
+}
+
+// True if the body contains at least one `return <value>` (recursing the same
+// way). A string-return fn with no value-returns can't be judged owned.
+fn _ret_has_value(list: *Vector<Stmt>) -> bool {
+    if list == null { return false; }
+    for let i: i32 = 0; i < list.len(); i = i + 1 {
+        let st: Stmt = list.get(i);
+        if st.kind == ST_RETURN && st.expr_value != null { return true; }
+        if _ret_has_value(st.then_body) { return true; }
+        if _ret_has_value(st.else_body) { return true; }
+        if st.for_init != null && _ret_has_value(st.for_init.then_body) { return true; }
+        if st.arms != null {
+            for let a: i32 = 0; a < st.arms.len(); a = a + 1 {
+                let ar: MatchArm = st.arms.get(a);
+                if _ret_has_value(ar.body) { return true; }
+            }
+        }
+    }
+    return false;
+}
+
+// Fixpoint dual of compute_str_retention: which user fns return a freshly-owned
+// string on EVERY path, so `let s = f(...)` is droppable by the caller. Seed
+// every string-return user fn false, then flip false->true while
+// _call_returns_owned_str consults the partial table (monotone => terminates,
+// sound at the fixpoint). Run AFTER compute_str_retention.
+fn compute_str_ret_owned(g: *CG) {
+    let names: *Vector<string> = g.fns.keys();
+    for let i: i32 = 0; i < names.len(); i = i + 1 {
+        let fname: string = names.get(i);
+        let f: Stmt = g.fns.get(fname);
+        if f.is_extern || f.is_variadic || f.fn_body == null { continue; }
+        if _param_is_string(f.fn_ret_ty) {
+            g.str_ret_owned.insert(fname, false);
+        }
+    }
+    let mut changed: bool = true;
+    let mut iters: i32 = 0;
+    while changed && iters < 60 {
+        changed = false;
+        iters = iters + 1;
+        for let i: i32 = 0; i < names.len(); i = i + 1 {
+            let fname: string = names.get(i);
+            if !g.str_ret_owned.contains(fname) { continue; }
+            if g.str_ret_owned.get(fname) { continue; }
+            let f: Stmt = g.fns.get(fname);
+            if _ret_has_value(f.fn_body) && !_ret_any_bad_owned(g, f.fn_body) {
+                g.str_ret_owned.insert(fname, true);
+                changed = true;
             }
         }
     }
@@ -1908,6 +2007,8 @@ impl CG {
         let sret: *HashMap<bool> = HashMap::new();
         g.str_retains = sret;
         g.str_retain_building = false;
+        g.str_ret_owned = HashMap::new();
+        g.str_ret_building = false;
         g.scope = s;
         g.generic_structs = gs;
         g.generic_fns = gf;
