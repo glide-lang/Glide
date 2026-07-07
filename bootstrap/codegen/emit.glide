@@ -4584,7 +4584,29 @@ pub fn emit_expr(g: *CG, e: *Expr) {
             let ov_string: bool = ov_ty.name.eq("string");
             if (e.op_code == OP_LT || e.op_code == OP_LE || e.op_code == OP_GT || e.op_code == OP_GE) && (ov_struct || ov_string) {
                 let cargs: *Vector<Expr> = Vector::new();
-                cargs.push(*e.rhs);
+                // The RECEIVER side of the synthesized `a.cmp(b)` gets its
+                // repr adapted by the method-call path (needs_addr), but the
+                // ARG side was emitted verbatim. When the resolved `cmp`
+                // takes its other operand as a pointer/borrow (`fn cmp(self:
+                // *P, o: *P)` — the shape the Ord trait demands) and the rhs
+                // is a by-value operand (a `T` param inside a monomorphized
+                // `max<T: Ord>`), the C call passed `P` where `P*` was
+                // expected — invalid C every time. Address-of the rhs so the
+                // doc's `a > b` in a bounded generic actually compiles.
+                let mut cmp_rhs: *Expr = e.rhs;
+                if ov_struct && g.fns.contains(ov_ty.name.concat("_cmp")) {
+                    let csig: Stmt = g.fns.get(ov_ty.name.concat("_cmp"));
+                    if csig.fn_params != null && csig.fn_params.len() > 1 {
+                        let cp1: Param = csig.fn_params.get(1);
+                        let cp1_ptr: bool = cp1.ty != null && (cp1.ty.kind == TY_POINTER || cp1.ty.kind == TY_BORROW || cp1.ty.kind == TY_BORROW_MUT);
+                        let crt: *Type = infer_for_codegen(g, e.rhs);
+                        let crt_ptr: bool = crt != null && (crt.kind == TY_POINTER || crt.kind == TY_BORROW || crt.kind == TY_BORROW_MUT);
+                        if cp1_ptr && !crt_ptr {
+                            cmp_rhs = expr_unary(UN_ADDR, e.rhs, e.rhs.line, e.rhs.column);
+                        }
+                    }
+                }
+                cargs.push(*cmp_rhs);
                 let ccall: *Expr = expr_call(expr_member(e.lhs, "cmp"), cargs);
                 print!("(");
                 emit_expr(g, ccall);
