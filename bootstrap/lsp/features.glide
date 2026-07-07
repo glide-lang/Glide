@@ -603,10 +603,10 @@ pub fn keyword_doc(name: string) -> string {
         return "```glide\nasm! volatile { ... }\n```\n\n---\n\nMarker on an `asm!` block that tells the compiler not to reorder or eliminate it even if its outputs aren't observed.";
     }
     if name.eq("move") {
-        return "```glide\nmove fn(args) -> ret { body }\n```\n\n---\n\nClosure prefix that captures referenced locals by move (one-shot, releases the source). Without `move`, an `fn` expression with captures isn't allowed.";
+        return "```glide\nmove fn(args) -> ret { body }\n```\n\n---\n\nReserved closure prefix. Captures are **not implemented yet** — closure bodies see only their own params (plus globals/consts), with or without `move`; referencing an enclosing local is a `closure-capture` error. Pass values as parameters instead.";
     }
     if name.eq("new") {
-        return "```glide\nlet p: *T = new T { field: value, ... };\n```\n\n---\n\nHeap-allocate a struct (raw — no auto-drop). Pair with `free` later.\n\nFor auto-dropped allocation use `let p: *T = T { ... };` (no `new`) instead.";
+        return "```glide\nlet p: *T = T { field: value, ... };   // no `new`\n```\n\n---\n\n`new T { ... }` is **not implemented yet** (`new-unsupported`). A struct literal bound to a `*T` heap-allocates and is auto-dropped. For untracked raw memory use `malloc(sizeof(T)) as *T` + `free(p as *void)`.";
     }
     if name.eq("as") {
         return "```glide\nexpr as T\n```\n\n---\n\nExplicit cast between numeric types or pointer types. Compiles to a C cast.\n\n```glide\nlet n: i32 = some_long as i32;\nlet p: *void = buf as *void;\n```";
@@ -4364,7 +4364,7 @@ fn _builtin_attr_doc(name: string) -> string {
         return "";
     }
     if name.eq("cfg") {
-        return "Per-platform guard: `@cfg(\"windows\")` wraps the decl in `#ifdef _WIN32`, `@cfg(\"posix\")` in `#ifndef _WIN32`. Applied to fn / struct / impl / const.";
+        return "Per-platform guard: `@cfg(\"windows\")` wraps the decl in `#ifdef _WIN32`, `@cfg(\"posix\")` in `#ifndef _WIN32`. Only `fn`, `impl`, and `c_raw!` blocks can be gated (other kinds are a `cfg-unsupported-decl` error). A guarded fn called from the other platform compiles to a panicking stub, so `if cfg!(\"...\")`-guarded calls build everywhere.";
     }
     if name.eq("derive") {
         return "Apply one or more proc-derive macros to the next struct: `@derive(JsonBind, Debug)`. Each arg names a fn registered via `@proc_derive(Name)`.";

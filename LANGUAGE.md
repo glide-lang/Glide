@@ -110,7 +110,10 @@ match value { 1 => { ... } "s" => { ... } 'c' => { ... } _ => { ... } }
                                   // literal arms compare by value (strings
                                   // by bytes); a `_` arm is required
 
-defer expr;                       // run at fn end / before return (LIFO)
+defer expr;                       // run at fn end / before return (LIFO).
+                                  // FUNCTION-scoped, not block-scoped: one
+                                  // run per call, so `defer` inside a loop
+                                  // is a compile error
 spawn fn_call(args);              // run fn on the M:N coroutine scheduler
 spawn_thread fn_call(args);       // run fn on a real OS thread (escape hatch)
 
@@ -215,15 +218,23 @@ A bare `*T` field is a non-owning reference, left untouched. `own T` is shorthan
 for `own *T`. A struct that owns heap fields is heap-managed; a pure-data struct
 stays a stack value with copy / move semantics.
 
-### raw heap (`new`)
+### raw heap
+
+> `new T { ... }` is **not implemented yet** — the compiler rejects it with
+> `new-unsupported`. Heap-allocate by binding a struct literal to a pointer:
 
 ```glide
-let p: *Point = new Point { x: 1, y: 2 };   // raw, not auto-dropped
+let p: *Point = Point { x: 1, y: 2 };   // heap-allocated, auto-dropped
 ```
 
-`new` allocates a heap value the compiler does not track. You free it yourself
-with `free(p as *void)`, or leak it intentionally (e.g. the program owns it
-until exit).
+For memory the compiler must NOT track (FFI handles, intentionally leaked
+program-lifetime state), allocate raw and cast:
+
+```glide
+extern fn malloc(n: usize) -> *void;
+let p: *Point = malloc(sizeof(Point)) as *Point;   // untracked
+free(p as *void);                                  // you free it yourself
+```
 
 ### arenas
 
