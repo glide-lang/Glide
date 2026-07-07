@@ -8,17 +8,20 @@ learning-oriented walkthrough see `TUTORIAL.md`.
 ### keywords
 
 ```
-let const mut fn struct enum impl trait dyn type extern pub move naked own new
-if else while for return break continue match defer spawn spawn_thread
-import use as in
-true false null self Self
-macro asm volatile c_raw
+let const mut fn struct enum impl trait dyn type extern pub move naked new
+if else while for return break continue match defer defer_err spawn spawn_thread
+import as in sizeof chan interface c_include c_link
+true false null
+macro asm volatile
 ```
 
-`chan<T>` is a type constructor (parses as a generic type). `Arena`,
+Reserved words cannot be used as binding names (`let match = …` is a
+`reserved-word` error). `self`/`Self` (method receivers and the receiver
+type), `own` (the owning-field qualifier), and `c_raw` (only as the
+`c_raw!` block, like `asm!`) are contextual, not reserved. `Arena`,
 `Vector`, `HashMap` are regular types from the prelude / stdlib, not
-keywords. `asm` only appears in the bang form `asm! [volatile] { ... }`
-(like `c_raw!`); a bare `asm { ... }` block does not parse.
+keywords. `asm` only appears in the bang form `asm! [volatile] { ... }`;
+a bare `asm { ... }` block does not parse.
 
 ### operators
 
