@@ -3592,6 +3592,22 @@ fn check_top(t: *Typer, s: *Stmt) {
         return;
     }
     if s.kind == ST_STRUCT {
+        // Field type annotations must name real types — same check as fn
+        // params / returns (previously structs were skipped entirely, so a
+        // typo like `name: strin` only surfaced later, at a use site, with a
+        // confusing "expects `strin`" message). The struct's own `<T>` params
+        // go in scope so `struct Box<T> { item: T }` doesn't see `T` as unknown.
+        if s.struct_fields != null {
+            let saved_tps: *Vector<string> = t.current_type_params;
+            t.current_type_params = s.type_params;
+            for let i: i32 = 0; i < s.struct_fields.len(); i++ {
+                let f: Field = s.struct_fields.get(i);
+                // f.ty carries its own parser position, so the squiggle lands on
+                // the type token; the struct's line/col is only the fallback.
+                _check_type_known(t, f.ty, s.line, s.column);
+            }
+            t.current_type_params = saved_tps;
+        }
         return;
     }
     if s.kind == ST_IMPL {
