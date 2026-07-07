@@ -3973,6 +3973,14 @@ fn _check_immutable_write(t: *Typer, lhs: *Expr, verb: string) {
         pos = t.mut_decl_pos.get(root);
     }
     if pos < 0 {
+        // The receiver gets its own wording: splicing `mut ` in front of a
+        // bare `self` yields `mut self` (now a parse error), and suggesting
+        // `mut self: T` would silently switch the receiver from *T to a
+        // by-value copy — mutations would hit the copy. No auto-fix here.
+        if root.eq("self") {
+            t.err_code_range(lhs.line, lhs.column, root.len(), "assign-immutable", "cannot ".concat(verb).concat(" `self` — the receiver binding is immutable; declare it `mut self: *Self` to rebind the pointer locally"));
+            return;
+        }
         // Param (negative marker): the fix is `mut name: T` at the decl.
         let pdl: i32 = (0 - pos) / 4096;
         let pdc: i32 = (0 - pos) % 4096;

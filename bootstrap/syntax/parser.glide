@@ -636,6 +636,8 @@ fn parse_fn(p: *Parser) -> *Stmt {
         }
         // `mut` before the name binds the param as reassignable in the body;
         // without it the param is immutable (`assign-immutable` on writes).
+        let mkw_line: i32 = p.current.line;
+        let mkw_col: i32 = p.current.column;
         let pn_mut: bool = p.eat_kw("mut");
         let pn_line: i32 = p.current.line;
         let pn_col: i32 = p.current.column;
@@ -644,6 +646,13 @@ fn parse_fn(p: *Parser) -> *Stmt {
         // `self: *Self`; the impl post-pass substitutes the target type.
         // An annotated `self: *T` keeps working unchanged.
         if pname.eq("self") && !p.at_op(":") {
+            // `fn m(mut self)` used to parse with the `mut` silently dropped.
+            // Rejecting beats recording: the receiver is a `*T` pointer, so
+            // there is nothing for `mut` to grant — writes go through it
+            // already, and rebinding the pointer needs the annotated form.
+            if pn_mut {
+                p.push_pdiag(mkw_line, mkw_col, 3, "mut-self-receiver", "`mut` on a bare `self` receiver has no effect — the receiver is already a `*T` pointer; write through it, or declare `mut self: *Self` to rebind the pointer locally", 0, 0, 0, 0, "");
+            }
             let sprm: Param = Param { name: pname, ty: ty_pointer(ty_named("Self")), name_line: pn_line, name_col: pn_col, is_mut: false };
             params.push(sprm);
             if !p.eat_op(",") {
