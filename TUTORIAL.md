@@ -83,7 +83,11 @@ impl Point {
 }
 ```
 
-Call a method as `p.distance(q)`. The compiler auto-borrows where needed.
+Call it as `p.distance(&q)`. Only the *receiver* is auto-addressed: `p` is a
+stack `Point` and the compiler takes its address to match `self: *Point`.
+Arguments are not — pass `&q` explicitly (a borrow flows into a `*T`
+parameter). An argument that is already a pointer (`let q: *Point = ...`)
+passes bare.
 
 ## memory
 
@@ -108,10 +112,12 @@ fn process() {
 ```
 
 Ownership **moves** on every transfer: returning it hands ownership to the
-caller, passing it to a `*T` parameter hands it to the callee, and a let-rebind
-(`let b = a`) moves it to the new name. After a move the old binding is gone,
-and reading it is a `use-after-move` compile error. A `&T` parameter borrows
-instead of taking ownership, so the caller keeps it.
+caller, passing it to a free function's `*T` parameter hands it to the callee,
+and a let-rebind (`let b = a`) moves it to the new name. After a move the old
+binding is gone, and reading it is a `use-after-move` compile error. A `&T`
+parameter borrows instead of taking ownership, so the caller keeps it. Method
+calls are the exception: a `*T` *argument* to a method (`recv.m(v)`) is
+borrowed for the call, not moved — the caller still owns `v` afterwards.
 
 **`own` fields** — a struct that owns heap data marks those fields `own`, and
 the compiler frees the whole chain on drop:
@@ -162,6 +168,11 @@ The compiler enforces:
 - Two arguments to the same call can't alias the same variable if any is `&mut`
 
 You never write lifetime annotations.
+
+`&` takes the address of the *binding*, so it's for stack values. On a heap
+owner (`let v = Vector::new()`, type `*Vector<i32>`) writing `&v` produces a
+`**Vector<i32>` and is a type error against a `&Vector<i32>` parameter — pass
+the owner bare (`peek(v)`); a `*T` coerces into a `&T` parameter.
 
 ## errors as values
 

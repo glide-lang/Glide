@@ -195,8 +195,11 @@ An owned binding inside a `for` body frees once per iteration.
 Ownership moves on every transfer:
 
 - `return v` hands ownership to the caller, which auto-drops it (move-out).
-- `f(v)` where `f` takes a `*T` parameter by value hands ownership to the
-  callee. A `&T` parameter borrows instead and leaves the caller owning it.
+- `f(v)` where the free function `f` takes a `*T` parameter by value hands
+  ownership to the callee. A `&T` parameter borrows instead and leaves the
+  caller owning it. Method calls differ: a `*T` **argument** in `recv.m(v)`
+  is borrowed for the call, never moved — only free-fn `*T` params take
+  ownership.
 - `let b = a` and `a = b` move the value into the new binding.
 - a struct literal `T { f: v }` moves `v` into the field.
 
