@@ -10,13 +10,13 @@ fn _h(s: string) -> string { return hex_decode(s).unwrap(); }
 
 // KAT generated with an independent implementation (Python cryptography).
 fn test_p384_verify_vector() -> i32 {
-    let pub: string = _h("040400193b21f07cd059826e9453d3e96dd145041c97d49ff6b7047f86bb0b0439e909274cb9c282bfab88674c0765bc75f70d89c52acbc70468d2c5ae75c76d7f69b76af62dcf95e99eba5dd11adf8f42ec9a425b0c5ec98e2f234a926b82a147");
+    let pubk: string = _h("040400193b21f07cd059826e9453d3e96dd145041c97d49ff6b7047f86bb0b0439e909274cb9c282bfab88674c0765bc75f70d89c52acbc70468d2c5ae75c76d7f69b76af62dcf95e99eba5dd11adf8f42ec9a425b0c5ec98e2f234a926b82a147");
     let z: string   = _h("7182eed5a8760fde41a4a6167f5f2cc1a4eff61a6470b3955e2c3b0dec014283384592fc3dea55febd4a687632f5519c");
     let sig: string = _h("c110f2ceba6af5ee0fce9d231e0a8f0377daf7bcf807be12d0a23605edd97625c9845da96621619f0cb86aace72c0b2bbb00df539241832fa2e6807fba03f737520d89f1ec258426899331e9ab6b224e873748dd99da95a95e4bc5dbd468a74f");
-    assert_eq!(ecdsa_p384_verify(pub, z, sig).unwrap(), 1);
+    assert_eq!(ecdsa_p384_verify(pubk, z, sig).unwrap(), 1);
     // wrong hash rejects
     let bad: string = _h("00").concat(z.substring(1, z.len()));
-    assert_eq!(ecdsa_p384_verify(pub, bad, sig).unwrap(), 0);
+    assert_eq!(ecdsa_p384_verify(pubk, bad, sig).unwrap(), 0);
     return 0;
 }
 

@@ -326,7 +326,7 @@ c_raw! {
 
 extern fn __glide_p256_ecdh(out: *void, scalar: *void, peer: *void, peerlen: i32) -> i32;
 extern fn __glide_p256_pub(out: *void, scalar: *void) -> i32;
-extern fn __glide_p256_verify(pub: *void, publen: i32, hash: *void, sig: *void) -> i32;
+extern fn __glide_p256_verify(pubkey: *void, publen: i32, hash: *void, sig: *void) -> i32;
 extern fn __glide_p256_sign(out: *void, d: *void, hash: *void, kbytes: *void) -> i32;
 extern fn __glide_string_from_buf(p: *void, n: i32) -> string;
 

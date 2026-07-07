@@ -230,6 +230,26 @@ impl Parser {
         self.err("expected identifier");
         return "";
     }
+
+    // Binder-position identifier (`let` names, params, tuple-destructure
+    // slots): keywords are rejected here. `expect_ident` stays lenient for
+    // expression/path positions, but accepting `let volatile = 1` created a
+    // binding that either emitted invalid C (`int32_t volatile = 1;`) or —
+    // for `let true` — could never be read back (the use site resolves to
+    // the literal). The keyword token is consumed so parsing recovers at
+    // the `:`/`=` that follows instead of cascading.
+    fn expect_binder_ident(self: *Parser) -> string {
+        if self.current.kind == TOK_KEYWORD {
+            let mut span: i32 = self.current.lexeme.len();
+            if span < 1 {
+                span = 1;
+            }
+            self.push_pdiag(self.current.line, self.current.column, span, "reserved-word", "`".concat(self.current.lexeme).concat("` is a reserved word, not a binding name"), 0, 0, 0, 0, "");
+            self.advance();
+            return "";
+        }
+        return self.expect_ident();
+    }
 }
 
 // ---- top-level ------------------------------------------------------------
@@ -614,7 +634,7 @@ fn parse_fn(p: *Parser) -> *Stmt {
         let pn_mut: bool = p.eat_kw("mut");
         let pn_line: i32 = p.current.line;
         let pn_col: i32 = p.current.column;
-        let pname: string = p.expect_ident();
+        let pname: string = p.expect_binder_ident();
         // Rust-style bare receiver: `fn m(self, …)` inside an impl means
         // `self: *Self`; the impl post-pass substitutes the target type.
         // An annotated `self: *T` keeps working unchanged.
@@ -1855,7 +1875,7 @@ fn parse_let(p: *Parser) -> *Stmt {
             nmuts.push(bind_mut || is_mut);
             nlines.push(p.current.line);
             ncols.push(p.current.column);
-            names.push(p.expect_ident());
+            names.push(p.expect_binder_ident());
             if !p.eat_op(",") {
                 break;
             }
@@ -1876,7 +1896,7 @@ fn parse_let(p: *Parser) -> *Stmt {
     let nline: i32 = p.current.line;
     let ncol: i32 = p.current.column;
     let nlen: i32 = p.current.lexeme.len();
-    let name: string = p.expect_ident();
+    let name: string = p.expect_binder_ident();
     // Postfix `*` on the binding: explicit auto-drop ownership marker.
     let mut is_auto_owned: bool = false;
     if p.eat_op("*") {
@@ -2200,20 +2220,20 @@ fn parse_select_arm(p: *Parser) -> *SelectArm {
         if lhs.kind == EX_IDENT {
             let name: string = lhs.str_val;
             if name.eq("none") || name.eq("None") {
-                let chan: *Expr = select_extract_recv_chan(p, rhs);
+                let ch: *Expr = select_extract_recv_chan(p, rhs);
                 let arm: *SelectArm = __glide_palloc(sizeof(SelectArm)) as *SelectArm;
                 arm.kind = SEL_RECV_NONE;
-                arm.chan_expr = chan;
+                arm.chan_expr = ch;
                 arm.body = body;
                 arm.line = line;
                 arm.column = col;
                 return arm;
             }
             // var = chan.recv() => body
-            let chan: *Expr = select_extract_recv_chan(p, rhs);
+            let ch: *Expr = select_extract_recv_chan(p, rhs);
             let arm: *SelectArm = __glide_palloc(sizeof(SelectArm)) as *SelectArm;
             arm.kind = SEL_RECV;
-            arm.chan_expr = chan;
+            arm.chan_expr = ch;
             arm.bind_name = name;
             arm.body = body;
             arm.line = line;
@@ -2225,10 +2245,10 @@ fn parse_select_arm(p: *Parser) -> *SelectArm {
             if (cname.eq("some") || cname.eq("Some")) && lhs.args != null && lhs.args.len() == 1 {
                 let arg0: Expr = lhs.args.get(0);
                 if arg0.kind == EX_IDENT {
-                    let chan: *Expr = select_extract_recv_chan(p, rhs);
+                    let ch: *Expr = select_extract_recv_chan(p, rhs);
                     let arm: *SelectArm = __glide_palloc(sizeof(SelectArm)) as *SelectArm;
                     arm.kind = SEL_RECV_SOME;
-                    arm.chan_expr = chan;
+                    arm.chan_expr = ch;
                     arm.bind_name = arg0.str_val;
                     arm.body = body;
                     arm.line = line;
@@ -2433,7 +2453,7 @@ fn parse_while(p: *Parser) -> *Stmt {
         let ncol: i32 = p.peek.column;
         let nlen: i32 = p.peek.lexeme.len();
         p.advance(); // 'let'
-        let var_name: string = p.expect_ident();
+        let var_name: string = p.expect_binder_ident();
         let mut ty: *Type = null;
         if p.eat_op(":") {
             ty = parse_type(p);
@@ -2488,7 +2508,7 @@ fn parse_for(p: *Parser) -> *Stmt {
             if p.eat_kw("mut") {
                 is_mut = true;
             }
-            let lname: string = p.expect_ident();
+            let lname: string = p.expect_binder_ident();
             let mut lty: *Type = null;
             if p.eat_op(":") {
                 lty = parse_type(p);
@@ -3271,9 +3291,10 @@ fn parse_prefix(p: *Parser) -> *Expr {
         }
     }
     // Keywords that are also valid identifier-position references fall here.
-    // `expect_ident` accepts TOK_KEYWORD as a binder name, so a `let chan = ...`
-    // succeeds at parse time; the use site `... = chan;` must mirror that or
-    // we silently emit a null Expr and produce malformed C.
+    // Binder positions reject keywords (`expect_binder_ident`), but PATH
+    // heads like `type::of(...)` from older code still reach this arm, so
+    // expression position stays lenient rather than silently emitting a
+    // null Expr (which produced malformed C).
     if tok.kind == TOK_IDENT || tok.kind == TOK_KEYWORD {
         p.advance();
         // Multi-segment path `a::b::c::Item[::method]`. The full prefix lives

@@ -213,7 +213,7 @@ c_raw! {
 
 extern fn __glide_p384_pub(out: *void, scalar: *void) -> i32;
 extern fn __glide_p384_ecdh(out: *void, scalar: *void, peer: *void, peerlen: i32) -> i32;
-extern fn __glide_p384_verify(pub: *void, publen: i32, hash: *void, sig: *void) -> i32;
+extern fn __glide_p384_verify(pubkey: *void, publen: i32, hash: *void, sig: *void) -> i32;
 extern fn __glide_string_from_buf(p: *void, n: i32) -> string;
 
 /// Public key for a 48-byte P-384 secret, encoded 0x04||X||Y (97 bytes).

@@ -39,10 +39,10 @@ fn test_ecdh_vector() -> i32 {
 // independent implementation (Python `cryptography` over SECP256R1 with a
 // prehashed SHA-256 digest). Verifying it here proves cross-impl interop.
 fn test_ecdsa_verify_vector() -> i32 {
-    let pub: string = _h("041ccbe91c075fc7f4f033bfa248db8fccd3565de94bbfb12f3c59ff46c271bf83ce4014c68811f9a21a1fdb2c0e6113e06db7ca93b7404e78dc7ccd5ca89a4ca9");
+    let pubk: string = _h("041ccbe91c075fc7f4f033bfa248db8fccd3565de94bbfb12f3c59ff46c271bf83ce4014c68811f9a21a1fdb2c0e6113e06db7ca93b7404e78dc7ccd5ca89a4ca9");
     let z: string   = _h("c4fb448ce0b4564379de0bb80b311c8bb551ab8a81d8e8cd86214fa72edbda08");
     let sig: string = _h("4dd2d5a1f7d056740ae70138fc2458540faea7d6bbc86de03dc011256558a21f094a9b701e5dacc979643da2b52d77b224a8aaf31b54807a4f98aba7cba22a66");
-    let v: !i32 = ecdsa_verify(pub, z, sig);
+    let v: !i32 = ecdsa_verify(pubk, z, sig);
     assert!(v.is_ok());
     assert_eq!(v.unwrap(), 1);
     return 0;
@@ -50,10 +50,10 @@ fn test_ecdsa_verify_vector() -> i32 {
 
 // A tampered hash must NOT verify.
 fn test_ecdsa_verify_rejects_wrong_hash() -> i32 {
-    let pub: string = _h("041ccbe91c075fc7f4f033bfa248db8fccd3565de94bbfb12f3c59ff46c271bf83ce4014c68811f9a21a1fdb2c0e6113e06db7ca93b7404e78dc7ccd5ca89a4ca9");
+    let pubk: string = _h("041ccbe91c075fc7f4f033bfa248db8fccd3565de94bbfb12f3c59ff46c271bf83ce4014c68811f9a21a1fdb2c0e6113e06db7ca93b7404e78dc7ccd5ca89a4ca9");
     let bad: string = _h("0000000000000000000000000000000000000000000000000000000000000001");
     let sig: string = _h("4dd2d5a1f7d056740ae70138fc2458540faea7d6bbc86de03dc011256558a21f094a9b701e5dacc979643da2b52d77b224a8aaf31b54807a4f98aba7cba22a66");
-    assert_eq!(ecdsa_verify(pub, bad, sig).unwrap(), 0);
+    assert_eq!(ecdsa_verify(pubk, bad, sig).unwrap(), 0);
     return 0;
 }
 
