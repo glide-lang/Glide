@@ -143,6 +143,27 @@ fn help_for_code(code: string) -> string {
     if code.eq("unsatisfied-bound") {
         return "add the missing `impl Trait for Type { … }`, or use a type that implements the bound";
     }
+    if code.eq("generic-enum-unsupported") {
+        return "enums cannot take `<T>` parameters yet; use a concrete payload type (or a generic struct)";
+    }
+    if code.eq("new-unsupported") {
+        return "bind the literal to a pointer instead: `let p: *T = T { ... };` heap-allocates and is auto-dropped";
+    }
+    if code.eq("cfg-unsupported-decl") {
+        return "move the decl behind a `fn`, wrap platform code in `c_raw!`, or branch at runtime with `if cfg!(\"...\")`";
+    }
+    if code.eq("scalar-borrow-forward") {
+        return "a `&i32`-style borrow reads as a value inside the fn; pass the original `&x` to the callee, or take the primitive by value";
+    }
+    if code.eq("self-by-value-via-ptr") {
+        return "make the receiver pointer-friendly (`self: *T`), or bind a value first: `let v: T = *p; v.method()`";
+    }
+    if code.eq("defer-in-loop") {
+        return "`defer` runs once at function end; put per-iteration cleanup at the end of the loop body (before `continue`s too)";
+    }
+    if code.eq("closure-capture") {
+        return "closure bodies see only their own params (plus globals/consts); add a parameter and pass the value at the call";
+    }
     if code.eq("unused-fn") {
         return "prefix with `_` if intentional, or remove the function";
     }
