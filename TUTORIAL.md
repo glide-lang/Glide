@@ -188,6 +188,10 @@ fn main() -> i32 {
 A `?`-bound `let` infers the unwrapped type, so `parse_pos(n)?` gives an `i32`,
 not an `!i32`.
 
+`unwrap()` panics (aborts the process) if the value is the failure case — use
+it only after you've checked, and reach for `expr ?? fallback` when you want a
+default value instead.
+
 ## generics
 
 Type parameters use angle brackets. Inference works from arguments and from

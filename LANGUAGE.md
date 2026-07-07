@@ -330,8 +330,9 @@ A `?`-bound `let` infers the *unwrapped* type: `let n = parse(s)?` declares `n`
 as `i32`, not `!i32`, so `n + 1` and `n.method()` work without an explicit
 annotation.
 
-`r.unwrap()` returns the inner value or a zero-initialized fallback if `r` is
-the failure case. Use it at boundaries where you've already checked.
+`r.unwrap()` returns the inner value, or **panics** (prints the failure and
+aborts the process) if `r` is the failure case. Use it only where you've
+already checked; when you want a fallback value instead, use `??`.
 
 ## generics
 
