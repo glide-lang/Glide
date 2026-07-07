@@ -1854,6 +1854,26 @@ fn bind_args(call: *Expr, def: *Stmt) -> *Vector<MacroBinding> {
     if call.args != null {
         total = call.args.len();
     }
+    // Arity check. Binding is positional, so without this a surplus arg was
+    // silently dropped and a missing one bound EMPTY — which materialized as
+    // `(nil)` garbage at runtime from a cleanly-compiled program. A variadic
+    // matcher swallows the remainder (possibly zero), so only the fixed
+    // matchers set a floor there.
+    let mut fixed: i32 = 0;
+    let mut has_variadic: bool = false;
+    for let p: i32 = 0; p < def.macro_params.len(); p++ {
+        let mp: MacroParam = def.macro_params.get(p);
+        if mp.is_variadic {
+            has_variadic = true;
+        } else {
+            fixed = fixed + 1;
+        }
+    }
+    if total < fixed || (!has_variadic && total > fixed) {
+        let unit: string = if fixed == 1 { " argument, got " } else { " arguments, got " };
+        let floor: string = if has_variadic { "at least " } else { "" };
+        pass_diag(call.line, call.column, 1, "macro-arity", "macro `".concat(def.name).concat("!` expects ").concat(floor).concat(int_to_str(fixed)).concat(unit).concat(int_to_str(total)));
+    }
     for let p: i32 = 0; p < def.macro_params.len(); p++ {
         let mp: MacroParam = def.macro_params.get(p);
         let bound: *Vector<Expr> = Vector::new();
