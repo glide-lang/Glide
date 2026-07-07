@@ -872,6 +872,16 @@ pub struct Typer {
     // (no splice point — `mut` is not param syntax), which switches the
     // message to the copy-into-a-local suggestion.
     pub mut_decl_pos: *HashMap<i32>,
+    // Block-scope `const` names (per-fn, saved/restored like mut_locals).
+    // Switches the assign-immutable wording to "constant" and drops the
+    // `let mut` fix-it — a `const` can never be made mutable.
+    pub const_bindings: *HashMap<bool>,
+    // File-scope `const` names (whole program, filled by pre_register). A
+    // write whose root resolves here — and is not shadowed by a local — is
+    // an assign-immutable error; before this the only backstop was cc's
+    // "lvalue required" misreported as an ICE. Freestanding top-level `let`
+    // globals are NOT in this set: they are mutable by design.
+    pub module_consts: *HashMap<bool>,
     pub borrows: *Vector<BorrowEvent>, // active let-bound borrows; save/restore per block
     pub current_ret: *Type,
     // Type parameters of the enclosing fn (e.g. `["T", "U"]`). Used by
@@ -1450,6 +1460,8 @@ impl Typer {
         t.consumed_locals = consumed;
         t.mut_locals = HashMap::new();
         t.mut_decl_pos = HashMap::new();
+        t.const_bindings = HashMap::new();
+        t.module_consts = HashMap::new();
         t.moved_out = HashMap::new();
         t.call_owned = HashMap::new();
         t.borrows = bw;
@@ -1758,6 +1770,8 @@ impl Typer {
         self.owned_locals.free();
         self.mut_locals.free();
         self.mut_decl_pos.free();
+        self.const_bindings.free();
+        self.module_consts.free();
         self.borrows.free();
         self.diagnostics.free();
         self.visibility.free();
@@ -2094,6 +2108,9 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
             }
         }
         if s.kind == ST_CONST {
+            // Registered even when the type can't be inferred: const-ness is
+            // what the write check keys on, not the type.
+            t.module_consts.insert(s.name, true);
             // Top-level const: type from annotation if any, otherwise infer
             // from the literal value (covers `const X: int = 1;` and friends).
             let mut ty: *Type = s.let_ty;
@@ -3329,6 +3346,7 @@ fn check_fn(t: *Typer, s: *Stmt) {
     let saved_moved_out: *HashMap<bool> = t.moved_out;
     let saved_mut_locals: *HashMap<bool> = t.mut_locals;
     let saved_mut_decl_pos: *HashMap<i32> = t.mut_decl_pos;
+    let saved_const_bindings: *HashMap<bool> = t.const_bindings;
     let saved_borrows: *Vector<BorrowEvent> = t.borrows;
     let saved_ret: *Type = t.current_ret;
     let saved_tps: *Vector<string> = t.current_type_params;
@@ -3347,6 +3365,7 @@ fn check_fn(t: *Typer, s: *Stmt) {
     t.moved_out = new_moved_out;
     t.mut_locals = HashMap::new();
     t.mut_decl_pos = HashMap::new();
+    t.const_bindings = HashMap::new();
     t.call_owned = HashMap::new();
     t.borrows = new_borrows;
     t.current_ret = s.fn_ret_ty;
@@ -3390,6 +3409,7 @@ fn check_fn(t: *Typer, s: *Stmt) {
     t.moved_out.free();
     t.mut_locals.free();
     t.mut_decl_pos.free();
+    t.const_bindings.free();
     t.borrows.free();
     t.scope = saved_scope;
     t.owned_locals = saved_owned;
@@ -3399,6 +3419,7 @@ fn check_fn(t: *Typer, s: *Stmt) {
     t.moved_out = saved_moved_out;
     t.mut_locals = saved_mut_locals;
     t.mut_decl_pos = saved_mut_decl_pos;
+    t.const_bindings = saved_const_bindings;
     t.borrows = saved_borrows;
     t.current_ret = saved_ret;
     t.current_type_params = saved_tps;
@@ -3981,9 +4002,14 @@ fn _check_immutable_write(t: *Typer, lhs: *Expr, verb: string) {
     if root.eq("") {
         return;
     }
-    // Only bindings this fn declared are judged — module consts / kernel
-    // globals / struct fields resolve elsewhere and keep their behavior.
+    // Bindings this fn declared are judged below; a root that resolves to a
+    // file-scope `const` instead (and is not shadowed by any local) is a
+    // write to a constant. Freestanding kernel globals (top-level `let`)
+    // stay writable — the check keys on const-ness, not module scope.
     if !t.mut_locals.contains(root) {
+        if t.module_consts.contains(root) && !t.scope.contains(root) {
+            t.err_code_range(lhs.line, lhs.column, root.len(), "assign-immutable", "cannot ".concat(verb).concat(" constant `").concat(root).concat("` — `const` bindings can never be reassigned"));
+        }
         return;
     }
     if t.mut_locals.get(root) {
@@ -4029,6 +4055,13 @@ fn _check_immutable_write(t: *Typer, lhs: *Expr, verb: string) {
     }
     let dl: i32 = pos / 4096;
     let dc: i32 = pos % 4096;
+    // A `const` gets its own wording and NO `let mut` fix-it — splicing
+    // `mut ` in front of a const name would suggest `const mut`, which
+    // isn't a thing; constants can never be reassigned.
+    if t.const_bindings.contains(root) {
+        t.err_code_range(lhs.line, lhs.column, root.len(), "assign-immutable", "cannot ".concat(verb).concat(" constant `").concat(root).concat("` — it was declared `const` on line ").concat(int_to_str(dl)).concat("; `const` bindings can never be reassigned"));
+        return;
+    }
     t.err_code_range_fix(lhs.line, lhs.column, root.len(), "assign-immutable", "cannot ".concat(verb).concat(" `").concat(root).concat("` — it was declared immutable on line ").concat(int_to_str(dl)).concat("; declare it `let mut ").concat(root).concat("`"), dl, dc, dl, dc, "mut ");
 }
 
@@ -4189,6 +4222,11 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
         if is_auto_owned {
             t.owned_locals.insert(s.name, true);
         }
+    }
+    // `const` carries its own flavor of immutability: the assign-immutable
+    // diagnostic says "constant" and offers no `let mut` fix.
+    if s.kind == ST_CONST {
+        t.const_bindings.insert(s.name, true);
     }
     // Call-result owned: `let x = make()` where `make` returns an owned value.
     // Track it (apart from owned_locals) so a later `a = x` flags use-after-move.
