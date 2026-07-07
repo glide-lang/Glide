@@ -4589,6 +4589,30 @@ pub fn emit_expr(g: *CG, e: *Expr) {
             return;
         }
     }
+    // gap#3 clear: `v.clear()` on an element-drop Vector<string> logically
+    // discards every element (len=0) without freeing the buffer, so the owned
+    // element strings would leak across a push/clear/push loop. Free them first:
+    // `({ v._drop_str_elems(); v.clear(); })`. clear() reset len to 0, so the
+    // scope-end drop only frees elements pushed since the last clear — no double
+    // free. Receiver call (no move-on-pass).
+    if e.kind == EX_CALL && !g._vec_own_skip && e.lhs != null && e.lhs.kind == EX_MEMBER
+        && e.lhs.field != null && e.lhs.field.eq("clear")
+        && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT && e.lhs.lhs.str_val != null
+        && g.vec_elem_drop.contains(e.lhs.lhs.str_val)
+        && (e.args == null || e.args.len() == 0) {
+        print!("({ ");
+        let cdr_recv: *Expr = expr_ident(e.lhs.lhs.str_val, e.line, e.column);
+        let cdr_mem: *Expr = expr_member(cdr_recv, "_drop_str_elems");
+        let cdr_args: *Vector<Expr> = Vector::new();
+        let cdr_call: *Expr = expr_call(cdr_mem, cdr_args);
+        emit_expr(g, cdr_call);
+        print!("; ");
+        g._vec_own_skip = true;
+        emit_expr(g, e);
+        g._vec_own_skip = false;
+        print!("; })");
+        return;
+    }
     if e.kind == EX_INT {
         // A type-suffixed literal (`200u8`, `5i64`) carries its C type via a
         // cast so the value is stored/compared at the right width.

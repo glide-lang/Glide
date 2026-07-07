@@ -1,0 +1,82 @@
+// Vector<string> ELEMENT auto-drop (gap#3). A droppable local Vector<string>
+// whose `get` results are never retained gets its element strings freed at
+// scope end and at clear() — reclaiming the last common string leak. Soundness
+// is the point: a wrong drop of a live/aliased element would UAF or double-free,
+// and a mis-freed literal would abort. Every case asserts real string VALUES so
+// any such fault surfaces as a wrong result or a crash rather than passing.
+
+// Non-escaping: fresh producers pushed, read only via get -> element-dropped.
+// Correct concatenated value proves the strings were intact through the drop.
+fn joined(n: i32) -> string {
+    let v: *Vector<string> = Vector::new();
+    for let i: i32 = 0; i < n; i++ { v.push(format!("<{}>", i)); }
+    let mut out: string = "";
+    for let i: i32 = 0; i < v.len(); i++ { out = out.concat(v.get(i)); }
+    return out;
+}
+
+fn test_element_drop_reads_correctly() -> i32 {
+    assert!(joined(3).eq("<0><1><2>"));
+    return 0;
+}
+
+// A returned get-result aliases the element out -> the vector must NOT
+// element-drop it, else the returned string dangles.
+fn first_elem() -> string {
+    let v: *Vector<string> = Vector::new();
+    v.push("alpha".concat("!"));
+    v.push("beta".concat("?"));
+    return v.get(0);
+}
+
+fn test_returned_get_alias_survives() -> i32 {
+    let s: string = first_elem();
+    assert!(s.eq("alpha!"));
+    assert!(s.len() == 6);
+    return 0;
+}
+
+// A retained get-result used after binding -> same escape gate; string valid.
+fn retained_alias() -> string {
+    let v: *Vector<string> = Vector::new();
+    v.push("keep".concat("-me"));
+    let x: string = v.get(0);
+    return x.concat(x);
+}
+
+fn test_retained_alias_valid() -> i32 {
+    assert!(retained_alias().eq("keep-mekeep-me"));
+    return 0;
+}
+
+// clear() frees the current elements before resetting len. A push/clear/push
+// loop must read the SECOND batch correctly (no UAF of the freed first batch).
+fn churn_last_batch() -> string {
+    let v: *Vector<string> = Vector::new();
+    v.push("round0".concat("a"));
+    v.clear();
+    v.push("round1".concat("b"));
+    v.push("round1".concat("c"));
+    let mut out: string = "";
+    for let i: i32 = 0; i < v.len(); i++ { out = out.concat(v.get(i)); }
+    return out;
+}
+
+fn test_clear_frees_then_reuses() -> i32 {
+    assert!(churn_last_batch().eq("round1bround1c"));
+    return 0;
+}
+
+// A literal element carries no owned bit; freeing it at scope end must be a
+// safe no-op even when a fresh (owned) element sits beside it in the vector.
+fn mixed_literal_and_fresh() -> i32 {
+    let v: *Vector<string> = Vector::new();
+    v.push(format!("f{}", 7));   // fresh, owned
+    v.push("literal");           // rodata, not owned -> free must no-op
+    return v.get(0).len() + v.get(1).len();
+}
+
+fn test_mixed_literal_no_bad_free() -> i32 {
+    assert!(mixed_literal_and_fresh() == 2 + 7);
+    return 0;
+}
