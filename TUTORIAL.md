@@ -142,8 +142,14 @@ let q: *Point = arena.alloc(sizeof(Point)) as *Point;
 // freed together when arena.free() runs
 ```
 
-For fully manual control, `new T { ... }` allocates a raw heap value you free
-yourself.
+For fully manual, untracked memory (`new T { ... }` is not implemented — the
+compiler rejects it), allocate raw and cast:
+
+```glide
+extern fn malloc(n: usize) -> *void;
+let p: *Point = malloc(sizeof(Point)) as *Point;   // untracked
+free(p as *void);                                  // you free it yourself
+```
 
 ## borrows
 
