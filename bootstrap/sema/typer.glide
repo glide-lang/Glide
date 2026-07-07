@@ -987,6 +987,11 @@ pub struct Typer {
     // Where each top-level const was declared (name -> origin file), so the
     // qualified-const privacy check can allow same-file access.
     pub const_origin: *HashMap<string>,
+    // Module qualifiers consumed by TYPE positions: `let x: *lib::T` collapses
+    // to bare `T` in _canon_type BEFORE the unused-import lint runs, erasing
+    // the only textual use of `lib`. The collapse records the module name here
+    // so the lint doesn't tell the user to delete a load-bearing import.
+    pub mod_type_uses: *HashMap<bool>,
 }
 
 pub struct FnptrHint {
@@ -1684,6 +1689,7 @@ impl Typer {
         t.struct_tp_bounds = HashMap::new();
         t.decl_private = HashMap::new();
         t.const_origin = HashMap::new();
+        t.mod_type_uses = HashMap::new();
         return t;
     }
 
@@ -1774,6 +1780,34 @@ impl Typer {
         return self.module_imports.contains(self.current_origin.concat("::").concat(name));
     }
 
+    // Record every `::`-separated segment of a module qualifier that a type
+    // annotation spent (`lib2::Hidden2` -> segment `lib2`). The unused-import
+    // lint runs AFTER _canon_type collapsed the annotation to its bare leaf,
+    // so without this the only textual use of the module vanishes and the
+    // lint tells the user to delete a load-bearing import.
+    fn _record_mod_qualifier(self: *Typer, qual: string) {
+        if qual == null || qual.eq("") {
+            return;
+        }
+        let mut start: i32 = 0;
+        let n: i32 = qual.len();
+        while start < n {
+            let rest: string = qual.substring(start, n);
+            let cc: i32 = rest.index_of("::");
+            let mut seg: string = rest;
+            if cc >= 0 {
+                seg = rest.substring(0, cc);
+            }
+            if !seg.eq("") {
+                self.mod_type_uses.insert(seg, true);
+            }
+            if cc < 0 {
+                break;
+            }
+            start = start + cc + 2;
+        }
+    }
+
     // Strip a leading imported-module segment from a qualified prefix, so
     // `ip::SocketAddr` (module `ip` + type) resolves as the bare `SocketAddr`
     // via the normal type/method registry. Leaves non-module prefixes (a
@@ -1829,6 +1863,9 @@ impl Typer {
         }
         if ty.kind == TY_ASSOC {
             if ty.inner != null && ty.inner.kind == TY_NAMED && self._is_imported_module(ty.inner.name) {
+                // The qualifier is about to be erased from the AST — record it
+                // so the unused-import lint still sees `lib` of `lib::T` used.
+                self._record_mod_qualifier(ty.inner.name);
                 ty.kind = TY_NAMED;
                 ty.inner = null;
                 // The qualifier IS the explicit module reference — a
@@ -1846,7 +1883,13 @@ impl Typer {
         }
         if ty.kind == TY_NAMED {
             if ty.name != null && ty.name.index_of("::") >= 0 {
+                let _pre_strip: string = ty.name;
                 ty.name = self._strip_mod_prefix(ty.name);
+                // Record the stripped qualifier segments (everything before
+                // the surviving leaf) for the unused-import lint.
+                if ty.name != null && _pre_strip.len() > ty.name.len() {
+                    self._record_mod_qualifier(_pre_strip.substring(0, _pre_strip.len() - ty.name.len()));
+                }
                 if self.current_origin != null && !self.current_origin.eq("") && ty.name != null && ty.name.index_of("::") < 0 {
                     self.visibility.insert(self.current_origin.concat("::").concat(ty.name), true);
                 }
@@ -1966,6 +2009,7 @@ impl Typer {
         self.struct_tp_bounds.free();
         self.decl_private.free();
         self.const_origin.free();
+        self.mod_type_uses.free();
         __glide_pfree(self as *void);
     }
 

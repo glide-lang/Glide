@@ -3486,9 +3486,15 @@ fn _ui_collect_expr(e: *Expr, used: *HashMap<bool>) {
     if e.kind == EX_CAST || e.kind == EX_SIZEOF {
         _ui_collect_type(e.cast_to, used);
     }
-    // Struct literal names the type explicitly.
+    // Struct literal names the type explicitly. A qualified literal
+    // (`mod::Type { … }`) keeps the module in `field` — that's a use of the
+    // module import, so record it too or the lint tells the user to delete
+    // a load-bearing `import mod;`.
     if e.kind == EX_STRUCT_LIT && e.str_val != null {
         used.insert(e.str_val, true);
+        if e.field != null && !e.field.eq("") {
+            used.insert(e.field, true);
+        }
     }
     if e.lhs != null {
         _ui_collect_expr(e.lhs, used);

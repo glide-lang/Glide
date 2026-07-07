@@ -2852,6 +2852,12 @@ pub fn analysis_unused_import(t: *Typer, program: *Vector<Stmt>, source: string)
             if used.contains(short) {
                 continue;
             }
+            // TYPE-position uses (`let x: *lib::T`) were collapsed to the bare
+            // leaf by _canon_type before this lint ran — the typer recorded
+            // the spent qualifier, so a load-bearing import isn't flagged.
+            if t.mod_type_uses.contains(short) {
+                continue;
+            }
             _warn_import_whole(t, &s, source, "unused-import", "import of `".concat(short).concat("` is never used in this file — remove it (module imports grant `").concat(short).concat("::…` access)"));
             continue;
         }
@@ -2890,7 +2896,7 @@ pub fn analysis_unused_import(t: *Typer, program: *Vector<Stmt>, source: string)
         // is in use, the LINE must stay — flag the dead members individually.
         if all && s.import_path != null {
             let selq: string = last_path_segment(s.import_path);
-            if !selq.eq("") && used.contains(selq) {
+            if !selq.eq("") && (used.contains(selq) || t.mod_type_uses.contains(selq)) {
                 all = false;
             }
         }
