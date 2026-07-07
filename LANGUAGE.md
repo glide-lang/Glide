@@ -75,6 +75,12 @@ The lexer currently discards comments; the formatter doesn't preserve them.
 | `chan<T>`       | typed channel (bounded MPMC)                               |
 | `*dyn Trait`    | fat pointer (vtable + data); runtime dispatch              |
 
+An anonymous fn expression (`fn(x: i32) -> i32 { return x + 1; }`) is a plain
+function pointer. Closures do **not capture** the enclosing scope yet — using
+an outer local inside one is a `closure-capture` error; pass the value as a
+parameter instead. The `move` keyword before a fn expression is accepted for
+forward compatibility and is currently a no-op.
+
 ## statements
 
 ```glide
