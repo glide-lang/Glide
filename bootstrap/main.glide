@@ -4915,9 +4915,11 @@ fn main() -> i32 {
         if !path_is_manifest(src_path) {
             build_visibility(t, stmts);
             t.enforce_visibility = true;
-            // Focused check: the file being checked is the "user origin", so its
-            // own impl-method bodies get real errors (matching the editor/LSP),
-            // while imported impls stay demoted to warnings.
+            // Focused check: the file being checked is the "user origin".
+            // check_program skips BODY typechecking of fns from other
+            // (imported) files — matching the editor/LSP, which discards
+            // their diagnostics at publish. Registration stays whole-program,
+            // and errors are never demoted (severity is always real).
             t.user_origin = src_path;
             check_program(t, stmts);
             run_extra_analyses(t, stmts, "");
