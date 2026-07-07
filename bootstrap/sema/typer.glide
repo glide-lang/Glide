@@ -748,6 +748,10 @@ pub struct FnSig {
     // inference substitute `T` in the return type using the receiver's
     // concrete args (`*Vector<int>.get()` -> int, not T).
     pub owner_type_params: *Vector<string>,
+    // Bounds on the owning impl's type params, in lockstep with
+    // owner_type_params (`impl<T: Show> GBox<T>` -> ["Show"]). Checked at
+    // method-call sites against the receiver's concrete type args.
+    pub owner_type_param_bounds: *Vector<string>,
     // Declaration site of the fn, so an unsatisfied-bound error can point
     // "`T: Trait` bound declared here" via relatedInformation.
     pub decl_origin: string,
@@ -970,6 +974,10 @@ pub struct Typer {
     // POD-struct memo for the copy-vs-move rule: struct name -> 1 (pure data,
     // copies on `let b = a`) / 2 (owns heap or unknown, moves). Lazy.
     pub pod_cache: *HashMap<i32>,
+    // Bounds on generic STRUCT type params: `<Struct>#<i>` -> the `+`-joined
+    // bound list of param i (only non-empty bounds are stored). Checked at
+    // instantiation sites (type annotations) against impl_set.
+    pub struct_tp_bounds: *HashMap<string>,
     // Cross-file member privacy for QUALIFIED access: `<origin>::<name>` for
     // every non-`pub` top-level fn/const/struct declared in a non-builtin
     // file. Filled by build_visibility. `mod::name` resolution consults it so
@@ -1415,6 +1423,24 @@ fn _check_type_known(t: *Typer, ty: *Type, line: i32, col: i32) {
             for let i: i32 = 0; i < ty.args.len(); i++ {
                 let a: Type = ty.args.get(i);
                 _check_type_known(t, &a, line, col);
+                // `struct S<T: Ord>` bounds enforce at instantiation. Only
+                // concrete user structs are judged (primitives / type params /
+                // wrapped types stay permissive — same posture as the fn-call
+                // bound check on unresolvable args).
+                let bkey: string = ty.name.concat("#").concat(int_to_str(i));
+                if t.struct_tp_bounds.contains(bkey) {
+                    let carg: *Type = strip_ptr(&a);
+                    if carg != null && carg.kind == TY_NAMED && carg.name != null && t.structs.contains(carg.name) && !_is_current_type_param(t, carg.name) {
+                        let bparts: *Vector<string> = split_bounds(t.struct_tp_bounds.get(bkey));
+                        for let bj: i32 = 0; bj < bparts.len(); bj++ {
+                            let bnd: string = bparts.get(bj);
+                            if !t.impl_set.contains(bnd.concat("::").concat(carg.name)) {
+                                t.err_code_range(pl, pc, ty.name.len(), "unsatisfied-bound", "type `".concat(carg.name).concat("` does not implement `").concat(bnd).concat("` (required by the bounds of `struct ").concat(ty.name).concat("`)"));
+                            }
+                        }
+                        bparts.free();
+                    }
+                }
             }
         }
         return;
@@ -1655,6 +1681,7 @@ impl Typer {
         let fh: *Vector<FnptrHint> = Vector::new();
         t.fnptr_hints = fh;
         t.pod_cache = HashMap::new();
+        t.struct_tp_bounds = HashMap::new();
         t.decl_private = HashMap::new();
         t.const_origin = HashMap::new();
         return t;
@@ -1936,6 +1963,7 @@ impl Typer {
         self.impl_set.free();
         self.enums.free();
         self.pod_cache.free();
+        self.struct_tp_bounds.free();
         self.decl_private.free();
         self.const_origin.free();
         __glide_pfree(self as *void);
@@ -2344,7 +2372,7 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
         }
         if s.kind == ST_FN {
             let no_owner: *Vector<string> = null;
-            let sig: FnSig = FnSig { name: s.name, params: s.fn_params, ret_type: s.fn_ret_ty, owned_return: _fn_returns_owned(&s), is_variadic: s.is_variadic, type_params: s.type_params, type_param_bounds: s.type_param_bounds, owner_type_params: no_owner, decl_origin: s.origin, decl_line: s.name_line, decl_col: s.name_col };
+            let sig: FnSig = FnSig { name: s.name, params: s.fn_params, ret_type: s.fn_ret_ty, owned_return: _fn_returns_owned(&s), is_variadic: s.is_variadic, type_params: s.type_params, type_param_bounds: s.type_param_bounds, owner_type_params: no_owner, owner_type_param_bounds: no_owner, decl_origin: s.origin, decl_line: s.name_line, decl_col: s.name_col };
             t.fns.insert(s.name, sig);
             if !s.is_extern {
                 _ban_borrow_signature(t, &s);
@@ -2397,6 +2425,17 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
             // type param, so their literal field-value checking is skipped.
             if s.type_params != null && s.type_params.len() > 0 {
                 t.struct_generic.insert(s.name, true);
+                // Record per-param bounds (`struct S<T: Ord>`) so annotation
+                // sites (`let x: S<Plain>`) can enforce them; parsed-and-
+                // dropped bounds were a silent lie.
+                if s.type_param_bounds != null {
+                    for let bi: i32 = 0; bi < s.type_param_bounds.len(); bi++ {
+                        let bs: string = s.type_param_bounds.get(bi);
+                        if bs != null && !bs.eq("") {
+                            t.struct_tp_bounds.insert(s.name.concat("#").concat(int_to_str(bi)), bs);
+                        }
+                    }
+                }
             }
             // Borrow rule: reject `&T` / `&mut T` in struct fields. They would
             // require lifetimes to be sound; Glide's design picks `*T` instead.
@@ -2448,7 +2487,7 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
                     if m.kind == ST_FN {
                         _ban_borrow_signature(t, &m);
                         let fname: string = key_prefix.concat("_").concat(m.name);
-                        let sig: FnSig = FnSig { name: fname, params: m.fn_params, ret_type: m.fn_ret_ty, owned_return: _fn_returns_owned(&m), is_variadic: m.is_variadic, type_params: m.type_params, type_param_bounds: m.type_param_bounds, owner_type_params: s.type_params, decl_origin: s.origin, decl_line: m.name_line, decl_col: m.name_col };
+                        let sig: FnSig = FnSig { name: fname, params: m.fn_params, ret_type: m.fn_ret_ty, owned_return: _fn_returns_owned(&m), is_variadic: m.is_variadic, type_params: m.type_params, type_param_bounds: m.type_param_bounds, owner_type_params: s.type_params, owner_type_param_bounds: s.type_param_bounds, decl_origin: s.origin, decl_line: m.name_line, decl_col: m.name_col };
                         t.fns.insert(fname, sig);
                         // Record under the BASE type name (not the
                         // specialized key) so "no method" detection knows
@@ -5536,6 +5575,35 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 }
                 if !mkey.eq("") {
                     let msig: FnSig = t.fns.get(mkey);
+                    // `impl<T: Bound> Type<T>` bounds enforce at the method
+                    // call: the receiver's concrete type args must satisfy
+                    // the impl's declared bounds — parsed-and-dropped bounds
+                    // were a silent lie. Only concrete user structs are judged.
+                    if stripped.kind == TY_GENERIC && stripped.args != null && msig.owner_type_params != null && msig.owner_type_param_bounds != null && msig.owner_type_params.len() == stripped.args.len() {
+                        let obn: i32 = msig.owner_type_param_bounds.len();
+                        for let oi: i32 = 0; oi < msig.owner_type_params.len(); oi++ {
+                            if oi >= obn {
+                                break;
+                            }
+                            let obounds: string = msig.owner_type_param_bounds.get(oi);
+                            if obounds == null || obounds.eq("") {
+                                continue;
+                            }
+                            let oarg: Type = stripped.args.get(oi);
+                            let ocon: *Type = strip_ptr(&oarg);
+                            if ocon == null || ocon.kind != TY_NAMED || ocon.name == null || !t.structs.contains(ocon.name) || _is_current_type_param(t, ocon.name) {
+                                continue;
+                            }
+                            let oparts: *Vector<string> = split_bounds(obounds);
+                            for let oj: i32 = 0; oj < oparts.len(); oj++ {
+                                let obnd: string = oparts.get(oj);
+                                if !t.impl_set.contains(obnd.concat("::").concat(ocon.name)) {
+                                    t.err_code_range(_field_pos_line(e.lhs), _field_pos_col(e.lhs), mname.len(), "unsatisfied-bound", "type `".concat(ocon.name).concat("` does not implement `").concat(obnd).concat("` (required by `").concat(msig.owner_type_params.get(oi)).concat("` of `impl ").concat(stripped.name).concat("`)"));
+                                }
+                            }
+                            oparts.free();
+                        }
+                    }
                     // Arity: user args (excluding the implicit `self`) must
                     // match the method's declared params minus self. Missing
                     // or extra args are an error — same aggressiveness as a
