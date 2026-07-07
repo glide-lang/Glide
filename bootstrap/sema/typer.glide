@@ -3181,6 +3181,26 @@ fn check_call_aliasing(t: *Typer, call: *Expr) {
                 muts.push(a.op_code == UN_ADDR_MUT);
             }
         }
+        // A bare binding passed as an argument is an access path too. When it
+        // is `&mut`-TYPED (forwarding an exclusive borrow param), it counts as
+        // a mutable leg — `g(m, m)` with `m: &mut i32` is two live exclusive
+        // aliases; local roots were caught, borrow-param roots slipped through.
+        // Any other bare binding counts as a read leg, so `f(&mut x, x)` (a
+        // `restrict` write path plus a same-call read) collides as the
+        // message always claimed. Sequential forwarding (`wr(m); wr(m)`)
+        // stays legal by design: each call's exclusive use ends before the
+        // next begins (reborrow semantics, matching Rust).
+        if a.kind == EX_IDENT && a.str_val != null && !a.str_val.eq("") {
+            let mut _amut: bool = false;
+            if t.scope.contains(a.str_val) {
+                let _aty: Type = t.scope.get(a.str_val);
+                if _aty.kind == TY_BORROW_MUT {
+                    _amut = true;
+                }
+            }
+            names.push(a.str_val);
+            muts.push(_amut);
+        }
     }
     // The method receiver is itself an access path to its object: `s.m(&mut s)`
     // passes `s` as the receiver AND `&mut s` as an argument. Since a `&mut`
