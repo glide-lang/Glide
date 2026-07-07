@@ -5858,6 +5858,19 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         if e.cast_to != null {
             t._canon_type(e.cast_to);
         }
+        // `x as *dyn Trait` requires `impl Trait for TypeOf(x)` — codegen
+        // references the impl's vtable symbol, so a missing impl used to
+        // sail through the typer and die at cc as a please-report ICE.
+        // Same table the implicit-coercion path (_coerce_dyn_arg) consults.
+        if e.cast_to != null && e.cast_to.kind == TY_POINTER && e.cast_to.inner != null && e.cast_to.inner.kind == TY_DYN && e.cast_to.inner.name != null {
+            let _dtr: string = e.cast_to.inner.name;
+            let _dsrc: *Type = strip_ptr(_u6);
+            // Only concrete user structs are judged: unknown / generic /
+            // already-dyn sources stay permissive.
+            if _dsrc != null && _dsrc.kind == TY_NAMED && _dsrc.name != null && t.structs.contains(_dsrc.name) && !_is_current_type_param(t, _dsrc.name) && !t.impl_set.contains(_dtr.concat("::").concat(_dsrc.name)) {
+                t.err_code_range(e.line, e.column, _arg_span(e), "unsatisfied-bound", "type `".concat(_dsrc.name).concat("` does not implement `").concat(_dtr).concat("` (required to coerce to `*dyn ").concat(_dtr).concat("`)"));
+            }
+        }
         return e.cast_to;
     }
     if e.kind == EX_PATH {
