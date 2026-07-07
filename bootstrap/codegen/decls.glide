@@ -850,6 +850,7 @@ fn emit_fn(g: *CG, s: *Stmt) {
     let saved_cfb: *Vector<Stmt> = g.cur_fn_body;
     g.cur_fn_body = s.fn_body;
     g.str_acc.clear();
+    g.vec_elem_drop.clear();
     // Reset defer + auto-drop stacks for this fn.
     let saved_defer: *Vector<Expr> = g.defer_stack;
     let saved_err_defer: *Vector<Expr> = g.err_defer_stack;
@@ -967,6 +968,7 @@ fn emit_impl(g: *CG, s: *Stmt) {
         let saved_cfb_m: *Vector<Stmt> = g.cur_fn_body;
         g.cur_fn_body = m.fn_body;
         g.str_acc.clear();
+        g.vec_elem_drop.clear();
         let saved_defer: *Vector<Expr> = g.defer_stack;
         let saved_err_defer: *Vector<Expr> = g.err_defer_stack;
         let saved_drop: *Vector<Expr> = g.auto_drop_stack;
@@ -2452,6 +2454,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         let saved_cfb_q: *Vector<Stmt> = g.cur_fn_body;
         g.cur_fn_body = new_body;
         g.str_acc.clear();
+        g.vec_elem_drop.clear();
         if _body_has_defer(new_body) {
             ind(1);
             println!("char __gdefer[256] = {0};");
@@ -2514,6 +2517,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         let saved_cfb_a: *Vector<Stmt> = g.cur_fn_body;
         g.cur_fn_body = af.body;
         g.str_acc.clear();
+        g.vec_elem_drop.clear();
         if af.body != null && _body_has_defer(af.body) {
             ind(1);
             println!("char __gdefer[256] = {0};");
