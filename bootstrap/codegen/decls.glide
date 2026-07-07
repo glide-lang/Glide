@@ -2070,7 +2070,10 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         emit_struct_mono(g, &t);
     }
     // Concrete struct definitions. Skip anything the chan runtime already
-    // forward-emitted (chan<UserType> needs the body up front).
+    // forward-emitted (chan<UserType> needs the body up front). RECORD each
+    // emission in emitted_named: later phases (the struct-mono queue drain)
+    // may need a by-value payload's body and would otherwise re-emit it —
+    // a C redefinition error.
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.name != null && !s.name.eq("") && g.emitted_named.contains(s.name) {
@@ -2078,9 +2081,15 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         }
         if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
             emit_struct(&s);
+            if s.name != null && !s.name.eq("") {
+                g.emitted_named.insert(s.name, true);
+            }
         }
         if s.kind == ST_ENUM {
             emit_enum(&s);
+            if s.name != null && !s.name.eq("") {
+                g.emitted_named.insert(s.name, true);
+            }
         }
     }
     // Anonymous tuple structs. Collected program-wide now that let types are
@@ -2571,6 +2580,48 @@ fn emit_top_global(g: *CG, s: *Stmt) {
     println!(";");
 }
 
+// Emit the full C definition of a concrete user struct/enum NOW because a
+// generic-struct mono stores it by value (see emit_struct_mono). Dedups via
+// emitted_named (so the later program-order concrete pass skips it), and
+// recurses through the payload's own by-value struct / mono fields so the
+// whole dependency chain lands in order. Marks the name emitted BEFORE
+// walking fields as a cycle guard (a by-value cycle is an invalid program
+// the typer rejects; this just refuses to loop on it). Primitives, extern
+// opaque types, and unknown names fall through untouched.
+fn _emit_concrete_payload_def(g: *CG, name: string) {
+    if name == null || name.eq("") || g.emitted_named.contains(name) {
+        return;
+    }
+    if g.structs.contains(name) {
+        let sd: Stmt = g.structs.get(name);
+        if sd.is_extern {
+            return; // opaque `extern type` — the C side owns the definition
+        }
+        g.emitted_named.insert(name, true);
+        if sd.struct_fields != null {
+            for let i: i32 = 0; i < sd.struct_fields.len(); i++ {
+                let f: Field = sd.struct_fields.get(i);
+                if f.ty != null && f.ty.kind == TY_NAMED {
+                    _emit_concrete_payload_def(g, f.ty.name);
+                }
+                if f.ty != null && f.ty.kind == TY_GENERIC {
+                    emit_struct_mono(g, f.ty);
+                }
+            }
+        }
+        _forward_decl_field_monos(g, &sd);
+        println!("typedef struct ", c_safe_ident(sd.name), " ", c_safe_ident(sd.name), ";");
+        emit_struct(&sd);
+        return;
+    }
+    if g.enums.contains(name) {
+        let ed: Stmt = g.enums.get(name);
+        g.emitted_named.insert(name, true);
+        println!("typedef struct ", c_safe_ident(ed.name), " ", c_safe_ident(ed.name), ";");
+        emit_enum(&ed);
+    }
+}
+
 pub fn emit_struct_mono(g: *CG, t: *Type) {
     if t == null || t.kind != TY_GENERIC {
         return;
@@ -2624,6 +2675,15 @@ pub fn emit_struct_mono(g: *CG, t: *Type) {
             // on the forward-decl + queue path above.
             if fsub != null && fsub.kind == TY_GENERIC && g.generic_structs.contains(fsub.name) {
                 emit_struct_mono(g, fsub);
+            }
+            // Same for a by-value CONCRETE user struct/enum payload
+            // (`v: Plain` after substitution). The program-wide concrete
+            // pass runs AFTER the mono pass, so `GBox<Plain>` always emitted
+            // `Plain v;` against a forward typedef — invalid C ("incomplete
+            // type") regardless of source order. Emit the payload's full
+            // body now; emitted_named makes the later pass a no-op.
+            if fsub != null && fsub.kind == TY_NAMED {
+                _emit_concrete_payload_def(g, fsub.name);
             }
         }
     }
