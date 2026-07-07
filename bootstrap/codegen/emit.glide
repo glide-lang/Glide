@@ -1032,6 +1032,9 @@ pub struct CG {
     // SDS: recursion guard so the extern-string-return adopt-wrap doesn't
     // re-wrap the same call when it re-emits it.
     pub _sds_adopt_skip: bool,
+    // gap#3: recursion guard so the Vector<string> push own-route wrap doesn't
+    // re-wrap the same `v.push(<fresh>)` call when it re-emits it.
+    pub _vec_own_skip: bool,
 }
 
 // The local name an auto-drop cleanup frees: `v.free()` -> "v",
@@ -2243,6 +2246,7 @@ impl CG {
     pub fn new() -> *CG {
         let g: *CG = malloc(sizeof(CG)) as *CG;
         g._sds_adopt_skip = false;
+        g._vec_own_skip = false;
         let s: *HashMap<Type> = HashMap::new();
         let gs: *HashMap<Stmt> = HashMap::new();
         let gf: *HashMap<Stmt> = HashMap::new();
@@ -4563,6 +4567,28 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         print!(")");
         return;
     }
+    // gap#3 own-route: `v.push(<inline fresh producer>)` on a droppable
+    // Vector<string> — bracket the whole push in the g_str_own counter so the
+    // producer's __glide_str_alloc mallocs (owned bit set). The scope-end
+    // _vec_str_drop_elems then reclaims it; without this the push would arena-
+    // allocate and the free would no-op (= the leak). push returns void, so the
+    // stmt-expr yields void, matching its statement use. Only a fresh, unaliased
+    // producer is routed (a variable arg may alias, so it stays arena/leaked).
+    if e.kind == EX_CALL && !g._vec_own_skip && e.lhs != null && e.lhs.kind == EX_MEMBER
+        && e.lhs.field != null && e.lhs.field.eq("push")
+        && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT && e.lhs.lhs.str_val != null
+        && g.vec_elem_drop.contains(e.lhs.lhs.str_val)
+        && e.args != null && e.args.len() == 1 {
+        let _parg: Expr = e.args.get(0);
+        if _str_rhs_fresh(g, &_parg) {
+            print!("({ __glide_str_own_push(); ");
+            g._vec_own_skip = true;
+            emit_expr(g, e);
+            g._vec_own_skip = false;
+            print!("; __glide_str_own_pop(); })");
+            return;
+        }
+    }
     if e.kind == EX_INT {
         // A type-suffixed literal (`200u8`, `5i64`) carries its C type via a
         // cast so the value is stored/compared at the right width.
@@ -6803,6 +6829,22 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
                 args.push(*cast_arg);
                 free_call.args = args;
                 g.auto_drop_stack.push(*free_call);
+            }
+            // gap#3: a droppable Vector<string> also frees its element strings.
+            // Pushed AFTER the buffer-free above so LIFO drains the elements
+            // FIRST — before v.free() releases the pointer array. The helper
+            // no-ops on any element without the owned bit (a literal / arena /
+            // borrowed string), so this is safe even for elements the push
+            // own-routing did not malloc.
+            if g.vec_elem_drop.contains(s.name) {
+                // Receiver call `v._drop_str_elems()` — NOT a free fn taking `v`
+                // by value, which would move-on-pass the vector and suppress the
+                // buffer's v.free() below. Mirrors the v.free() push shape.
+                let edrop_recv: *Expr = expr_ident(s.name, s.line, s.column);
+                let edrop_mem: *Expr = expr_member(edrop_recv, "_drop_str_elems");
+                let edrop_args: *Vector<Expr> = Vector::new();
+                let edrop_call: *Expr = expr_call(edrop_mem, edrop_args);
+                g.auto_drop_stack.push(*edrop_call);
             }
         }
         return;

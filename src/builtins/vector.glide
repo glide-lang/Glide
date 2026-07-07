@@ -784,21 +784,22 @@ impl Vector<f64> {
     }
 }
 
-/// Free every owned element of a non-escaping local `Vector<string>` before
-/// its buffer is released. Compiler-inserted at scope end (and at `clear()`)
-/// for a vector the gap#3 element-drop analysis proved safe — no `get` result
-/// is retained past the drop. Each element that was pushed as a fresh inline
-/// producer is malloc-owned, so `__glide_string_free` reclaims it; a literal /
-/// arena / borrowed element carries no owned bit and is freed as a no-op, so a
-/// misclassification leaks rather than corrupting.
-pub fn _vec_str_drop_elems(v: *Vector<string>) {
-    if v == null { return; }
-    for let i: i32 = 0; i < v.len; i++ {
-        __glide_string_free(v.data[i]);
-    }
-}
-
 impl Vector<string> {
+    /// Free every owned element string before the buffer is released.
+    /// Compiler-inserted at scope end (and at `clear()`) for a local
+    /// `Vector<string>` the gap#3 element-drop analysis proved safe — no `get`
+    /// result is retained past the drop. Each element pushed as a fresh inline
+    /// producer is malloc-owned, so `__glide_string_free` reclaims it; a literal
+    /// / arena / borrowed element carries no owned bit and is freed as a no-op,
+    /// so a misclassification leaks rather than corrupting. This is a RECEIVER
+    /// method (not a free fn taking `v`) so the synthesized scope-end call does
+    /// not move-on-pass the vector — the buffer's `v.free()` still fires.
+    pub fn _drop_str_elems(self: *Vector<string>) {
+        for let i: i32 = 0; i < self.len; i++ {
+            __glide_string_free(self.data[i]);
+        }
+    }
+
     /// Concatenate all elements with `sep` between them. Empty vector
     /// returns "". Single-element vector returns that element unchanged.
     ///
