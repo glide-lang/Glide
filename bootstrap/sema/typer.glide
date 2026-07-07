@@ -992,6 +992,17 @@ pub struct Typer {
     // the only textual use of `lib`. The collapse records the module name here
     // so the lint doesn't tell the user to delete a load-bearing import.
     pub mod_type_uses: *HashMap<bool>,
+    // >0 while checking a loop body (while / for / while-let). `defer` lowers
+    // to ONE run at fn end (the __gdefer slots), so inside a loop it is a
+    // silent lie — and a deferred expr naming the loop var is emitted past
+    // the var's C scope (invalid C). ST_DEFER checks this and rejects.
+    pub loop_depth: i32,
+    // While checking an fn-expr (closure) body: the ENCLOSING fn's scope.
+    // Closures can't capture, so a name from here is unknown inside the
+    // closure — but "unknown name" alone sends users hunting for typos.
+    // Lets the EX_IDENT miss say "closures cannot capture" instead. Null
+    // outside closures.
+    pub fnexpr_outer_scope: *HashMap<Type>,
 }
 
 pub struct FnptrHint {
@@ -1590,6 +1601,46 @@ fn _check_null_borrow_arg(t: *Typer, want: *Type, a: *Expr) {
     t.err_code_range(a.line, a.column, 4, "null-borrow", "borrow `".concat(type_to_string(want)).concat("` cannot be null; pass a reference to a live value"));
 }
 
+// Primitive names whose borrows codegen auto-derefs on every bare read
+// (mirrors codegen's `is_stdlib_primitive`): the int family, floats, bool,
+// char, string. Struct borrows keep their pointer repr and are unaffected.
+fn _is_prim_name(n: string) -> bool {
+    if n == null {
+        return false;
+    }
+    if _is_int_prim_name(n) {
+        return true;
+    }
+    return n.eq("f32") || n.eq("f64") || n.eq("bool") || n.eq("char") || n.eq("string");
+}
+
+// Forwarding a SCALAR borrow onward (`fn f(r: &i32) { rd(r); }`) emits
+// invalid C today: codegen materializes a borrowed primitive by value on
+// every bare read (the `(*r)` auto-deref), so the callee receives an `int`
+// where it expects `int*` and cc ICEs. Struct borrows forward fine — their
+// repr stays a pointer. Until the lowering is context-sensitive on the
+// expected parameter type (wave 2), reject the forward with a real
+// diagnostic instead of the cc failure.
+fn _check_scalar_borrow_forward(t: *Typer, want: *Type, a: *Expr) {
+    if want == null || a == null || a.kind != EX_IDENT {
+        return;
+    }
+    if want.kind != TY_BORROW && want.kind != TY_BORROW_MUT && want.kind != TY_POINTER {
+        return;
+    }
+    if !t.scope.contains(a.str_val) {
+        return;
+    }
+    let bt: Type = t.scope.get(a.str_val);
+    if bt.kind != TY_BORROW && bt.kind != TY_BORROW_MUT {
+        return;
+    }
+    if bt.inner == null || bt.inner.kind != TY_NAMED || !_is_prim_name(bt.inner.name) {
+        return;
+    }
+    t.err_code_range(a.line, a.column, a.str_val.len(), "scalar-borrow-forward", "cannot forward the scalar borrow `".concat(a.str_val).concat("` (`").concat(type_to_string(&bt)).concat("`) into another call — scalar borrows are read by value and cannot re-materialize as a reference yet; pass the owner's `&x` directly, or take `").concat(type_to_string(bt.inner)).concat("` by value"));
+}
+
 // `extern type Foo;` is opaque — Glide never knows its size — so it can only
 // live behind a pointer. Flags a bare `Foo` at the TOP level of a declared
 // type (`let x: Foo`, `fn f(h: Foo) -> Foo`, a `Foo` field); `*Foo` is fine.
@@ -1690,6 +1741,8 @@ impl Typer {
         t.decl_private = HashMap::new();
         t.const_origin = HashMap::new();
         t.mod_type_uses = HashMap::new();
+        t.loop_depth = 0;
+        t.fnexpr_outer_scope = null;
         return t;
     }
 
@@ -4149,7 +4202,9 @@ fn check_stmt(t: *Typer, s: *Stmt) {
             _reg_mut(t, s.name, false, s.name_line, s.name_col);
         }
         if s.then_body != null {
+            t.loop_depth = t.loop_depth + 1;
             check_scoped_body(t, s.then_body);
+            t.loop_depth = t.loop_depth - 1;
         }
         return;
     }
@@ -4161,7 +4216,9 @@ fn check_stmt(t: *Typer, s: *Stmt) {
             }
         }
         if s.then_body != null {
+            t.loop_depth = t.loop_depth + 1;
             check_scoped_body(t, s.then_body);
+            t.loop_depth = t.loop_depth - 1;
         }
         return;
     }
@@ -4183,7 +4240,9 @@ fn check_stmt(t: *Typer, s: *Stmt) {
             let _u1: *Type = infer_expr(t, s.for_step);
         }
         if s.then_body != null {
+            t.loop_depth = t.loop_depth + 1;
             check_body(t, s.then_body);
+            t.loop_depth = t.loop_depth - 1;
         }
         exit_borrow_scope(t, saved);
         return;
@@ -4230,6 +4289,21 @@ fn check_stmt(t: *Typer, s: *Stmt) {
         return;
     }
     if s.kind == ST_CONTINUE {
+        return;
+    }
+    if s.kind == ST_DEFER || s.kind == ST_DEFER_ERR {
+        // Deferred stmts lower to ONE run at fn end (the __gdefer slots).
+        // Inside a loop that's a silent lie: there is no per-iteration
+        // cleanup, and a deferred expr naming the loop var is emitted past
+        // the var's C scope (invalid C, cc failure). Reject until real
+        // scope-exit lowering exists.
+        if t.loop_depth > 0 {
+            let mut _dspan: i32 = 5;
+            if s.kind == ST_DEFER_ERR {
+                _dspan = 9;
+            }
+            t.err_code_range(s.line, s.column, _dspan, "defer-in-loop", "`defer` inside a loop is not supported — it would run once at function end, not per iteration; do the cleanup at the end of the loop body instead");
+        }
         return;
     }
     // Raw C/asm payload — opaque to the typer.
@@ -5025,6 +5099,14 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         let saved_fmut: *HashMap<bool> = t.mut_locals;
         let saved_fmpos: *HashMap<i32> = t.mut_decl_pos;
         let saved_fconst: *HashMap<bool> = t.const_bindings;
+        // The closure body is its own fn: a `defer` in it is fn-scoped to the
+        // CLOSURE, so the enclosing loop context must not leak in. Same for
+        // the capture hint — remember the enclosing scope so an unknown name
+        // that exists out there gets the "closures cannot capture" wording.
+        let saved_floop: i32 = t.loop_depth;
+        let saved_fouter: *HashMap<Type> = t.fnexpr_outer_scope;
+        t.loop_depth = 0;
+        t.fnexpr_outer_scope = saved_fscope;
         let fresh_scope: *HashMap<Type> = HashMap::new();
         t.scope = fresh_scope;
         t.current_ret = e.cast_to;
@@ -5058,6 +5140,8 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         t.mut_locals = saved_fmut;
         t.mut_decl_pos = saved_fmpos;
         t.const_bindings = saved_fconst;
+        t.loop_depth = saved_floop;
+        t.fnexpr_outer_scope = saved_fouter;
         return ty_named("__unknown__");
     }
     if e.kind == EX_IDENT {
@@ -5139,10 +5223,18 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             }
             return ty_fnptr(params, sig.ret_type);
         }
+        let span: i32 = e.str_val.len();
+        // Inside a closure body, a name that DOES exist in the enclosing fn
+        // is a capture attempt. Captures aren't implemented (the body is
+        // lifted to a top-level C fn), so say that instead of the generic
+        // unknown-name — the old wording sent users hunting for typos.
+        if t.fnexpr_outer_scope != null && t.fnexpr_outer_scope.contains(e.str_val) {
+            t.err_code_range(e.line, e.column, span, "closure-capture", "closures cannot capture `".concat(e.str_val).concat("` from the enclosing function (captures are not supported yet); pass it as a parameter instead"));
+            return null;
+        }
         let nc: *Vector<string> = _name_candidates(t);
         let sug: string = _closest_name(e.str_val, nc);
         nc.free();
-        let span: i32 = e.str_val.len();
         let msg: string = "unknown name `".concat(e.str_val).concat("`");
         if sug.eq("") {
             t.err_code_range(e.line, e.column, span, "unknown-name", msg);
@@ -5670,6 +5762,20 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                             t.err_code_range(_field_pos_line(e.lhs), _field_pos_col(e.lhs), mname.len(), "assoc-fn-dot-call", "`".concat(mname).concat("` has no `self` receiver — it's an associated function; call it as `").concat(stripped.name).concat("::").concat(mname).concat("(…)` or add `&self` to its signature"));
                             return null;
                         }
+                        // A method that takes `self` BY VALUE cannot be called
+                        // through a pointer/borrow receiver: codegen inserts no
+                        // auto-deref, so the C call passes `T*` where `T` is
+                        // expected (invalid C — cc ICE). Trait methods default
+                        // to `self: Self`, so this bit doc-blessed trait code.
+                        // The inverse direction (value receiver, `*Self`
+                        // method) has the auto-`&` and stays fine; borrowed
+                        // PRIMITIVES auto-deref on read and stay fine too.
+                        if recv_ty != null && (recv_ty.kind == TY_POINTER || recv_ty.kind == TY_BORROW || recv_ty.kind == TY_BORROW_MUT) && !_is_prim_name(stripped.name) {
+                            let mp0v: Param = msig.params.get(0);
+                            if mp0v.ty != null && mp0v.ty.kind != TY_POINTER && mp0v.ty.kind != TY_BORROW && mp0v.ty.kind != TY_BORROW_MUT {
+                                t.err_code_range(_field_pos_line(e.lhs), _field_pos_col(e.lhs), mname.len(), "self-by-value-via-ptr", "`".concat(mname).concat("` takes `self` by value, but the receiver here is `").concat(type_to_string(recv_ty)).concat("` — auto-deref is not supported yet; change the method to `self: *").concat(stripped.name).concat("`, or call it on a value binding"));
+                            }
+                        }
                         let mut m_expected: i32 = 0;
                         if m_plen > 0 {
                             m_expected = m_plen - 1;
@@ -5718,6 +5824,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                                 }
                             }
                             _check_null_borrow_arg(t, want_p, &a);
+                            _check_scalar_borrow_forward(t, want_p, &a);
                             if !arg_compat(want_p, at, msig.type_params) {
                                 if !_coerce_dyn_arg(t, want_p, at, e.args, i) && !_coerce_ref_generic_arg(t, want_p, at, msig.type_params, e.args, i) {
                                     let got_name: string = if a.kind == EX_IDENT { a.str_val } else { "" };
@@ -5863,6 +5970,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                             let a: Expr = e.args.get(i);
                             let at: *Type = infer_expr(t, &a);
                             _check_null_borrow_arg(t, p.ty, &a);
+                            _check_scalar_borrow_forward(t, p.ty, &a);
                             if !arg_compat(p.ty, at, sig.type_params) {
                                 if !_coerce_dyn_arg(t, p.ty, at, e.args, i) && !_coerce_ref_generic_arg(t, p.ty, at, sig.type_params, e.args, i) {
                                     let got_name: string = if a.kind == EX_IDENT { a.str_val } else { "" };
@@ -6009,6 +6117,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                         if i < lplen {
                             let p: Param = lsig.params.get(i);
                             _check_null_borrow_arg(t, p.ty, &a);
+                            _check_scalar_borrow_forward(t, p.ty, &a);
                             if p.ty != null && !_type_references_any(p.ty, lsig.type_params) && !_type_references_any(p.ty, lsig.owner_type_params) && !arg_compat(p.ty, at, lsig.type_params) {
                                 t.err_code_range(a.line, a.column, _arg_span(&a), "", "arg ".concat(p.name).concat(" type mismatch: expected ").concat(type_to_string(p.ty)).concat(", got ").concat(type_to_string(at)));
                             }
@@ -6045,6 +6154,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                         if i < plen {
                             let p: Param = sig.params.get(i);
                             _check_null_borrow_arg(t, p.ty, &a);
+                            _check_scalar_borrow_forward(t, p.ty, &a);
                             if p.ty != null && !_type_references_any(p.ty, sig.type_params) && !_type_references_any(p.ty, sig.owner_type_params) && !arg_compat(p.ty, at, sig.type_params) {
                                 t.err_code_range(a.line, a.column, _arg_span(&a), "", "arg ".concat(p.name).concat(" type mismatch: expected ").concat(type_to_string(p.ty)).concat(", got ").concat(type_to_string(at)));
                             }
