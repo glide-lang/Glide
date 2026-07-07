@@ -395,7 +395,7 @@ pub fn parse_top_stmt(p: *Parser) -> *Stmt {
         return null;
     }
     // `naked fn ...` — function emitted with __attribute__((naked)). Body
-    // must contain only `asm { ... }` blocks; calling convention is raw.
+    // must contain only `asm! { ... }` blocks; calling convention is raw.
     let mut is_naked_fn: bool = false;
     if p.eat_kw("naked") {
         is_naked_fn = true;
@@ -1609,12 +1609,12 @@ fn parse_block(p: *Parser) -> *Vector<Stmt> {
     return stmts;
 }
 
-// `asm [volatile] { "instr" "instr" [: "=c"(out), ...] [: "c"(in), ...] [: "clob", ...] }`
+// `asm! [volatile] { "instr" "instr" [: "=c"(out), ...] [: "c"(in), ...] [: "clob", ...] }`
 //
 // Maps directly to GCC's `__asm__ [volatile] ("..." : outs : ins : clobbers)`.
 // Each section after the strings is optional but they are positional — to skip
 // outputs while providing inputs you write `: : "r"(x)`. Trailing `;` after the
-// closing `}` is required (statement terminator).
+// closing `}` is optional (eaten below when present).
 fn parse_asm_block(p: *Parser) -> *Stmt {
     let line: i32 = p.current.line;
     let col: i32 = p.current.column;

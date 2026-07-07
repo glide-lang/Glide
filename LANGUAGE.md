@@ -17,7 +17,8 @@ macro asm volatile c_raw
 
 `chan<T>` is a type constructor (parses as a generic type). `Arena`,
 `Vector`, `HashMap` are regular types from the prelude / stdlib, not
-keywords.
+keywords. `asm` only appears in the bang form `asm! [volatile] { ... }`
+(like `c_raw!`); a bare `asm { ... }` block does not parse.
 
 ### operators
 
@@ -519,19 +520,21 @@ with `{}` placeholders.
 ## inline asm and FFI escape hatches
 
 ```glide
-// GCC operand syntax with output / input / clobber lists.
+// GCC operand syntax with output / input / clobber lists. The surface
+// form is the `asm!` block (bare `asm { }` does not parse); the trailing
+// `;` is optional.
 fn read_tsc() -> u64 {
-    let lo: u32 = 0;
-    let hi: u32 = 0;
-    asm volatile { "rdtsc" : "=a"(lo), "=d"(hi) }
+    let mut lo: u32 = 0;
+    let mut hi: u32 = 0;
+    asm! volatile { "rdtsc" : "=a"(lo), "=d"(hi) }
     return ((hi as u64) << 32) | (lo as u64);
 }
 
-// Naked: no prologue / epilogue, body must be only `asm`.
+// Naked: no prologue / epilogue, body must be only `asm!` blocks.
 @cfg("posix")
 naked fn add_raw(a: i32, b: i32) -> i32 {
-    asm { "lea (%rdi,%rsi,1), %rax" : : : }
-    asm { "ret" : : : }
+    asm! { "lea (%rdi,%rsi,1), %rax" : : : }
+    asm! { "ret" : : : }
 }
 
 // Per-platform gates.
