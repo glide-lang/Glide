@@ -2032,7 +2032,7 @@ fn parse_const(p: *Parser) -> *Stmt {
     let nline: i32 = p.current.line;
     let ncol: i32 = p.current.column;
     let nlen: i32 = p.current.lexeme.len();
-    let name: string = p.expect_ident();
+    let name: string = p.expect_binder_ident();
     let mut ty: *Type = null;
     if p.eat_op(":") {
         ty = parse_type(p);

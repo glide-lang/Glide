@@ -2353,20 +2353,41 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
             if s.kind == ST_TRAIT {
                 what = "trait";
             }
+            // Stored as `origin#kind#cfg` so complementary `@cfg`-guarded
+            // functions (`@cfg("posix") fn plat` + `@cfg("windows") fn plat`
+            // in one file) are NOT flagged: only one #if arm is ever active,
+            // so there is no real collision (codegen's stub-suppression keeps
+            // the C side single-defined too). Any other same-name pair collides.
+            let mut cur_cfg: string = "";
+            if s.cfg_target != null {
+                cur_cfg = s.cfg_target;
+            }
             if dup_names.contains(s.name) {
                 let prev: string = dup_names.get(s.name);
                 if prev.starts_with(s.origin.concat("#")) {
-                    let prev_kind: string = prev.substring(s.origin.len() + 1, prev.len());
-                    let mut msg: string = "the ".concat(what).concat(" `").concat(s.name).concat("` is defined more than once in this file");
-                    if !prev_kind.eq(what) {
-                        msg = "`".concat(s.name).concat("` is already defined in this file as a ").concat(prev_kind).concat("; a ").concat(what).concat(" cannot share the name");
+                    let rest: string = prev.substring(s.origin.len() + 1, prev.len());
+                    let hpos: i32 = rest.index_of("#");
+                    let mut prev_kind: string = rest;
+                    let mut prev_cfg: string = "";
+                    if hpos >= 0 {
+                        prev_kind = rest.substring(0, hpos);
+                        prev_cfg = rest.substring(hpos + 1, rest.len());
                     }
-                    t.err_code_range(s.name_line, s.name_col, s.name.len(), "duplicate-definition", msg);
-                    // Suppress the unused-* lint for the whole conflicting set.
-                    t.dup_flagged.insert(s.name, true);
+                    // Exempt a pair of functions each carrying a distinct,
+                    // non-empty @cfg target — the platform guards are disjoint.
+                    let cfg_disjoint: bool = what.eq("function") && prev_kind.eq("function") && !cur_cfg.eq("") && !prev_cfg.eq("") && !cur_cfg.eq(prev_cfg);
+                    if !cfg_disjoint {
+                        let mut msg: string = "the ".concat(what).concat(" `").concat(s.name).concat("` is defined more than once in this file");
+                        if !prev_kind.eq(what) {
+                            msg = "`".concat(s.name).concat("` is already defined in this file as a ").concat(prev_kind).concat("; a ").concat(what).concat(" cannot share the name");
+                        }
+                        t.err_code_range(s.name_line, s.name_col, s.name.len(), "duplicate-definition", msg);
+                        // Suppress the unused-* lint for the whole conflicting set.
+                        t.dup_flagged.insert(s.name, true);
+                    }
                 }
             } else {
-                dup_names.insert(s.name, s.origin.concat("#").concat(what));
+                dup_names.insert(s.name, s.origin.concat("#").concat(what).concat("#").concat(cur_cfg));
             }
         }
         if s.kind == ST_CONST {

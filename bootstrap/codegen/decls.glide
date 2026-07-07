@@ -2331,6 +2331,24 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         g.needs_concurrency = true;
     }
     g.spawn_count = 0;
+    // Count bodied top-level fns per name. A cfg-guarded fn only gets a
+    // panicking #else stub when it is the SOLE definition of that name: the
+    // paired pattern (`@cfg(linux) fn foo` + `@cfg(windows) fn foo`) already
+    // covers every platform, and a stub there would collide with the
+    // counterpart's #if arm (both active on the same platform → duplicate
+    // definition). Lone cfg fns keep the stub so cross-platform guarded calls
+    // still link.
+    let fn_name_count: *HashMap<i32> = HashMap::new();
+    for let i: i32 = 0; i < program.len(); i++ {
+        let cs: Stmt = program.get(i);
+        if cs.kind == ST_FN && (cs.type_params == null || cs.type_params.len() == 0) && cs.fn_body != null {
+            let mut prev: i32 = 0;
+            if fn_name_count.contains(cs.name) {
+                prev = fn_name_count.get(cs.name);
+            }
+            fn_name_count.insert(cs.name, prev + 1);
+        }
+    }
     // Function + impl definitions (skip generic ones, and skip extern/bodyless).
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
@@ -2338,7 +2356,11 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
             emit_cfg_open(s.cfg_target);
             emit_fn(g, &s);
             println!("");
-            if _cfg_stubbed(g, &s) {
+            let mut lone: bool = true;
+            if fn_name_count.contains(s.name) && fn_name_count.get(s.name) > 1 {
+                lone = false;
+            }
+            if lone && _cfg_stubbed(g, &s) {
                 println!("#else");
                 emit_cfg_stub(&s);
             }

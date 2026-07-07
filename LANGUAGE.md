@@ -182,10 +182,13 @@ use-after-move and double-free at compile time.
 
 > **Known gaps (in progress).** The ownership *checks* above are enforced, but
 > the reclamation side is not complete yet. Today: `string` values are never
-> freed; a value whose ownership moved into a callee is not auto-freed there;
-> reassigning an owned binding does not free the old value; values moved into
-> the builtin containers (`Vector`, `HashMap`) leave move tracking; and a
-> borrow coerced to `*T` at a call site can escape the borrow checker.
+> freed; a value whose ownership moved into a callee is not auto-freed there,
+> and a value returned by a callee is not auto-freed by the caller (a bare
+> `let v = make();` leaks); reassigning an owned binding does not free the old
+> value; a binding OF builtin-container type (`let b = a;` where `a` is a
+> `Vector`/`HashMap`) escapes move tracking, so alias-after-move and
+> reassignment leaks are not caught; and a borrow coerced to `*T` at a call
+> site can escape the borrow checker.
 > Separately, `glide check` / `glide build` report diagnostics for the entry
 > file — latent errors inside imported files may not all surface yet. For
 > long-lived processes, prefer arenas or explicit `free()` on hot paths until
