@@ -1409,6 +1409,21 @@ fn _check_type_known(t: *Typer, ty: *Type, line: i32, col: i32) {
     }
 }
 
+// A literal `null` argument where the parameter is a borrow: `&T` promises
+// non-null (the let-binding form is already rejected), so the call-arg hole
+// let accepted programs segfault. NOTE: only the LITERAL is caught here — a
+// `*T` value flowing into `&T` can't be proven non-null statically; the
+// runtime assert on that coercion is deferred (wave 2).
+fn _check_null_borrow_arg(t: *Typer, want: *Type, a: *Expr) {
+    if want == null || a == null || a.kind != EX_NULL {
+        return;
+    }
+    if want.kind != TY_BORROW && want.kind != TY_BORROW_MUT {
+        return;
+    }
+    t.err_code_range(a.line, a.column, 4, "null-borrow", "borrow `".concat(type_to_string(want)).concat("` cannot be null; pass a reference to a live value"));
+}
+
 // `extern type Foo;` is opaque — Glide never knows its size — so it can only
 // live behind a pointer. Flags a bare `Foo` at the TOP level of a declared
 // type (`let x: Foo`, `fn f(h: Foo) -> Foo`, a `Foo` field); `*Foo` is fine.
@@ -5400,6 +5415,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                                     continue; // can't resolve, skip check
                                 }
                             }
+                            _check_null_borrow_arg(t, want_p, &a);
                             if !arg_compat(want_p, at, msig.type_params) {
                                 if !_coerce_dyn_arg(t, want_p, at, e.args, i) && !_coerce_ref_generic_arg(t, want_p, at, msig.type_params, e.args, i) {
                                     let got_name: string = if a.kind == EX_IDENT { a.str_val } else { "" };
@@ -5544,6 +5560,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                             let p: Param = sig.params.get(i);
                             let a: Expr = e.args.get(i);
                             let at: *Type = infer_expr(t, &a);
+                            _check_null_borrow_arg(t, p.ty, &a);
                             if !arg_compat(p.ty, at, sig.type_params) {
                                 if !_coerce_dyn_arg(t, p.ty, at, e.args, i) && !_coerce_ref_generic_arg(t, p.ty, at, sig.type_params, e.args, i) {
                                     let got_name: string = if a.kind == EX_IDENT { a.str_val } else { "" };
@@ -5680,6 +5697,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                         let at: *Type = infer_expr(t, &a);
                         if i < lplen {
                             let p: Param = lsig.params.get(i);
+                            _check_null_borrow_arg(t, p.ty, &a);
                             if p.ty != null && !_type_references_any(p.ty, lsig.type_params) && !_type_references_any(p.ty, lsig.owner_type_params) && !arg_compat(p.ty, at, lsig.type_params) {
                                 t.err_code_range(a.line, a.column, _arg_span(&a), "", "arg ".concat(p.name).concat(" type mismatch: expected ").concat(type_to_string(p.ty)).concat(", got ").concat(type_to_string(at)));
                             }
@@ -5715,6 +5733,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                         // bound here without monomorphization).
                         if i < plen {
                             let p: Param = sig.params.get(i);
+                            _check_null_borrow_arg(t, p.ty, &a);
                             if p.ty != null && !_type_references_any(p.ty, sig.type_params) && !_type_references_any(p.ty, sig.owner_type_params) && !arg_compat(p.ty, at, sig.type_params) {
                                 t.err_code_range(a.line, a.column, _arg_span(&a), "", "arg ".concat(p.name).concat(" type mismatch: expected ").concat(type_to_string(p.ty)).concat(", got ").concat(type_to_string(at)));
                             }
