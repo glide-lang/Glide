@@ -251,6 +251,7 @@ pub struct EnumVariant {
 
 pub struct MatchArm {
     pub variant: string, // variant name; "_" = wildcard; literal source text when `lit` is set
+    pub qualifier: string, // `::`-joined qualifier segments before the variant (`Fruit::red` -> "Fruit", `m::Fruit::red` -> "m::Fruit"); "" for bare patterns. Checked against the scrutinee's enum by the typer.
     pub bindings: *Vector<string>, // names to bind for payload
     pub body: *Vector<Stmt>,
     pub line: i32, // position of the arm's pattern token (diagnostics anchor here)

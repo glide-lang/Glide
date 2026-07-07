@@ -3566,6 +3566,19 @@ fn _check_match_coverage(t: *Typer, scrut_ty: *Type, arms: *Vector<MatchArm>, li
             continue;
         }
         covered.insert(a.variant, true);
+        // A qualified pattern (`Enum::variant`) must name the scrutinee's
+        // enum. The parser used to drop the qualifier entirely, so
+        // `WrongEnum::red` — or `garbage::red` — silently matched any
+        // scrutinee with a `red` variant. A module qualifier (`m::red`,
+        // `m::Enum::red`) stays legal: the leaf segment is the enum (or the
+        // whole qualifier is an imported module path).
+        if is_enum && a.qualifier != null && !a.qualifier.eq("") {
+            let qsegs: *Vector<string> = a.qualifier.split("::");
+            let qleaf: string = qsegs.get(qsegs.len() - 1);
+            if !qleaf.eq(scrut_ty.name) && !t._is_imported_module(a.qualifier) {
+                t.err_code_range(a_line, a_col, a.qualifier.len(), "pattern-enum-mismatch", "pattern names `".concat(a.qualifier).concat("::").concat(a.variant).concat("`, but the scrutinee is `").concat(scrut_ty.name).concat("`"));
+            }
+        }
         // Binding arity: more names than the payload has fields miscompiled
         // (undeclared C locals). Fewer is fine — the payload is just ignored.
         let mut bind_n: i32 = 0;

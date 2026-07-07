@@ -1221,6 +1221,10 @@ fn _subst_self_clone_expr(e: *Expr, target: *Type, name: string) -> *Expr {
             if arm.body != null {
                 arm.body = _subst_self_clone_stmts(arm.body, target, name);
             }
+            // `Self::variant` patterns: the qualifier refers to the implementor.
+            if arm.qualifier != null && arm.qualifier.eq("Self") {
+                arm.qualifier = name;
+            }
             nm.push(arm);
         }
         c.match_arms = nm;
@@ -1270,6 +1274,10 @@ fn _subst_self_clone_stmt(s: *Stmt, target: *Type, name: string) -> *Stmt {
             let arm: MatchArm = s.arms.get(i);
             if arm.body != null {
                 arm.body = _subst_self_clone_stmts(arm.body, target, name);
+            }
+            // `Self::variant` patterns: the qualifier refers to the implementor.
+            if arm.qualifier != null && arm.qualifier.eq("Self") {
+                arm.qualifier = name;
             }
             na.push(arm);
         }
@@ -1968,6 +1976,7 @@ fn parse_match(p: *Parser) -> *Stmt {
     while !p.at_op("}") && !p.at_eof() {
         let arm_lead: string = p.current.lead;
         let mut variant: string = "_";
+        let mut qual: string = "";
         let bindings: *Vector<string> = Vector::new();
         // Literal pattern: `0 =>`, `-3 =>`, `"s" =>`, `'c' =>`. The arm
         // dispatches on value equality (codegen lowers to an if/else chain),
@@ -2011,10 +2020,16 @@ fn parse_match(p: *Parser) -> *Stmt {
             let first: string = p.current.lexeme;
             p.advance();
             variant = first;
-            // Consume module / type qualifier segments; the LAST `::` segment
-            // is the variant. So `foo::Color::Red` and `Color::Red` and bare
-            // `Red` all dispatch on `Red` (match keys on the variant name).
+            // The LAST `::` segment is the variant; the segments before it
+            // (`foo::Color` in `foo::Color::Red`) ride along as `qual` so the
+            // typer can require them to name the scrutinee's enum — a dropped
+            // qualifier let `WrongEnum::Red` match any enum with a `Red`.
             while p.eat_op("::") {
+                if qual.eq("") {
+                    qual = variant;
+                } else {
+                    qual = qual.concat("::").concat(variant);
+                }
                 variant = p.expect_ident();
             }
             if p.eat_op("(") {
@@ -2039,7 +2054,7 @@ fn parse_match(p: *Parser) -> *Stmt {
             let ass: *Expr = parse_maybe_assign(p, e);
             body.push(*stmt_expr(ass));
         }
-        let arm: MatchArm = MatchArm { variant: variant, bindings: bindings, body: body, line: lit_line, col: lit_col, lead: arm_lead, trail: "", lit: lit };
+        let arm: MatchArm = MatchArm { variant: variant, qualifier: qual, bindings: bindings, body: body, line: lit_line, col: lit_col, lead: arm_lead, trail: "", lit: lit };
         p.eat_op(",");
         if p.current.trail != null && !p.current.trail.eq("") {
             arm.trail = p.current.trail;
@@ -2069,6 +2084,7 @@ fn parse_match_expr(p: *Parser) -> *Expr {
     while !p.at_op("}") && !p.at_eof() {
         let arm_lead: string = p.current.lead;
         let mut variant: string = "_";
+        let mut qual: string = "";
         let bindings: *Vector<string> = Vector::new();
         // Literal pattern: `0 =>`, `-3 =>`, `"s" =>`, `'c' =>`. The arm
         // dispatches on value equality (codegen lowers to an if/else chain),
@@ -2112,10 +2128,16 @@ fn parse_match_expr(p: *Parser) -> *Expr {
             let first: string = p.current.lexeme;
             p.advance();
             variant = first;
-            // Consume module / type qualifier segments; the LAST `::` segment
-            // is the variant. So `foo::Color::Red` and `Color::Red` and bare
-            // `Red` all dispatch on `Red` (match keys on the variant name).
+            // The LAST `::` segment is the variant; the segments before it
+            // (`foo::Color` in `foo::Color::Red`) ride along as `qual` so the
+            // typer can require them to name the scrutinee's enum — a dropped
+            // qualifier let `WrongEnum::Red` match any enum with a `Red`.
             while p.eat_op("::") {
+                if qual.eq("") {
+                    qual = variant;
+                } else {
+                    qual = qual.concat("::").concat(variant);
+                }
                 variant = p.expect_ident();
             }
             if p.eat_op("(") {
@@ -2144,7 +2166,7 @@ fn parse_match_expr(p: *Parser) -> *Expr {
             yr.is_arm_yield = true;
             body.push(*yr);
         }
-        let arm: MatchArm = MatchArm { variant: variant, bindings: bindings, body: body, line: lit_line, col: lit_col, lead: arm_lead, trail: "", lit: lit };
+        let arm: MatchArm = MatchArm { variant: variant, qualifier: qual, bindings: bindings, body: body, line: lit_line, col: lit_col, lead: arm_lead, trail: "", lit: lit };
         p.eat_op(",");
         if p.current.trail != null && !p.current.trail.eq("") {
             arm.trail = p.current.trail;
