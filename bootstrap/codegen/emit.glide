@@ -2245,6 +2245,11 @@ fn fnptr_cast_str(t: *Type) -> string {
             let p: Type = t.args.get(i);
             s = s.concat(type_to_c(&p));
         }
+        // Variadic extern (`printf`): dropping the `...` from the cast made
+        // cc reject the call ("expected 1 argument, have 3") — keep it.
+        if t.fnptr_variadic {
+            s = s.concat(", ...");
+        }
     }
     s = s.concat(")");
     return s;

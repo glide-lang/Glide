@@ -2574,6 +2574,9 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
             fp.kind = TY_FNPTR;
             fp.args = args;
             fp.fnptr_ret = s.fn_ret_ty;
+            // Keep the C-variadic flag (`extern fn printf(fmt: string, ...)`)
+            // so the call-site cast doesn't truncate the signature.
+            fp.fnptr_variadic = s.is_variadic;
             return fp;
         }
         // A lifted closure (`__glide_anon_N`) used as a value — build its

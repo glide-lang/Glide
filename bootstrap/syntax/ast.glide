@@ -32,6 +32,7 @@ pub struct Type {
     pub inner: *Type,
     pub args: *Vector<Type>, // TY_GENERIC or TY_FNPTR (params)
     pub fnptr_ret: *Type, // TY_FNPTR ret
+    pub fnptr_variadic: bool, // TY_FNPTR built from a C-variadic extern fn (`printf`): call casts must keep the trailing `, ...`
     pub line: i32, // source position of the type name (0 = synthesized)
     pub col: i32,
 }

@@ -593,10 +593,15 @@ fn parse_fn(p: *Parser) -> *Stmt {
     p.expect_op("(");
     let params: *Vector<Param> = Vector::new();
     let mut variadic: bool = false;
+    let mut dots_line: i32 = 0;
+    let mut dots_col: i32 = 0;
     while !p.at_op(")") && !p.at_eof() {
         if p.at_op("...") {
             // C-style variadic — must be the last position. Consumed without
-            // adding a regular param.
+            // adding a regular param. Only meaningful on `extern fn` decls;
+            // a bodied fn is rejected below (once we know a body follows).
+            dots_line = p.current.line;
+            dots_col = p.current.column;
             p.advance();
             variadic = true;
             break;
@@ -702,6 +707,12 @@ fn parse_fn(p: *Parser) -> *Stmt {
             s.is_variadic = variadic;
         }
         return s;
+    }
+    // A body follows, so this is NOT an extern decl: `...` is a lie here —
+    // the body has no way to access the extra arguments (no va_list surface),
+    // and codegen silently dropped the flag.
+    if variadic {
+        p.push_pdiag(dots_line, dots_col, 3, "variadic-non-extern", "`...` is only supported on `extern fn` declarations — a Glide fn body cannot access variadic arguments", 0, 0, 0, 0, "");
     }
     let mut body: *Vector<Stmt> = null;
     if skip_body {
