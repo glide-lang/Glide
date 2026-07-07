@@ -287,6 +287,8 @@ pub fn parse_top_stmt(p: *Parser) -> *Stmt {
     // unchanged); every other attribute lands in `attrs` for the
     // expander to interpret.
     let mut cfg: string = "";
+    let mut cfg_line: i32 = 0;
+    let mut cfg_col: i32 = 0;
     let attrs_collected: *Vector<Attr> = Vector::new();
     while p.at_op("@") {
         let at_line: i32 = p.current.line;
@@ -309,6 +311,8 @@ pub fn parse_top_stmt(p: *Parser) -> *Stmt {
         if attr_name.eq("cfg") {
             // Special-case: keep cfg as a string field for codegen's #ifdef
             // emission. Expects exactly one string-literal arg.
+            cfg_line = at_line;
+            cfg_col = at_col;
             if arg_exprs.len() == 1 {
                 let a0: Expr = arg_exprs.get(0);
                 if a0.kind == EX_STRING {
@@ -329,6 +333,16 @@ pub fn parse_top_stmt(p: *Parser) -> *Stmt {
     let mut is_pub: bool = false;
     if p.eat_kw("pub") {
         is_pub = true;
+    }
+    // @cfg is only ENFORCED (#ifdef-wrapped) on `fn` / `impl` / `c_raw!`
+    // declarations. On every other kind codegen ignores it — a
+    // `@cfg("windows") enum` existed (and ran) on linux. Reject the inert
+    // spellings instead of silently compiling the decl on every platform.
+    if !cfg.eq("") {
+        let cfg_ok: bool = p.at_kw("fn") || p.at_kw("naked") || p.at_kw("impl") || p.at_kw("extern") || p.current.kind == TOK_RAW_BLOCK;
+        if !cfg_ok {
+            p.push_pdiag(cfg_line, cfg_col, 4, "cfg-unsupported-decl", "@cfg only gates `fn`, `impl`, and `c_raw!` declarations — on `".concat(p.current.lexeme).concat("` it is ignored (not supported yet); gate the uses with `if cfg!(\"").concat(cfg).concat("\")` instead"), 0, 0, 0, 0, "");
+        }
     }
     // `extern fn name(args) -> ret;` — declares a foreign C function. We
     // parse the signature like a regular fn but expect `;` instead of a body
@@ -954,6 +968,11 @@ fn parse_enum(p: *Parser) -> *Stmt {
     let nlen: i32 = p.current.lexeme.len();
     let name: string = p.expect_ident();
     if p.at_op("<") {
+        // `enum E<T>` used to be silently brace-skipped: the decl passed
+        // check and codegen emitted a literal `T` field into the C (cc ICE).
+        // Generic enums are unimplemented — say so, then skip the param list
+        // so the variant block still parses (recovery, no cascade).
+        p.push_pdiag(p.current.line, p.current.column, 1, "generic-enum-unsupported", "generic enums are not supported yet — `enum ".concat(name).concat("<T>` cannot be monomorphized; use a concrete payload type"), 0, 0, 0, 0, "");
         skip_type_params(p);
     }
     p.expect_op("{");
@@ -3373,19 +3392,28 @@ fn parse_prefix(p: *Parser) -> *Expr {
             return e;
         }
         if tok.lexeme.eq("new") {
+            // `new T { ... }` (the raw-heap literal) was never implemented: it
+            // desugared to an unknown `T__new!` macro with the field NAMES
+            // silently discarded (unknown-macro at check; a null-pointer init
+            // under unchecked emit). Until it exists, reject it up front and
+            // point at the form that works. The literal is still parsed and
+            // returned as a plain struct literal so downstream checks see the
+            // fields instead of cascading.
             p.advance();
-            // new TypeName { ... }  — we encode as a Macro-like for now
             let tn: string = p.expect_ident();
+            p.push_pdiag(line, col, 3, "new-unsupported", "`new ".concat(tn).concat(" { ... }` heap literals are not supported yet; write `let p: *").concat(tn).concat(" = ").concat(tn).concat(" { ... };` instead — a struct literal bound to a `*T` heap-allocates (and is auto-dropped)"), 0, 0, 0, 0, "");
             if p.at_op("<") {
                 skip_type_params(p);
             }
             p.expect_op("{");
+            let names: *Vector<string> = Vector::new();
             let args: *Vector<Expr> = Vector::new();
             while !p.at_op("}") && !p.at_eof() {
-                let _name: string = p.expect_ident();
+                let fname: string = p.expect_ident();
                 p.expect_op(":");
                 let v: *Expr = parse_expr(p, 0);
                 if v != null {
+                    names.push(fname);
                     args.push(*v);
                 }
                 if !p.eat_op(",") {
@@ -3393,7 +3421,7 @@ fn parse_prefix(p: *Parser) -> *Expr {
                 }
             }
             p.expect_op("}");
-            return expr_macro(tn.concat("__new"), args, line, col);
+            return expr_struct_lit(tn, names, args, line, col);
         }
     }
     // Keywords that are also valid identifier-position references fall here.
