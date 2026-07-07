@@ -4002,6 +4002,37 @@ fn _check_immutable_write(t: *Typer, lhs: *Expr, verb: string) {
     if root.eq("") {
         return;
     }
+    // Writing INTO a place reached through a SHARED borrow (`p.x = …`,
+    // `p.inner.x = …`, `*p = …`, `view[i] = …` where the root is a `&T`
+    // binding or the binder of a live `&`-borrow) mutates the borrowed
+    // object through a read view. C's const is shallow — cc accepts the
+    // nested-pointer forms — so the typer owns this rule, not cc. Applies
+    // regardless of the binding's own `mut` (rebinding is a different write).
+    if lhs.kind != EX_IDENT {
+        if t.scope.contains(root) {
+            let brt: Type = t.scope.get(root);
+            if brt.kind == TY_BORROW {
+                let mut _wt: string = "T";
+                if brt.inner != null {
+                    _wt = type_to_string(brt.inner);
+                }
+                t.err_code_range(lhs.line, lhs.column, root.len(), "write-through-shared-borrow", "cannot write through `".concat(root).concat("` — `&").concat(_wt).concat("` is a shared borrow (a read view); take `&mut ").concat(_wt).concat("` to write"));
+                return;
+            }
+        }
+        // Binder of a live shared borrow: `let r = &x` infers as a raw
+        // pointer, so the scope type can't tell — but the borrow event can.
+        // Also covers string-derived slices (`s[lo..hi]` / `s.as_bytes()`),
+        // whose views alias read-only string storage: writes through them
+        // scribbled on literal memory (segfault) before this check.
+        for let _wbi: i32 = 0; _wbi < t.borrows.len(); _wbi++ {
+            let _wbe: BorrowEvent = t.borrows.get(_wbi);
+            if _wbe.binder.eq(root) && !_wbe.is_mut {
+                t.err_code_range(lhs.line, lhs.column, root.len(), "write-through-shared-borrow", "cannot write through `".concat(root).concat("` — it is a shared (read-only) view of `").concat(_wbe.source).concat("`"));
+                return;
+            }
+        }
+    }
     // Bindings this fn declared are judged below; a root that resolves to a
     // file-scope `const` instead (and is not shadowed by any local) is a
     // write to a constant. Freestanding kernel globals (top-level `let`)

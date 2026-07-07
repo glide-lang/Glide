@@ -128,6 +128,9 @@ fn help_for_code(code: string) -> string {
     if code.eq("overlap-borrow") {
         return "use distinct sources or split into separate statements";
     }
+    if code.eq("write-through-shared-borrow") {
+        return "`&T` is a read-only view; take `&mut T` (or go through the owner) to write";
+    }
     if code.eq("unused-fn") {
         return "prefix with `_` if intentional, or remove the function";
     }
