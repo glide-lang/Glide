@@ -602,17 +602,16 @@ fn parse_fn(p: *Parser) -> *Stmt {
                 bty.kind = TY_BORROW;
             }
             bty.inner = ty_named("Self");
-            let bprm: Param = Param { name: br_name, ty: bty, name_line: br_line, name_col: br_col };
+            let bprm: Param = Param { name: br_name, ty: bty, name_line: br_line, name_col: br_col, is_mut: false };
             params.push(bprm);
             if !p.eat_op(",") {
                 break;
             }
             continue;
         }
-        // `mut` before the name binds the param as reassignable in the body.
-        // Glide already treats fn-locals as mutable storage, so we accept
-        // the keyword for ergonomics and discard it.
-        p.eat_kw("mut");
+        // `mut` before the name binds the param as reassignable in the body;
+        // without it the param is immutable (`assign-immutable` on writes).
+        let pn_mut: bool = p.eat_kw("mut");
         let pn_line: i32 = p.current.line;
         let pn_col: i32 = p.current.column;
         let pname: string = p.expect_ident();
@@ -620,7 +619,7 @@ fn parse_fn(p: *Parser) -> *Stmt {
         // `self: *Self`; the impl post-pass substitutes the target type.
         // An annotated `self: *T` keeps working unchanged.
         if pname.eq("self") && !p.at_op(":") {
-            let sprm: Param = Param { name: pname, ty: ty_pointer(ty_named("Self")), name_line: pn_line, name_col: pn_col };
+            let sprm: Param = Param { name: pname, ty: ty_pointer(ty_named("Self")), name_line: pn_line, name_col: pn_col, is_mut: false };
             params.push(sprm);
             if !p.eat_op(",") {
                 break;
@@ -641,7 +640,7 @@ fn parse_fn(p: *Parser) -> *Stmt {
             let gname: string = "__impl_".concat(pname);
             tps.push(gname);
             tps_bounds.push(bound);
-            let iprm: Param = Param { name: pname, ty: ty_pointer(ty_named(gname)), name_line: pn_line, name_col: pn_col };
+            let iprm: Param = Param { name: pname, ty: ty_pointer(ty_named(gname)), name_line: pn_line, name_col: pn_col, is_mut: pn_mut };
             params.push(iprm);
             if !p.eat_op(",") {
                 break;
@@ -649,7 +648,7 @@ fn parse_fn(p: *Parser) -> *Stmt {
             continue;
         }
         let pty: *Type = parse_type(p);
-        let prm: Param = Param { name: pname, ty: pty, name_line: pn_line, name_col: pn_col };
+        let prm: Param = Param { name: pname, ty: pty, name_line: pn_line, name_col: pn_col, is_mut: pn_mut };
         params.push(prm);
         if !p.eat_op(",") {
             break;
@@ -931,7 +930,7 @@ fn parse_trait(p: *Parser) -> *Stmt {
             let aname: string = p.expect_ident();
             p.expect_op(";");
             let no_ty: *Type = null;
-            assocs.push(Param { name: aname, ty: no_ty, name_line: 0, name_col: 0 });
+            assocs.push(Param { name: aname, ty: no_ty, name_line: 0, name_col: 0, is_mut: false });
             continue;
         }
         if p.at_kw("fn") {
@@ -1040,7 +1039,7 @@ fn parse_impl(p: *Parser) -> *Stmt {
             p.expect_op("=");
             let aty: *Type = parse_type(p);
             p.expect_op(";");
-            assocs.push(Param { name: aname, ty: aty, name_line: 0, name_col: 0 });
+            assocs.push(Param { name: aname, ty: aty, name_line: 0, name_col: 0, is_mut: false });
             continue;
         }
         if p.at_kw("fn") {
@@ -1848,11 +1847,12 @@ fn parse_let(p: *Parser) -> *Stmt {
         let names: *Vector<string> = Vector::new();
         let nlines: *Vector<i32> = Vector::new();
         let ncols: *Vector<i32> = Vector::new();
+        let nmuts: *Vector<bool> = Vector::new();
         while !p.at_op(")") && !p.at_eof() {
-            // Optional per-binding `mut` (`let (mut x, mut y) = …`). Glide
-            // treats every local as mutable storage, so it's accepted and
-            // discarded — same as `mut` on a fn parameter.
-            p.eat_kw("mut");
+            // Per-binding `mut` (`let (mut x, y) = …`); a statement-level
+            // `let mut (…)` marks every binding.
+            let bind_mut: bool = p.eat_kw("mut");
+            nmuts.push(bind_mut || is_mut);
             nlines.push(p.current.line);
             ncols.push(p.current.column);
             names.push(p.expect_ident());
@@ -1870,6 +1870,7 @@ fn parse_let(p: *Parser) -> *Stmt {
         ds.let_names = names;
         ds.let_name_lines = nlines;
         ds.let_name_cols = ncols;
+        ds.let_muts = nmuts;
         return ds;
     }
     let nline: i32 = p.current.line;
@@ -3192,7 +3193,7 @@ fn parse_prefix(p: *Parser) -> *Expr {
                 let pname: string = p.expect_ident();
                 p.expect_op(":");
                 let pty: *Type = parse_type(p);
-                params.push(Param { name: pname, ty: pty, name_line: pn_line, name_col: pn_col });
+                params.push(Param { name: pname, ty: pty, name_line: pn_line, name_col: pn_col, is_mut: false });
                 if !p.eat_op(",") {
                     break;
                 }
@@ -3219,7 +3220,7 @@ fn parse_prefix(p: *Parser) -> *Expr {
                     let pname: string = p.expect_ident();
                     p.expect_op(":");
                     let pty: *Type = parse_type(p);
-                    params.push(Param { name: pname, ty: pty, name_line: pn_line, name_col: pn_col });
+                    params.push(Param { name: pname, ty: pty, name_line: pn_line, name_col: pn_col, is_mut: false });
                     if !p.eat_op(",") {
                         break;
                     }

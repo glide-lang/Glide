@@ -858,6 +858,16 @@ pub struct Typer {
     // from owned_locals so the `owned-move` lint is unaffected; used to flag
     // use-after-move when such a local is later assigned away.
     pub call_owned: *HashMap<bool>,
+    // `let` mutability: name -> declared with `mut`? A write (`x = …`, `x += …`,
+    // `x++`, `&mut x`) against a `false` entry is an `assign-immutable` error.
+    // Params register as `false`; a `for`-init `let` registers `true` (its
+    // step clause mutates it by design, so the idiomatic loop needs no `mut`).
+    pub mut_locals: *HashMap<bool>,
+    // name -> declaration name-token position packed as line*4096+col. The
+    // `assign-immutable` fix splices `mut ` in right there; 0 marks a param
+    // (no splice point — `mut` is not param syntax), which switches the
+    // message to the copy-into-a-local suggestion.
+    pub mut_decl_pos: *HashMap<i32>,
     pub borrows: *Vector<BorrowEvent>, // active let-bound borrows; save/restore per block
     pub current_ret: *Type,
     // Type parameters of the enclosing fn (e.g. `["T", "U"]`). Used by
@@ -1413,6 +1423,8 @@ impl Typer {
         t.arena_locals = ar_locals;
         t.arena_origin = ar_origin;
         t.consumed_locals = consumed;
+        t.mut_locals = HashMap::new();
+        t.mut_decl_pos = HashMap::new();
         t.moved_out = HashMap::new();
         t.call_owned = HashMap::new();
         t.borrows = bw;
@@ -1718,6 +1730,8 @@ impl Typer {
         self.scope.free();
         self.module_scope.free();
         self.owned_locals.free();
+        self.mut_locals.free();
+        self.mut_decl_pos.free();
         self.borrows.free();
         self.diagnostics.free();
         self.visibility.free();
@@ -3280,6 +3294,8 @@ fn check_fn(t: *Typer, s: *Stmt) {
     let saved_arena_origin: *HashMap<string> = t.arena_origin;
     let saved_consumed: *HashMap<bool> = t.consumed_locals;
     let saved_moved_out: *HashMap<bool> = t.moved_out;
+    let saved_mut_locals: *HashMap<bool> = t.mut_locals;
+    let saved_mut_decl_pos: *HashMap<i32> = t.mut_decl_pos;
     let saved_borrows: *Vector<BorrowEvent> = t.borrows;
     let saved_ret: *Type = t.current_ret;
     let saved_tps: *Vector<string> = t.current_type_params;
@@ -3296,6 +3312,8 @@ fn check_fn(t: *Typer, s: *Stmt) {
     t.arena_origin = new_arena_origin;
     t.consumed_locals = new_consumed;
     t.moved_out = new_moved_out;
+    t.mut_locals = HashMap::new();
+    t.mut_decl_pos = HashMap::new();
     t.call_owned = HashMap::new();
     t.borrows = new_borrows;
     t.current_ret = s.fn_ret_ty;
@@ -3310,6 +3328,11 @@ fn check_fn(t: *Typer, s: *Stmt) {
             if p.ty != null {
                 _check_type_known(t, p.ty, s.line, s.column);
                 t.scope.insert(p.name, *p.ty);
+                // Params honor their own `mut` (`fn f(mut n: i32)`). The
+                // NEGATIVE packed pos marks "param" so the diagnostic offers
+                // the `mut n: T` wording; the splice point is the same.
+                t.mut_locals.insert(p.name, p.is_mut);
+                t.mut_decl_pos.insert(p.name, 0 - (p.name_line * 4096 + p.name_col));
             }
         }
     }
@@ -3330,6 +3353,8 @@ fn check_fn(t: *Typer, s: *Stmt) {
     t.arena_origin.free();
     t.consumed_locals.free();
     t.moved_out.free();
+    t.mut_locals.free();
+    t.mut_decl_pos.free();
     t.borrows.free();
     t.scope = saved_scope;
     t.owned_locals = saved_owned;
@@ -3337,6 +3362,8 @@ fn check_fn(t: *Typer, s: *Stmt) {
     t.arena_origin = saved_arena_origin;
     t.consumed_locals = saved_consumed;
     t.moved_out = saved_moved_out;
+    t.mut_locals = saved_mut_locals;
+    t.mut_decl_pos = saved_mut_decl_pos;
     t.borrows = saved_borrows;
     t.current_ret = saved_ret;
     t.current_type_params = saved_tps;
@@ -3770,6 +3797,9 @@ fn check_stmt(t: *Typer, s: *Stmt) {
         }
         if binder_ty != null {
             t.scope.insert(s.name, *binder_ty);
+            // The while-let binder is rebound by the loop itself, never by
+            // user code — register it immutable.
+            _reg_mut(t, s.name, false, s.name_line, s.name_col);
         }
         if s.then_body != null {
             check_scoped_body(t, s.then_body);
@@ -3792,6 +3822,12 @@ fn check_stmt(t: *Typer, s: *Stmt) {
         let saved: i32 = enter_borrow_scope(t);
         if s.for_init != null {
             check_stmt(t, s.for_init);
+            // The step clause (`i++`) mutates the init binding by design —
+            // a `for let i` is implicitly mutable, so the idiomatic loop
+            // needs no `mut`.
+            if s.for_init.kind == ST_LET && s.for_init.name != null {
+                t.mut_locals.insert(s.for_init.name, true);
+            }
         }
         if s.cond != null {
             let _u0: *Type = infer_expr(t, s.cond);
@@ -3873,6 +3909,73 @@ fn check_stmt(t: *Typer, s: *Stmt) {
     }
 }
 
+// Record a binding's declared mutability + the splice point for the
+// `mut ` fix (see the field docs on Typer).
+fn _reg_mut(t: *Typer, name: string, is_mut: bool, line: i32, col: i32) {
+    if name == null || name.eq("") {
+        return;
+    }
+    t.mut_locals.insert(name, is_mut);
+    t.mut_decl_pos.insert(name, line * 4096 + col);
+}
+
+// `let` without `mut` is frozen: a direct write to the binding — and a write
+// into the fields/elements of a VALUE binding — is an `assign-immutable`
+// error. Writes through a pointer/borrow/slice binding (`p.x = …` where
+// p: *T) mutate the pointee, not the binding, and stay legal: that's how
+// `Vector::push` works on a plain `let v`. `verb` slots into the message
+// ("assign to" / "modify").
+fn _check_immutable_write(t: *Typer, lhs: *Expr, verb: string) {
+    if lhs == null {
+        return;
+    }
+    let root: string = _borrow_root_ident(lhs);
+    if root.eq("") {
+        return;
+    }
+    // Only bindings this fn declared are judged — module consts / kernel
+    // globals / struct fields resolve elsewhere and keep their behavior.
+    if !t.mut_locals.contains(root) {
+        return;
+    }
+    if t.mut_locals.get(root) {
+        return;
+    }
+    if lhs.kind != EX_IDENT {
+        // Path write: frozen only when the root is a value. An unknown root
+        // type (inference gap) gets the benefit of the doubt.
+        if !t.scope.contains(root) {
+            return;
+        }
+        let rt: Type = t.scope.get(root);
+        if rt.kind == TY_POINTER || rt.kind == TY_BORROW || rt.kind == TY_BORROW_MUT || rt.kind == TY_SLICE {
+            return;
+        }
+        if rt.kind == TY_NAMED && rt.name != null && rt.name.eq("__unknown__") {
+            return;
+        }
+    }
+    let mut pos: i32 = 0;
+    if t.mut_decl_pos.contains(root) {
+        pos = t.mut_decl_pos.get(root);
+    }
+    if pos < 0 {
+        // Param (negative marker): the fix is `mut name: T` at the decl.
+        let pdl: i32 = (0 - pos) / 4096;
+        let pdc: i32 = (0 - pos) % 4096;
+        t.err_code_range_fix(lhs.line, lhs.column, root.len(), "assign-immutable", "cannot ".concat(verb).concat(" parameter `").concat(root).concat("` — parameters are immutable; declare it `mut ").concat(root).concat(": T`"), pdl, pdc, pdl, pdc, "mut ");
+        return;
+    }
+    if pos == 0 {
+        // Synthesized binding with no source decl — no splice point.
+        t.err_code_range(lhs.line, lhs.column, root.len(), "assign-immutable", "cannot ".concat(verb).concat(" immutable binding `").concat(root).concat("`"));
+        return;
+    }
+    let dl: i32 = pos / 4096;
+    let dc: i32 = pos % 4096;
+    t.err_code_range_fix(lhs.line, lhs.column, root.len(), "assign-immutable", "cannot ".concat(verb).concat(" `").concat(root).concat("` — it was declared immutable on line ").concat(int_to_str(dl)).concat("; declare it `let mut ").concat(root).concat("`"), dl, dc, dl, dc, "mut ");
+}
+
 fn check_let_or_const(t: *Typer, s: *Stmt) {
     // Canonicalize a qualified declared type (`let b: foo::Bar = ...`) before
     // it is compared against the initializer or recorded in scope.
@@ -3901,6 +4004,19 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
                 bind = pp;
             }
             t.scope.insert(nm, *bind);
+            // Per-binding `mut` (`let (mut a, b) = …`), anchored at each
+            // binder's own name token for the `mut ` splice.
+            let mut bm: bool = s.is_mut;
+            if s.let_muts != null && i < s.let_muts.len() {
+                bm = s.let_muts.get(i);
+            }
+            let mut bl: i32 = s.name_line;
+            let mut bc: i32 = s.name_col;
+            if s.let_name_lines != null && i < s.let_name_lines.len() {
+                bl = s.let_name_lines.get(i);
+                bc = s.let_name_cols.get(i);
+            }
+            _reg_mut(t, nm, bm, bl, bc);
         }
         return;
     }
@@ -4001,6 +4117,7 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
     }
     if final_ty != null {
         t.scope.insert(s.name, *final_ty);
+        _reg_mut(t, s.name, s.is_mut, s.name_line, s.name_col);
         if is_auto_owned {
             t.owned_locals.insert(s.name, true);
         }
@@ -4011,6 +4128,7 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
         // placeholder is treated as compatible-with-anything in types_compat.
         let placeholder: *Type = ty_named("__unknown__");
         t.scope.insert(s.name, *placeholder);
+        _reg_mut(t, s.name, s.is_mut, s.name_line, s.name_col);
         if is_auto_owned {
             t.owned_locals.insert(s.name, true);
         }
@@ -4704,6 +4822,20 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             return inner;
         }
         if e.op_code == UN_ADDR || e.op_code == UN_ADDR_MUT {
+            // `&mut x` promises exclusive WRITE access, so x itself must be
+            // `mut` when it's a value binding. Pointer-typed bindings hand
+            // out the pointee, which the binding does not freeze.
+            if e.op_code == UN_ADDR_MUT && e.operand != null && e.operand.kind == EX_IDENT {
+                let _amn: string = e.operand.str_val;
+                if t.mut_locals.contains(_amn) && !t.mut_locals.get(_amn) && t.scope.contains(_amn) {
+                    let _amt: Type = t.scope.get(_amn);
+                    let _am_ptrish: bool = _amt.kind == TY_POINTER || _amt.kind == TY_BORROW || _amt.kind == TY_BORROW_MUT || _amt.kind == TY_SLICE;
+                    let _am_unknown: bool = _amt.kind == TY_NAMED && _amt.name != null && _amt.name.eq("__unknown__");
+                    if !_am_ptrish && !_am_unknown {
+                        _check_immutable_write(t, e.operand, "take `&mut` of");
+                    }
+                }
+            }
             // Borrowing a generic-container element (`&mut v[i]` on a
             // *Vector<T>) has no place to point at — indexing a container
             // desugars to `.get(i)`, which returns a COPY. Raw pointers and
@@ -4789,6 +4921,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 _relate_first_borrow(t, _aw_root, false);
             }
         }
+        _check_immutable_write(t, e.lhs, "assign to");
         t.addr_ctx = t.addr_ctx + 1;
         let lt: *Type = infer_expr(t, e.lhs);
         t.addr_ctx = t.addr_ctx - 1;
@@ -5671,6 +5804,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 _relate_first_borrow(t, _pw_root, false);
             }
         }
+        _check_immutable_write(t, e.lhs, "modify");
         t.addr_ctx = t.addr_ctx + 1;
         let _pt: *Type = infer_expr(t, e.lhs);
         t.addr_ctx = t.addr_ctx - 1;

@@ -2297,7 +2297,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
                 let p: Param = template.fn_params.get(i);
                 let pt: *Type = subst_type(p.ty, template.type_params, e.args);
                 pt = resolve_assoc_recursive(g, pt);
-                let np: Param = Param { name: p.name, ty: pt, name_line: p.name_line, name_col: p.name_col };
+                let np: Param = Param { name: p.name, ty: pt, name_line: p.name_line, name_col: p.name_col, is_mut: p.is_mut };
                 new_params_v.push(np);
             }
         }

@@ -226,6 +226,9 @@ pub struct Param {
     // and `glide fix` reuses it to splice in `_` prefixes.
     pub name_line: i32,
     pub name_col: i32,
+    // `mut name: T` — the body may reassign this param. Plain params are
+    // immutable (`assign-immutable`), same rule as `let` vs `let mut`.
+    pub is_mut: bool,
 }
 
 pub struct Field {
@@ -304,6 +307,9 @@ pub struct Stmt {
     // goto / rename / inlay exactly on `a` and `b`.
     pub let_name_lines: *Vector<i32>,
     pub let_name_cols: *Vector<i32>,
+    // Per-binding `mut` of a destructuring let (`let (mut a, b) = …`),
+    // parallel to `let_names`. A statement-level `let mut (…)` marks all.
+    pub let_muts: *Vector<bool>,
     // Return / Expr stmt / Defer
     pub expr_value: *Expr,
     // If / While / For
@@ -539,6 +545,7 @@ pub fn make_param(name: string, ty: *Type) -> *Param {
     let p: *Param = malloc(sizeof(Param)) as *Param;
     p.name = name;
     p.ty = ty;
+    p.is_mut = false; // malloc'd memory — set every field explicitly
     return p;
 }
 

@@ -1445,7 +1445,7 @@ fn _looks_like_url(s: string) -> bool {
 // drive the existing fetch path through it. Returns the cache dir on
 // success, "" on failure.
 fn _fetch_for_install(url: string, rev: string) -> string {
-    let synthetic: ManifestDep;
+    let mut synthetic: ManifestDep;
     synthetic.name = "_install_target";
     synthetic.kind = DEP_GIT;
     synthetic.path = url;
@@ -1517,7 +1517,7 @@ fn _to_backslashes(s: string) -> string {
 // POSIX) and look for an exact match with `dir`. Comparison is
 // case-sensitive on POSIX and case-insensitive on Windows.
 fn _path_contains(path_env: string, dir: string) -> bool {
-    let sep_char: i32 = 58; // ':' POSIX
+    let mut sep_char: i32 = 58; // ':' POSIX
     if __glide_is_windows() != 0 {
         sep_char = 59;
     } // ';'
@@ -1526,7 +1526,7 @@ fn _path_contains(path_env: string, dir: string) -> bool {
     let win: bool = __glide_is_windows() != 0;
     for let i: i32 = 0; i <= n; i++ {
         let at_end: bool = i == n;
-        let c: i32 = 0;
+        let mut c: i32 = 0;
         if !at_end {
             c = path_env.at(i).to_int();
         }
@@ -1549,8 +1549,8 @@ fn _path_eq(a: string, b: string, win: bool) -> bool {
         return false;
     }
     for let i: i32 = 0; i < a.len(); i++ {
-        let ca: i32 = a.at(i).to_int();
-        let cb: i32 = b.at(i).to_int();
+        let mut ca: i32 = a.at(i).to_int();
+        let mut cb: i32 = b.at(i).to_int();
         if ca >= 65 && ca <= 90 {
             ca = ca + 32;
         }
@@ -1831,7 +1831,7 @@ fn run_lint(target: string, argc: i32) -> i32 {
 // Diagnostics are printed inline (or JSON-emitted) as they come, so
 // the caller doesn't need to re-serialise.
 fn _lint_one_file(src_path: string, want_all: bool, json: bool) -> LintCounts {
-    let r: LintCounts = LintCounts { errors: 0, warnings: 0, promoted: 0, parse_failed: false };
+    let mut r: LintCounts = LintCounts { errors: 0, warnings: 0, promoted: 0, parse_failed: false };
     apply_lint_for(parent_dir(src_path));
     let stmts: *Vector<Stmt> = Vector::new();
     let pdiags: *Vector<ParseDiag> = Vector::new();

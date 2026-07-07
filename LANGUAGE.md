@@ -81,6 +81,21 @@ let name[: T] = expr;             // immutable; owns the value if it's a heap va
 let mut name[: T] = expr;         // mutable
 
 const NAME[: T] = expr;           // file-scope or block-scope constant
+```
+
+Immutability is enforced (`assign-immutable`): writing a plain `let` — by
+`=`, a compound assign, `x++`/`x--`, `&mut x`, or a field/index write on a
+VALUE binding — is a compile error with a mechanical `mut` fix attached.
+Three carve-outs:
+
+- Writes **through a pointer** binding (`p.x = …` where `p: *T`) mutate the
+  pointee, not the binding — legal on a plain `let` (that's how `v.push(…)`
+  works on `let v = Vector::new()`).
+- A `for`-init `let` is implicitly mutable — its step clause mutates it.
+- Params are immutable unless declared `mut name: T`. Tuple destructuring
+  takes per-binding `mut`: `let (mut a, b) = …`.
+
+```glide
 
 return [expr];
 

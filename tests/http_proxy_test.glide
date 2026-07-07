@@ -4,7 +4,7 @@ import stdlib::http::client::*;
 import stdlib::http::proxy::*;
 
 fn _cfg() -> ReverseProxyConfig {
-    let cfg: ReverseProxyConfig = ReverseProxyConfig::to("http://127.0.0.1:9000/");
+    let mut cfg: ReverseProxyConfig = ReverseProxyConfig::to("http://127.0.0.1:9000/");
     cfg.strip_prefix = "/api";
     return cfg;
 }

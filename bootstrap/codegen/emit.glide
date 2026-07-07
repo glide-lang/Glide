@@ -2950,7 +2950,7 @@ fn register_fn_mono_signature(g: *CG, mangled: string, template: *Stmt, args: *V
             let pt: *Type = subst_type(p.ty, template.type_params, args);
             let resolved: *Type = resolve_assoc_recursive(g, pt);
             collect_result_in_type(g, resolved);
-            let np: Param = Param { name: p.name, ty: resolved, name_line: p.name_line, name_col: p.name_col };
+            let np: Param = Param { name: p.name, ty: resolved, name_line: p.name_line, name_col: p.name_col, is_mut: p.is_mut };
             ps.push(np);
         }
         synth.fn_params = ps;

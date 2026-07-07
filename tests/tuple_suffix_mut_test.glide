@@ -44,3 +44,16 @@ fn test_suffix_in_tuple() -> i32 {
     assert!(w == 3100);
     return 0;
 }
+
+// `mut` on a fn param makes it reassignable in the body (plain params are
+// immutable — `assign-immutable`).
+fn _bump(mut n: i32) -> i32 {
+    n = n + 1;
+    n += 1;
+    return n;
+}
+
+fn test_mut_param_reassign() -> i32 {
+    assert!(_bump(1) == 3);
+    return 0;
+}

@@ -47,7 +47,7 @@ fn test_sha256_raw_first_byte() -> i32 {
     // contain NULs, and string.len() stops at the first one.
     let s: string = "abc";
     let raw: string = sha256(s);
-    let b: i32 = raw.at(0).to_int();
+    let mut b: i32 = raw.at(0).to_int();
     if b < 0 { b = b + 256; }
     assert_eq!(b, 186);
     return 0;
@@ -121,7 +121,7 @@ fn test_hmac_raw_matches_hex() -> i32 {
     let m: string = "msg";
     let raw: string = hmac_sha256(k, m);
     let hex: string = hmac_sha256_hex(k, m);
-    let raw_b: i32 = raw.at(0).to_int();
+    let mut raw_b: i32 = raw.at(0).to_int();
     if raw_b < 0 { raw_b = raw_b + 256; }
     // First two hex chars encode byte 0.
     let hi: i32 = _hex_digit_value(hex.at(0));

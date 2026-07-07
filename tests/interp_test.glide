@@ -14,8 +14,8 @@ fn _build_add_fn() -> *Stmt {
     body.push(*stmt_return(sum, 0, 0));
 
     let params: *Vector<Param> = Vector::new();
-    params.push(Param { name: "a", ty: ty_named("i32"), name_line: 0, name_col: 0 });
-    params.push(Param { name: "b", ty: ty_named("i32"), name_line: 0, name_col: 0 });
+    params.push(Param { name: "a", ty: ty_named("i32"), name_line: 0, name_col: 0, is_mut: false });
+    params.push(Param { name: "b", ty: ty_named("i32"), name_line: 0, name_col: 0, is_mut: false });
 
     let s: *Stmt = stmt_fn("add", params, ty_named("i32"), body, 0, 0);
     return s;
@@ -40,7 +40,7 @@ fn _build_fact_fn() -> *Stmt {
     body.push(*stmt_return(mul, 0, 0));
 
     let params: *Vector<Param> = Vector::new();
-    params.push(Param { name: "n", ty: ty_named("i32"), name_line: 0, name_col: 0 });
+    params.push(Param { name: "n", ty: ty_named("i32"), name_line: 0, name_col: 0, is_mut: false });
 
     return stmt_fn("fact", params, ty_named("i32"), body, 0, 0);
 }
@@ -86,7 +86,7 @@ fn test_string_concat_via_method() -> i32 {
     body.push(*stmt_return(call, 0, 0));
 
     let params: *Vector<Param> = Vector::new();
-    params.push(Param { name: "name", ty: ty_named("string"), name_line: 0, name_col: 0 });
+    params.push(Param { name: "name", ty: ty_named("string"), name_line: 0, name_col: 0, is_mut: false });
     let greet_fn: *Stmt = stmt_fn("greet", params, ty_named("string"), body, 0, 0);
 
     let it: *Interp = Interp::new();
@@ -121,7 +121,7 @@ fn test_for_loop_sum() -> i32 {
     body.push(*stmt_return(expr_ident("acc", 0, 0), 0, 0));
 
     let params: *Vector<Param> = Vector::new();
-    params.push(Param { name: "n", ty: ty_named("i32"), name_line: 0, name_col: 0 });
+    params.push(Param { name: "n", ty: ty_named("i32"), name_line: 0, name_col: 0, is_mut: false });
     let sum_fn: *Stmt = stmt_fn("sum_to", params, ty_named("i32"), body, 0, 0);
 
     let it: *Interp = Interp::new();
