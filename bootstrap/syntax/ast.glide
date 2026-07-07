@@ -265,8 +265,8 @@ pub struct MatchArm {
 pub struct MacroParam {
     pub name: string, // matcher binder (`$x` -> "x")
     pub is_variadic: bool, // `$($x:expr),*` form
-    pub separator: string, // separator for variadic ("," or ";"); empty otherwise
-    pub kind: string, // matcher kind: "expr" (default), "ty", "ident"
+    pub separator: string, // separator for variadic; only "," parses (";" is rejected at the definition)
+    pub kind: string, // matcher kind: always "expr" (`:ty` / `:ident` are rejected at the definition until implemented)
 }
 
 // `@name(args)` attribute attached to a top-level decl. `args` are

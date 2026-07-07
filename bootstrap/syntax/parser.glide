@@ -532,6 +532,25 @@ fn parse_macro_def(p: *Parser) -> *Stmt {
     return s;
 }
 
+// Matcher kind after `$name:`. Only `expr` is implemented — the expander
+// substitutes bound EXPRESSIONS and never read the recorded kind, so a
+// declared `:ty` / `:ident` exploded downstream as expr-parse errors at
+// every call site (`mk!(i64)` → "unknown name i64"). Reject at the
+// definition site instead.
+fn _expect_matcher_kind(p: *Parser) {
+    let k_line: i32 = p.current.line;
+    let k_col: i32 = p.current.column;
+    let kind: string = p.expect_ident();
+    if kind.eq("expr") {
+        return;
+    }
+    if kind.eq("ty") || kind.eq("ident") {
+        p.push_pdiag(k_line, k_col, kind.len(), "unsupported-matcher-kind", "macro matcher kind `:".concat(kind).concat("` is not supported yet — only `:expr` works"), 0, 0, 0, 0, "");
+        return;
+    }
+    p.push_pdiag(k_line, k_col, kind.len(), "unsupported-matcher-kind", "matcher kind must be `expr` (`:ty` / `:ident` are not supported yet)", 0, 0, 0, 0, "");
+}
+
 // Matcher list: `$x:expr`, `$($x:expr),*`, etc, comma-separated.
 fn parse_macro_matchers(p: *Parser) -> *Vector<MacroParam> {
     let out: *Vector<MacroParam> = Vector::new();
@@ -543,29 +562,30 @@ fn parse_macro_matchers(p: *Parser) -> *Vector<MacroParam> {
             p.expect_op("$");
             let bname: string = p.expect_ident();
             p.expect_op(":");
-            let kind: string = p.expect_ident();
-            if !kind.eq("expr") && !kind.eq("ty") && !kind.eq("ident") {
-                p.err("matcher kind must be `expr`, `ty`, or `ident`");
-            }
+            _expect_matcher_kind(p);
             p.expect_op(")");
             let mut sep: string = "";
             if p.at_op(",") || p.at_op(";") {
                 sep = p.current.lexeme;
+                // The expander never reads the separator: calls always use
+                // `,` regardless of what's declared here, and a `;`-separated
+                // call is a hard parse error. Reject the fiction at the
+                // definition instead of exploding at every call site.
+                if sep.eq(";") {
+                    p.err_code("unsupported-matcher-separator", "`;` separators are not supported in macro matchers; use `,`");
+                }
                 p.advance();
             }
             p.expect_op("*");
-            let mp: MacroParam = MacroParam { name: bname, is_variadic: true, separator: sep, kind: kind };
+            let mp: MacroParam = MacroParam { name: bname, is_variadic: true, separator: sep, kind: "expr" };
             out.push(mp);
         } else {
             if p.at_op("$") {
                 p.advance(); // '$'
                 let bname: string = p.expect_ident();
                 p.expect_op(":");
-                let kind: string = p.expect_ident();
-                if !kind.eq("expr") && !kind.eq("ty") && !kind.eq("ident") {
-                    p.err("matcher kind must be `expr`, `ty`, or `ident`");
-                }
-                let mp: MacroParam = MacroParam { name: bname, is_variadic: false, separator: "", kind: kind };
+                _expect_matcher_kind(p);
+                let mp: MacroParam = MacroParam { name: bname, is_variadic: false, separator: "", kind: "expr" };
                 out.push(mp);
             } else {
                 p.err("expected `$name:<kind>` or `$($name:<kind>),*` in macro matcher list");

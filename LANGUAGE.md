@@ -443,9 +443,10 @@ v.push_all!(10, 20, 30);            // instance: v becomes self
 Vector::new().push_all!(7, 8, 9);   // chained
 ```
 
-Matchers: `$x:expr`, variadic `$($x:expr),*` with `,` or `;`
-separators. Expansion runs between parse and typer; the typer sees
-already-expanded AST.
+Matchers: `$x:expr`, variadic `$($x:expr),*` (comma-separated — `;`
+separators and `:ty` / `:ident` matcher kinds are not supported yet and
+are rejected at the definition). Expansion runs between parse and
+typer; the typer sees already-expanded AST.
 
 ### macros that return a value
 
