@@ -4048,12 +4048,15 @@ fn _check_immutable_write(t: *Typer, lhs: *Expr, verb: string) {
     }
     if lhs.kind != EX_IDENT {
         // Path write: frozen only when the root is a value. An unknown root
-        // type (inference gap) gets the benefit of the doubt.
+        // type (inference gap) gets the benefit of the doubt. Pointer roots
+        // mutate the pointee, not the binding (`Vector::push` on a plain
+        // `let v`). Slice roots are NOT exempt: `view[i] = …` writes through
+        // the view, and the binding must say `mut` to signal write intent.
         if !t.scope.contains(root) {
             return;
         }
         let rt: Type = t.scope.get(root);
-        if rt.kind == TY_POINTER || rt.kind == TY_BORROW || rt.kind == TY_BORROW_MUT || rt.kind == TY_SLICE {
+        if rt.kind == TY_POINTER || rt.kind == TY_BORROW_MUT {
             return;
         }
         if rt.kind == TY_NAMED && rt.name != null && rt.name.eq("__unknown__") {

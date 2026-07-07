@@ -1106,14 +1106,34 @@ fn stmt_reassigns(s: *Stmt, name: string) -> bool {
     return false;
 }
 
+// Root binding of a write target: `x` → x, `x.f = …` → x, `x[i] = …` → x,
+// `*x = …` → x. Mirrors the typer's _borrow_root_ident so the lint counts
+// the same writes the assign-immutable check demands `mut` for (an index
+// write through a `mut` slice binding must not earn "unnecessary mut").
+fn _write_root_name(e: *Expr) -> string {
+    if e == null {
+        return "";
+    }
+    if e.kind == EX_IDENT {
+        return e.str_val;
+    }
+    if e.kind == EX_MEMBER || e.kind == EX_INDEX {
+        return _write_root_name(e.lhs);
+    }
+    if e.kind == EX_UNARY && e.op_code == UN_DEREF {
+        return _write_root_name(e.operand);
+    }
+    return "";
+}
+
 fn expr_reassigns(e: *Expr, name: string) -> bool {
     if e == null {
         return false;
     }
-    if e.kind == EX_ASSIGN && e.lhs != null && e.lhs.kind == EX_IDENT && e.lhs.str_val.eq(name) {
+    if e.kind == EX_ASSIGN && e.lhs != null && _write_root_name(e.lhs).eq(name) {
         return true;
     }
-    if (e.kind == EX_POSTINC || e.kind == EX_POSTDEC) && e.lhs != null && e.lhs.kind == EX_IDENT && e.lhs.str_val.eq(name) {
+    if (e.kind == EX_POSTINC || e.kind == EX_POSTDEC) && e.lhs != null && _write_root_name(e.lhs).eq(name) {
         return true;
     }
     // `&name` / `&mut name`: address-of yields a mutable `*T` that a callee
