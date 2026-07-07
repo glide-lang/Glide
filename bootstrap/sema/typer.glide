@@ -827,6 +827,10 @@ pub struct Typer {
     // reference those params, so literal field-value checking is skipped for
     // them (no monomorphization at this stage) to avoid false positives.
     pub struct_generic: *HashMap<bool>,
+    // Opaque `extern type Foo;` names. Registered in `structs` too (so `*Foo`
+    // resolves), but by-value uses and struct literals are rejected — the C
+    // side owns the definition and Glide never knows the size.
+    pub extern_types: *HashMap<bool>,
     pub scope: *HashMap<Type>, // current scope: name -> Type (heap-alloc'd)
     pub module_scope: *HashMap<Type>, // top-level consts (visible inside any fn body)
     // Freestanding / kernel build: also register top-level `let` globals in
@@ -1395,6 +1399,26 @@ fn _check_type_known(t: *Typer, ty: *Type, line: i32, col: i32) {
     }
 }
 
+// `extern type Foo;` is opaque — Glide never knows its size — so it can only
+// live behind a pointer. Flags a bare `Foo` at the TOP level of a declared
+// type (`let x: Foo`, `fn f(h: Foo) -> Foo`, a `Foo` field); `*Foo` is fine.
+// Without this the by-value use sailed through to cc as an incomplete type.
+fn _check_no_bare_extern_type(t: *Typer, ty: *Type, line: i32, col: i32) {
+    if ty == null || ty.kind != TY_NAMED || ty.name == null {
+        return;
+    }
+    if !t.extern_types.contains(ty.name) {
+        return;
+    }
+    let mut pl: i32 = line;
+    let mut pc: i32 = col;
+    if ty.line > 0 {
+        pl = ty.line;
+        pc = ty.col;
+    }
+    t.err_code_range(pl, pc, ty.name.len(), "opaque-extern-type", "`".concat(ty.name).concat("` is an opaque `extern type` with no known size; use it behind a pointer (`*").concat(ty.name).concat("`)"));
+}
+
 impl Typer {
     pub fn new() -> *Typer {
         let t: *Typer = __glide_palloc(sizeof(Typer)) as *Typer;
@@ -1416,6 +1440,7 @@ impl Typer {
         t.struct_fields_all = struct_fields_all;
         t.struct_field_types = HashMap::new();
         t.struct_generic = HashMap::new();
+        t.extern_types = HashMap::new();
         t.scope = scope;
         t.module_scope = mscope;
         t.freestanding = false;
@@ -1727,6 +1752,7 @@ impl Typer {
         self.struct_fields_all.free();
         self.struct_field_types.free();
         self.struct_generic.free();
+        self.extern_types.free();
         self.scope.free();
         self.module_scope.free();
         self.owned_locals.free();
@@ -2184,6 +2210,11 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
         }
         if s.kind == ST_STRUCT {
             t.structs.insert(s.name, true);
+            // Opaque `extern type Foo;` (parsed as a fieldless extern struct):
+            // remember it so by-value uses / literals can be rejected.
+            if s.is_extern {
+                t.extern_types.insert(s.name, true);
+            }
             // Generic structs (`struct Box<T>`) have field types that may name a
             // type param, so their literal field-value checking is skipped.
             if s.type_params != null && s.type_params.len() > 0 {
@@ -2205,6 +2236,8 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
                         // same store-a-borrow hole one level down.
                         _reject_nested_borrow(t, f.ty, s.line, s.column, false);
                     }
+                    // A by-value field of an opaque `extern type` has no size.
+                    _check_no_bare_extern_type(t, f.ty, s.line, s.column);
                 }
             }
         }
@@ -3322,11 +3355,13 @@ fn check_fn(t: *Typer, s: *Stmt) {
     // `fn`s reach check_fn — impl methods are skipped by check_top — so the
     // type params in scope are exactly this fn's own `<…>`.)
     _check_type_known(t, s.fn_ret_ty, s.line, s.column);
+    _check_no_bare_extern_type(t, s.fn_ret_ty, s.line, s.column);
     if s.fn_params != null {
         for let i: i32 = 0; i < s.fn_params.len(); i++ {
             let p: Param = s.fn_params.get(i);
             if p.ty != null {
                 _check_type_known(t, p.ty, s.line, s.column);
+                _check_no_bare_extern_type(t, p.ty, p.name_line, p.name_col);
                 t.scope.insert(p.name, *p.ty);
                 // Params honor their own `mut` (`fn f(mut n: i32)`). The
                 // NEGATIVE packed pos marks "param" so the diagnostic offers
@@ -4002,6 +4037,7 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
     // it is compared against the initializer or recorded in scope.
     if s.let_ty != null {
         t._canon_type(s.let_ty);
+        _check_no_bare_extern_type(t, s.let_ty, s.line, s.column);
     }
     // Tuple destructuring: `let (a, b, c) = expr;`. Infer the value's tuple
     // type and bind each name to its element type. Falls back to permissive
@@ -5871,6 +5907,13 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                     }
                 }
             }
+        }
+        // An opaque `extern type` cannot be constructed from Glide — the C
+        // side owns the (unknown-size) definition. Without this the literal
+        // reached cc as an incomplete-type initializer.
+        if e.str_val != null && t.extern_types.contains(t._strip_mod_prefix(e.str_val)) {
+            t.err_code_range(e.line, e.column, e.str_val.len(), "opaque-extern-type", "cannot construct `".concat(e.str_val).concat("` — it is an opaque `extern type` defined in C; obtain a `*").concat(e.str_val).concat("` via FFI"));
+            return null;
         }
         // The struct type must be in scope. A sibling file's struct used
         // WITHOUT an import type-checks fine here but fails at codegen

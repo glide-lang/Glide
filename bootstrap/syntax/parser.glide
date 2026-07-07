@@ -346,11 +346,38 @@ pub fn parse_top_stmt(p: *Parser) -> *Stmt {
             }
             return s;
         }
-        // `extern type Foo;` etc — for now, skip the line.
+        // `extern type Foo;` — an opaque C type (FFI handle). Registered as
+        // a fieldless extern struct: `*Foo` resolves everywhere, codegen
+        // emits only a forward `typedef struct Foo Foo;` (the C side owns
+        // the definition), and the typer rejects by-value/constructed uses
+        // (an opaque type has no known size).
+        if p.at_kw("type") {
+            p.advance(); // 'type'
+            let et_line: i32 = p.current.line;
+            let et_col: i32 = p.current.column;
+            let et_len: i32 = p.current.lexeme.len();
+            let et_name: string = p.expect_ident();
+            p.expect_op(";");
+            let et_fields: *Vector<Field> = Vector::new();
+            let s: *Stmt = stmt_struct(et_name, et_fields, et_line, et_col);
+            if s != null {
+                s.is_pub = is_pub;
+                s.is_extern = true;
+                s.cfg_target = cfg;
+                s.attrs = attrs_collected;
+                s.name_line = et_line;
+                s.name_col = et_col;
+                s.name_len = et_len;
+            }
+            return s;
+        }
+        // Any other `extern <thing>;` — skip the line. The `;` is left in
+        // place: parse_program's advance-on-null consumes one token after a
+        // null return.
+        p.err("expected `fn` or `type` after `extern`");
         while !p.at_op(";") && !p.at_eof() {
             p.advance();
         }
-        p.eat_op(";");
         return null;
     }
     // `naked fn ...` — function emitted with __attribute__((naked)). Body

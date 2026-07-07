@@ -1018,6 +1018,15 @@ fn emit_impl_fwd_decls(_g: *CG, s: *Stmt) {
 
 pub fn emit_struct(s: *Stmt) {
     let cname: string = c_safe_ident(s.name);
+    // Opaque `extern type Foo;`: the C side owns the definition. Emit only
+    // the forward typedef — a `{}` body here would conflict with the real
+    // definition pulled in by c_include. (C11 tolerates the duplicate
+    // typedef; the forward-decl pass already issued one.)
+    if s.is_extern {
+        println!("typedef struct ", cname, " ", cname, ";");
+        println!("");
+        return;
+    }
     println!("typedef struct ", cname, " {");
     if s.struct_fields != null {
         for let i: i32 = 0; i < s.struct_fields.len(); i++ {
