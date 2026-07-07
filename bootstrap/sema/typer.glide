@@ -4692,14 +4692,27 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         // which the typer previously skipped entirely.
         let saved_fscope: *HashMap<Type> = t.scope;
         let saved_fret: *Type = t.current_ret;
+        // Closure params obey the same immutability rule as named-fn params
+        // (mirrors check_fn): immutable unless `mut`, with the fresh maps
+        // saved/restored so closure entries don't leak into the enclosing fn.
+        let saved_fmut: *HashMap<bool> = t.mut_locals;
+        let saved_fmpos: *HashMap<i32> = t.mut_decl_pos;
+        let saved_fconst: *HashMap<bool> = t.const_bindings;
         let fresh_scope: *HashMap<Type> = HashMap::new();
         t.scope = fresh_scope;
         t.current_ret = e.cast_to;
+        t.mut_locals = HashMap::new();
+        t.mut_decl_pos = HashMap::new();
+        t.const_bindings = HashMap::new();
         if e.fn_expr_params != null {
             for let i: i32 = 0; i < e.fn_expr_params.len(); i++ {
                 let p: Param = e.fn_expr_params.get(i);
                 if p.ty != null {
                     t.scope.insert(p.name, *p.ty);
+                    // NEGATIVE packed pos marks "param" so the diagnostic
+                    // offers the `mut name: T` wording (see check_fn).
+                    t.mut_locals.insert(p.name, p.is_mut);
+                    t.mut_decl_pos.insert(p.name, 0 - (p.name_line * 4096 + p.name_col));
                 }
             }
         }
@@ -4710,8 +4723,14 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             }
         }
         t.scope.free();
+        t.mut_locals.free();
+        t.mut_decl_pos.free();
+        t.const_bindings.free();
         t.scope = saved_fscope;
         t.current_ret = saved_fret;
+        t.mut_locals = saved_fmut;
+        t.mut_decl_pos = saved_fmpos;
+        t.const_bindings = saved_fconst;
         return ty_named("__unknown__");
     }
     if e.kind == EX_IDENT {
