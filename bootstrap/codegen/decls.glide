@@ -1951,6 +1951,13 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         if s.kind == ST_CONST && s.let_ty != null {
             g.consts.insert(s.name, *s.let_ty);
         }
+        if s.kind == ST_CONST {
+            // Top-level consts are emitted under their BARE name (`#define
+            // PMAGIC …`), but a qualified reference (`lib::PMAGIC`) lowered
+            // to `lib_PMAGIC` — an undeclared identifier. Register the alias
+            // so EX_PATH resolves to the name emit_top_const declares.
+            register_alias_suffixes(g, mod_path, s.name, c_safe_ident(s.name));
+        }
         if s.kind == ST_IMPL && (s.type_params == null || s.type_params.len() == 0) && s.impl_target != null && s.impl_methods != null {
             let mut prefix: string = "X";
             if s.impl_target.kind == TY_NAMED {

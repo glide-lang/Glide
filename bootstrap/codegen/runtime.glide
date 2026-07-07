@@ -3058,6 +3058,14 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
             if g.generic_fns.contains(resolved) {
                 return g.generic_fns.get(resolved).fn_ret_ty;
             }
+            // Module const referenced qualified (`lib::PMAGIC`): carry its
+            // declared type so `${lib::PMAGIC}` formats as the value, not %p.
+            if g.consts.contains(e.field) {
+                let _ct: Type = g.consts.get(e.field);
+                let _cp: *Type = __glide_palloc(sizeof(Type)) as *Type;
+                *_cp = _ct;
+                return _cp;
+            }
         }
         let pname: string = resolve_type_prefix(g, e.str_val).concat("_").concat(e.field);
         if g.fns.contains(pname) {

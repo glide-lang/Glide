@@ -891,6 +891,19 @@ pub fn build_visibility(t: *Typer, stmts: *Vector<Stmt>) {
         if s.kind == ST_FN || s.kind == ST_STRUCT || s.kind == ST_ENUM || s.kind == ST_CONST || s.kind == ST_MACRO_DEF {
             defines_at.insert(s.origin.concat("::").concat(s.name), true);
         }
+        // Member-level privacy for QUALIFIED access (`mod::name`): record
+        // every non-`pub` fn/const/struct so the typer's resolution sites can
+        // reject cross-file use through the qualified spelling, matching what
+        // a selective import of the same name reports. Builtins are the
+        // prelude (always visible); bodyless/extern fns are linker symbols.
+        if !s.is_pub && !path_is_builtin(s.origin) {
+            if s.kind == ST_FN && s.fn_body != null && !s.is_extern {
+                t.decl_private.insert(s.origin.concat("::").concat(s.name), true);
+            }
+            if s.kind == ST_CONST || s.kind == ST_STRUCT {
+                t.decl_private.insert(s.origin.concat("::").concat(s.name), true);
+            }
+        }
         if s.kind == ST_STRUCT && s.struct_fields != null {
             t.struct_origin.insert(s.name, s.origin);
             for let k: i32 = 0; k < s.struct_fields.len(); k++ {

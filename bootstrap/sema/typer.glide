@@ -970,6 +970,15 @@ pub struct Typer {
     // POD-struct memo for the copy-vs-move rule: struct name -> 1 (pure data,
     // copies on `let b = a`) / 2 (owns heap or unknown, moves). Lazy.
     pub pod_cache: *HashMap<i32>,
+    // Cross-file member privacy for QUALIFIED access: `<origin>::<name>` for
+    // every non-`pub` top-level fn/const/struct declared in a non-builtin
+    // file. Filled by build_visibility. `mod::name` resolution consults it so
+    // a private member isn't silently usable through the qualified form when
+    // a selective import of the same name would be rejected.
+    pub decl_private: *HashMap<bool>,
+    // Where each top-level const was declared (name -> origin file), so the
+    // qualified-const privacy check can allow same-file access.
+    pub const_origin: *HashMap<string>,
 }
 
 pub struct FnptrHint {
@@ -1511,6 +1520,30 @@ fn _struct_is_pod(t: *Typer, name: string) -> bool {
     return pod;
 }
 
+// Cross-file privacy for QUALIFIED access (`mod::name`): a member that a
+// selective import would reject as private-import must not be reachable
+// through the qualified spelling either. `origin` is the member's declaring
+// file; same-file access (and builtins/externs, which never enter
+// decl_private) always passes.
+fn _check_qualified_private(t: *Typer, name: string, origin: string, line: i32, col: i32, span: i32) {
+    if !t.enforce_visibility {
+        return;
+    }
+    if name == null || name.eq("") || origin == null || origin.eq("") {
+        return;
+    }
+    if t.current_origin == null || t.current_origin.eq("") {
+        return;
+    }
+    if origin.eq(t.current_origin) {
+        return;
+    }
+    if !t.decl_private.contains(origin.concat("::").concat(name)) {
+        return;
+    }
+    t.err_code_range(line, col, span, "private-import", "`".concat(name).concat("` exists in `").concat(origin).concat("` but is not `pub`"));
+}
+
 // A literal `null` argument where the parameter is a borrow: `&T` promises
 // non-null (the let-binding form is already rejected), so the call-arg hole
 // let accepted programs segfault. NOTE: only the LITERAL is caught here — a
@@ -1622,6 +1655,8 @@ impl Typer {
         let fh: *Vector<FnptrHint> = Vector::new();
         t.fnptr_hints = fh;
         t.pod_cache = HashMap::new();
+        t.decl_private = HashMap::new();
+        t.const_origin = HashMap::new();
         return t;
     }
 
@@ -1901,6 +1936,8 @@ impl Typer {
         self.impl_set.free();
         self.enums.free();
         self.pod_cache.free();
+        self.decl_private.free();
+        self.const_origin.free();
         __glide_pfree(self as *void);
     }
 
@@ -2230,6 +2267,11 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
             // Registered even when the type can't be inferred: const-ness is
             // what the write check keys on, not the type.
             t.module_consts.insert(s.name, true);
+            // Declaring file, so qualified `mod::CONST` access can allow
+            // same-file uses and privacy-check the rest.
+            if s.origin != null && !s.origin.eq("") {
+                t.const_origin.insert(s.name, s.origin);
+            }
             // Top-level const: type from annotation if any, otherwise infer
             // from the literal value (covers `const X: int = 1;` and friends).
             let mut ty: *Type = s.let_ty;
@@ -5801,6 +5843,12 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 t.err_code_range(e.lhs.line, e.lhs.column, pt_span, "type-not-in-scope", "type `".concat(prefix).concat("` is not in scope; import it or qualify it (`<module>::").concat(prefix).concat("`)"));
                 return null;
             }
+            // The QUALIFIED form (`mod::Type::method()`) must still honor the
+            // type's `pub`: only the module prefix was authorized above, never
+            // the member — a private struct was fully usable cross-file.
+            if is_type && !is_type_param && _was_qualified && t.struct_origin.contains(prefix) {
+                _check_qualified_private(t, prefix, t.struct_origin.get(prefix), e.lhs.line, e.lhs.column, prefix.len());
+            }
             // Enum payload constructor `Shape::Circle(1.0)` yields the enum, so
             // an unannotated `let s = Shape::Circle(…)` types as Shape and its
             // `match` gets the variant/exhaustiveness/arity checks.
@@ -5827,6 +5875,9 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             // resolve the bare leaf first. Same arity/arg checks as below.
             if !is_type && !is_type_param && t.fns.contains(e.lhs.field) {
                 let lsig: FnSig = t.fns.get(e.lhs.field);
+                // Privacy: the qualified spelling must honor `pub` exactly
+                // like a selective import of the same name would.
+                _check_qualified_private(t, e.lhs.field, lsig.decl_origin, e.lhs.line, e.lhs.column, prefix.len() + 2 + e.lhs.field.len());
                 let lplen: i32 = if lsig.params != null { lsig.params.len() } else { 0 };
                 if lsig.params != null && e.args != null {
                     let lalen: i32 = e.args.len();
@@ -6066,6 +6117,30 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         if t.fns.contains(pname) {
             return ty_named("__fn__");
         }
+        // Module-qualified CONST reference (`lib::MAGIC`). Resolving its
+        // declared type here keeps `${lib::MAGIC}` formatting as its real
+        // type instead of degrading to %p, and gives the privacy check a
+        // resolution site (qualified access used to bypass `pub` entirely).
+        if !is_type && !is_type_param && t.module_consts.contains(e.field) {
+            let mut _mco: string = "";
+            if t.const_origin.contains(e.field) {
+                _mco = t.const_origin.get(e.field);
+            }
+            _check_qualified_private(t, e.field, _mco, e.line, e.column, prefix.len() + 2 + e.field.len());
+            if t.module_scope.contains(e.field) {
+                let _mcty: Type = t.module_scope.get(e.field);
+                let _mcp: *Type = __glide_palloc(sizeof(Type)) as *Type;
+                *_mcp = _mcty;
+                return _mcp;
+            }
+            return null;
+        }
+        // Module-qualified fn REFERENCE (`let f = lib::helper;`): same
+        // privacy rule as calling it.
+        if !is_type && !is_type_param && t.fns.contains(e.field) {
+            let _mfsig: FnSig = t.fns.get(e.field);
+            _check_qualified_private(t, e.field, _mfsig.decl_origin, e.line, e.column, prefix.len() + 2 + e.field.len());
+        }
         return null;
     }
     if e.kind == EX_MACRO {
@@ -6253,6 +6328,11 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             if !owner.eq(t.current_origin) {
                 t.err_code_range(e.line, e.column, e.str_val.len(), "private-construction", "struct `".concat(e.str_val).concat("` has private fields and can't be built with a literal here; construct it through a public function (e.g. `").concat(e.str_val).concat("::new(...)`) in its own file"));
             }
+        }
+        // A QUALIFIED literal head (`mod::Type { … }`) must honor the type's
+        // `pub` — the module qualifier alone used to authorize it.
+        if e.field != null && !e.field.eq("") && e.str_val != null && t.struct_origin.contains(e.str_val) {
+            _check_qualified_private(t, e.str_val, t.struct_origin.get(e.str_val), e.line, e.column, e.str_val.len());
         }
         return ty_named(e.str_val);
     }
