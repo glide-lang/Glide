@@ -3226,13 +3226,20 @@ fn build_string_or_interp(p: *Parser, raw: string, line: i32, col: i32) -> *Expr
             }
             let expr_src: string = raw.substring(start_expr, k);
             let sub_lex: *Lexer = Lexer::new(expr_src);
+            // Anchor the sub-lexer at the interpolation site (col is the
+            // opening quote; +1 steps past it) so every node of the parsed
+            // sub-expression carries real source positions — parser AND
+            // typer diagnostics inside `${...}` (e.g. use-after-move) then
+            // point into the string instead of 1:1.
+            sub_lex.line = line;
+            sub_lex.column = col + 1 + start_expr;
             let sub_par: *Parser = Parser::new(sub_lex);
             let e: *Expr = parse_expr(sub_par, 0);
             for let di: i32 = 0; di < sub_par.diags.len(); di++ {
                 let d: ParseDiag = sub_par.diags.get(di);
-                // Re-anchor onto the host string position; drop any inner fix
-                // (its offsets are relative to the sub-expression source).
-                p.push_pdiag(line, col, 1, d.code, "in interpolation: ".concat(d.msg), 0, 0, 0, 0, "");
+                // Positions are already host-anchored (see above); drop any
+                // inner fix (its offsets assume the sub-expression source).
+                p.push_pdiag(d.line, d.col, d.span, d.code, "in interpolation: ".concat(d.msg), 0, 0, 0, 0, "");
             }
             if e == null {
                 return expr_string(raw, line, col);
