@@ -967,6 +967,9 @@ pub struct Typer {
     // "annotate with @handler" without baking HTTP knowledge into the
     // typer.
     pub fnptr_hints: *Vector<FnptrHint>,
+    // POD-struct memo for the copy-vs-move rule: struct name -> 1 (pure data,
+    // copies on `let b = a`) / 2 (owns heap or unknown, moves). Lazy.
+    pub pod_cache: *HashMap<i32>,
 }
 
 pub struct FnptrHint {
@@ -1409,6 +1412,105 @@ fn _check_type_known(t: *Typer, ty: *Type, line: i32, col: i32) {
     }
 }
 
+// ---- POD (copy-class) structs --------------------------------------------
+// A pure-data stack struct — every field recursively free of pointers, heap
+// types and owning wrappers — copies on `let b = a;` (C struct assignment is
+// a value copy, same as the already-copying param path). Only structs that
+// own heap state move. Payload-less enums are plain int tags (copy); payload
+// enums stay conservative (move) since their union may hold pointers.
+fn _ty_is_pod(t: *Typer, ty: *Type) -> bool {
+    if ty == null {
+        return false;
+    }
+    if ty.kind == TY_NAMED {
+        if is_int_type(ty) || is_float_type(ty) || is_bool_type(ty) {
+            return true;
+        }
+        if ty.name == null {
+            return false;
+        }
+        if ty.name.eq("char") {
+            return true;
+        }
+        if t.enums.contains(ty.name) {
+            // POD iff every variant is payload-less.
+            let vlist: string = t.enums.get(ty.name);
+            let mut start: i32 = 0;
+            let n: i32 = vlist.len();
+            while start < n {
+                let rest: string = vlist.substring(start, n);
+                let cc: i32 = rest.index_of(",");
+                let mut vname: string = rest;
+                if cc >= 0 {
+                    vname = rest.substring(0, cc);
+                }
+                if !vname.eq("") && t.enum_arities.contains(ty.name.concat("::").concat(vname)) {
+                    if t.enum_arities.get(ty.name.concat("::").concat(vname)) > 0 {
+                        return false;
+                    }
+                }
+                if cc < 0 {
+                    break;
+                }
+                start = start + cc + 1;
+            }
+            return true;
+        }
+        if t.structs.contains(ty.name) {
+            return _struct_is_pod(t, ty.name);
+        }
+        return false;
+    }
+    if ty.kind == TY_TUPLE {
+        if ty.args == null {
+            return true;
+        }
+        for let i: i32 = 0; i < ty.args.len(); i++ {
+            let a: Type = ty.args.get(i);
+            if !_ty_is_pod(t, &a) {
+                return false;
+            }
+        }
+        return true;
+    }
+    // Pointers, borrows, slices, strings, generics, fn-ptrs, wrappers: not POD.
+    return false;
+}
+
+fn _struct_is_pod(t: *Typer, name: string) -> bool {
+    if name == null || name.eq("") {
+        return false;
+    }
+    if t.pod_cache.contains(name) {
+        return t.pod_cache.get(name) == 1;
+    }
+    if t.extern_types.contains(name) || t.struct_generic.contains(name) || t.enums.contains(name) {
+        t.pod_cache.insert(name, 2);
+        return false;
+    }
+    // Seed "not POD" so a (pathological) by-value cycle terminates.
+    t.pod_cache.insert(name, 2);
+    let mut pod: bool = true;
+    let prefix: string = name.concat("::");
+    let keys: *Vector<string> = t.struct_field_types.keys();
+    for let i: i32 = 0; i < keys.len(); i++ {
+        let k: string = keys.get(i);
+        if !k.starts_with(prefix) {
+            continue;
+        }
+        let fty: Type = t.struct_field_types.get(k);
+        if !_ty_is_pod(t, &fty) {
+            pod = false;
+            break;
+        }
+    }
+    keys.free();
+    if pod {
+        t.pod_cache.insert(name, 1);
+    }
+    return pod;
+}
+
 // A literal `null` argument where the parameter is a borrow: `&T` promises
 // non-null (the let-binding form is already rejected), so the call-arg hole
 // let accepted programs segfault. NOTE: only the LITERAL is caught here — a
@@ -1519,6 +1621,7 @@ impl Typer {
         t.error_count = 0;
         let fh: *Vector<FnptrHint> = Vector::new();
         t.fnptr_hints = fh;
+        t.pod_cache = HashMap::new();
         return t;
     }
 
@@ -1797,6 +1900,7 @@ impl Typer {
         self.dup_flagged.free();
         self.impl_set.free();
         self.enums.free();
+        self.pod_cache.free();
         __glide_pfree(self as *void);
     }
 
@@ -4234,11 +4338,21 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
         let val_ty: *Type = infer_expr(t, s.let_value);
         // Move on rebind: `let b = a` where a is a struct VALUE or an owned
         // pointer (struct-lit, explicit, or call-result owned) moves a; reading a
-        // afterward is use-after-move. Primitives copy. Marked AFTER inferring the
-        // RHS so the read on this line is not itself flagged.
-        if s.kind == ST_LET && s.let_value != null && s.let_value.kind == EX_IDENT && ((val_ty != null && val_ty.kind == TY_NAMED && t.structs.contains(val_ty.name)) || t.owned_locals.contains(s.let_value.str_val) || t.call_owned.contains(s.let_value.str_val)) {
-            t.consumed_locals.insert(s.let_value.str_val, true);
-            t.moved_out.insert(s.let_value.str_val, true);
+        // afterward is use-after-move. Primitives copy — and so do POD structs
+        // (pure-data stack values with no owning fields): C struct assignment
+        // is a value copy, matching the already-copying param path, so the
+        // documented copy-mutation-isolation pattern compiles again.
+        // Marked AFTER inferring the RHS so the read on this line is not
+        // itself flagged.
+        if s.kind == ST_LET && s.let_value != null && s.let_value.kind == EX_IDENT {
+            let mut _rebind_moves: bool = t.owned_locals.contains(s.let_value.str_val) || t.call_owned.contains(s.let_value.str_val);
+            if !_rebind_moves && val_ty != null && val_ty.kind == TY_NAMED && t.structs.contains(val_ty.name) && !_struct_is_pod(t, val_ty.name) {
+                _rebind_moves = true;
+            }
+            if _rebind_moves {
+                t.consumed_locals.insert(s.let_value.str_val, true);
+                t.moved_out.insert(s.let_value.str_val, true);
+            }
         }
         // Synthesized `for x in <scalar>` binding (lowered for-in): the
         // iterable is a number, not a range/collection. Report it here with a
@@ -6074,6 +6188,15 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                         let _ft: Type = t.struct_field_types.get(_key);
                         if _struct_field_checkable(&_ft) && _struct_field_checkable(_vt) && !types_compat(&_ft, _vt) {
                             t.err_code_range(fv.line, fv.column, _arg_span(&fv), "field-type-mismatch", "field `".concat(_fn).concat("` of `").concat(_sl_sn).concat("` expects `").concat(type_to_string(&_ft)).concat("`, got `").concat(type_to_string(_vt)).concat("`"));
+                        }
+                        // Moving an owned value into a pointer field transfers
+                        // ownership (the holder's drop frees it), so the source
+                        // binding is consumed — reading it after the holder is
+                        // built is the same use-after-move as passing it to an
+                        // owning call. Mirrors the `*T` call-arg move rule.
+                        if _ft.kind == TY_POINTER && fv.kind == EX_IDENT && (t.owned_locals.contains(fv.str_val) || t.call_owned.contains(fv.str_val)) {
+                            t.consumed_locals.insert(fv.str_val, true);
+                            t.moved_out.insert(fv.str_val, true);
                         }
                     }
                 }
