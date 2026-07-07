@@ -4908,6 +4908,15 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             if e.rhs != null && e.rhs.kind == EX_CALL && e.rhs.lhs != null && e.rhs.lhs.kind == EX_IDENT && e.rhs.lhs.str_val.eq("err") {
                 return ty_result(inner_lt);
             }
+            // The fallback must agree with the success type: `parse(s) ?? "no"`
+            // on a `!i32` lowered to a C conditional mixing int and char* and
+            // died at cc as an ICE. Same assignability rules as elsewhere.
+            // Types naming an unresolved generic param stay permissive (they
+            // are judged per-monomorphization, not here).
+            let _qq_generic: bool = _type_references_any(inner_lt, t.current_type_params) || _type_references_any(inner_lt, t.impl_type_params) || _type_references_any(rt, t.current_type_params) || _type_references_any(rt, t.impl_type_params);
+            if inner_lt != null && rt != null && !_qq_generic && !types_compat(inner_lt, rt) {
+                t.err_code_range(e.rhs.line, e.rhs.column, _arg_span(e.rhs), "qq-type-mismatch", "`??` fallback has type `".concat(type_to_string(rt)).concat("` but the success value is `").concat(type_to_string(inner_lt)).concat("`"));
+            }
             return inner_lt;
         }
         // Arithmetic on a struct dispatches to its operator method (`+`->add,
