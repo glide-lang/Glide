@@ -155,6 +155,38 @@ fn subst_stmt(s: *Stmt, params: *Vector<string>, args: *Vector<Type>, gs: *HashM
     return n;
 }
 
+// True when @cfg(cfg) actually emits an #ifdef guard (see emit_cfg_open).
+fn _cfg_guards(cfg: string) -> bool {
+    if cfg == null {
+        return false;
+    }
+    return cfg.eq("windows") || cfg.eq("posix");
+}
+
+// True when a cfg-guarded bodied fn gets a panicking stub on the OTHER
+// platform (the #else arm). Hosted, non-naked fns only: freestanding
+// builds have no __glide_panic, and a naked fn is register-level code
+// nobody should call cross-platform.
+fn _cfg_stubbed(g: *CG, s: *Stmt) -> bool {
+    return !g.freestanding && _cfg_guards(s.cfg_target) && s.fn_body != null && !s.is_naked;
+}
+
+// The #else arm of a cfg-guarded fn: a same-signature stub that panics if
+// the wrong platform ever calls it. Before this, ANY call to a @cfg fn
+// from the other platform passed check and then failed at cc with an
+// implicit-declaration error — so the doc-blessed
+// `if cfg!("windows") { winonly(); }` pattern could never compile. With
+// the stub, guarded calls compile everywhere (the dead branch just never
+// runs) and an UNGUARDED wrong-platform call still fails loudly at
+// runtime with the fn name — never silently.
+fn emit_cfg_stub(s: *Stmt) {
+    emit_fn_signature(s);
+    println!(" {");
+    println!("    __glide_panic(\"called `".concat(s.name).concat("`, which is @cfg(\\\"").concat(s.cfg_target).concat("\\\") and not built for this platform\", \"\", 0);"));
+    println!("    abort();");
+    println!("}");
+}
+
 fn emit_fn_signature(s: *Stmt) {
     if s.name.eq("main") {
         print!("int main(int __glide_main_argc, char** __glide_main_argv)");
@@ -2138,10 +2170,19 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_FN && (s.type_params == null || s.type_params.len() == 0) {
-            emit_cfg_open(s.cfg_target);
-            emit_fn_signature(&s);
-            println!(";");
-            emit_cfg_close(s.cfg_target);
+            // A cfg-guarded fn that gets a wrong-platform stub (see
+            // emit_cfg_stub) has a definition on BOTH platforms, so its
+            // prototype must be visible unguarded — otherwise a call site
+            // that precedes the stub is an implicit declaration.
+            if _cfg_stubbed(g, &s) {
+                emit_fn_signature(&s);
+                println!(";");
+            } else {
+                emit_cfg_open(s.cfg_target);
+                emit_fn_signature(&s);
+                println!(";");
+                emit_cfg_close(s.cfg_target);
+            }
         }
         if s.kind == ST_IMPL && (s.type_params == null || s.type_params.len() == 0) {
             emit_impl_fwd_decls(g, &s);
@@ -2297,6 +2338,10 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
             emit_cfg_open(s.cfg_target);
             emit_fn(g, &s);
             println!("");
+            if _cfg_stubbed(g, &s) {
+                println!("#else");
+                emit_cfg_stub(&s);
+            }
             emit_cfg_close(s.cfg_target);
         }
         if s.kind == ST_IMPL && (s.type_params == null || s.type_params.len() == 0) {
