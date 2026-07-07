@@ -131,6 +131,18 @@ fn help_for_code(code: string) -> string {
     if code.eq("write-through-shared-borrow") {
         return "`&T` is a read-only view; take `&mut T` (or go through the owner) to write";
     }
+    if code.eq("qq-type-mismatch") {
+        return "the `??` fallback must have the same type as the unwrapped success value";
+    }
+    if code.eq("naked-body") {
+        return "a `naked fn` has no prologue/epilogue; write the whole body in `asm! { … }`";
+    }
+    if code.eq("private-import") {
+        return "mark the item `pub` in its declaring file, or call a public wrapper";
+    }
+    if code.eq("unsatisfied-bound") {
+        return "add the missing `impl Trait for Type { … }`, or use a type that implements the bound";
+    }
     if code.eq("unused-fn") {
         return "prefix with `_` if intentional, or remove the function";
     }
