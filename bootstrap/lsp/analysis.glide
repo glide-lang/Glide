@@ -1103,6 +1103,16 @@ fn stmt_reassigns(s: *Stmt, name: string) -> bool {
             }
         }
     }
+    // Inline-asm output operands ("=r"(x)) write x — a `let mut x` used as
+    // an asm output is a justified mut, not noise.
+    if s.asm_out_exprs != null {
+        for let i: i32 = 0; i < s.asm_out_exprs.len(); i++ {
+            let oe: Expr = s.asm_out_exprs.get(i);
+            if oe.kind == EX_IDENT && oe.str_val.eq(name) {
+                return true;
+            }
+        }
+    }
     return false;
 }
 

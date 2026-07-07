@@ -3966,6 +3966,11 @@ fn check_stmt(t: *Typer, s: *Stmt) {
             for let i: i32 = 0; i < s.asm_out_exprs.len(); i++ {
                 let e: Expr = s.asm_out_exprs.get(i);
                 infer_expr(t, &e);
+                // An output constraint ("=r"(x)) WRITES x — same rule as an
+                // assignment, same `let mut` fix-it. (The unnecessary-mut
+                // analysis counts asm outputs as writes too, so a correct
+                // `let mut` output doesn't earn a false warning.)
+                _check_immutable_write(t, &e, "write asm output to");
             }
         }
         if s.asm_in_exprs != null {
