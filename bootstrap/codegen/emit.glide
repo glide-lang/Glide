@@ -1268,6 +1268,144 @@ fn _str_stmt_escapes(g: *CG, name: string, st: *Stmt) -> bool {
     if _str_args_escape(g, name, st.asm_in_exprs) { return true; }
     return false;
 }
+// ---- Struct-VALUE string-field auto-drop ---------------------------------
+// A `let b: T = T { .., f: <fresh producer>, .. }` stack struct value with an
+// owned string field leaked: the field's fresh string was stored (escape) and
+// never freed when b dropped. Free b's fresh string fields at scope end IFF b
+// never escapes and no field is aliased out. STRICTER than the collection
+// walker: `b.f` is safe ONLY as the receiver of a read-only string method
+// (`b.name.len()`) or a reader-macro arg — a bare `b`, `let x = b`, `let x =
+// b.f`, `pass(b.f)`, `return b`, or `b.f` fed to a non-reader all ALIAS the
+// owned field string and disqualify (would double-free / UAF). On any doubt =>
+// escape (= keep the leak = correct).
+fn _sv_is_field_access(name: string, e: *Expr) -> bool {
+    return e != null && e.kind == EX_MEMBER && e.lhs != null && e.lhs.kind == EX_IDENT && e.lhs.str_val != null && e.lhs.str_val.eq(name);
+}
+fn _sv_args_escape(g: *CG, name: string, args: *Vector<Expr>) -> bool {
+    if args == null { return false; }
+    for let i: i32 = 0; i < args.len(); i = i + 1 {
+        let a: Expr = args.get(i);
+        if _sv_expr_escapes(g, name, &a) { return true; }
+    }
+    return false;
+}
+fn _sv_expr_escapes(g: *CG, name: string, e: *Expr) -> bool {
+    if e == null { return false; }
+    if e.kind == EX_IDENT { return e.str_val != null && e.str_val.eq(name); }
+    // A reader macro (format!/println!/…) may take `b.f` as a bare arg — it only
+    // reads/copies. Nested non-field-access args still recurse.
+    if e.kind == EX_MACRO && e.str_val != null && _is_reader_macro(e.str_val) {
+        if _sv_expr_escapes(g, name, e.macro_recv) { return true; }
+        if e.args != null {
+            for let i: i32 = 0; i < e.args.len(); i = i + 1 {
+                let a: Expr = e.args.get(i);
+                if _sv_is_field_access(name, &a) { continue; }
+                if _sv_expr_escapes(g, name, &a) { return true; }
+            }
+        }
+        return false;
+    }
+    // Safe unit: `b.f.<read-only>(args)` — the field is only read. Check the args.
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER
+        && e.lhs.field != null && _is_str_read_only(e.lhs.field)
+        && _sv_is_field_access(name, e.lhs.lhs) {
+        return _sv_args_escape(g, name, e.args);
+    }
+    // Any bare `b.f` that reached here (not one of the safe shapes) aliases the
+    // owned field string => escape.
+    if _sv_is_field_access(name, e) { return true; }
+    if e.kind == EX_CALL {
+        if _sv_expr_escapes(g, name, e.lhs) { return true; }
+        if _sv_args_escape(g, name, e.args) { return true; }
+        return false;
+    }
+    if _sv_expr_escapes(g, name, e.lhs) { return true; }
+    if _sv_expr_escapes(g, name, e.rhs) { return true; }
+    if _sv_expr_escapes(g, name, e.operand) { return true; }
+    if _sv_expr_escapes(g, name, e.macro_recv) { return true; }
+    if _sv_args_escape(g, name, e.args) { return true; }
+    if _sv_stmts_escape(g, name, e.block_stmts) { return true; }
+    if _sv_stmts_escape(g, name, e.fn_expr_body) { return true; }
+    if _sv_arms_escape(g, name, e.match_arms) { return true; }
+    return false;
+}
+fn _sv_arms_escape(g: *CG, name: string, arms: *Vector<MatchArm>) -> bool {
+    if arms == null { return false; }
+    for let i: i32 = 0; i < arms.len(); i = i + 1 {
+        let ar: MatchArm = arms.get(i);
+        if _sv_expr_escapes(g, name, ar.lit) { return true; }
+        if _sv_stmts_escape(g, name, ar.body) { return true; }
+    }
+    return false;
+}
+fn _sv_selectarms_escape(g: *CG, name: string, arms: *Vector<SelectArm>) -> bool {
+    if arms == null { return false; }
+    for let i: i32 = 0; i < arms.len(); i = i + 1 {
+        let ar: SelectArm = arms.get(i);
+        if _sv_expr_escapes(g, name, ar.chan_expr) { return true; }
+        if _sv_expr_escapes(g, name, ar.send_value) { return true; }
+        if _sv_stmts_escape(g, name, ar.body) { return true; }
+    }
+    return false;
+}
+fn _sv_stmts_escape(g: *CG, name: string, list: *Vector<Stmt>) -> bool {
+    if list == null { return false; }
+    for let i: i32 = 0; i < list.len(); i = i + 1 {
+        let st: Stmt = list.get(i);
+        if _sv_stmt_escapes(g, name, &st) { return true; }
+    }
+    return false;
+}
+fn _sv_stmt_escapes(g: *CG, name: string, st: *Stmt) -> bool {
+    if st == null { return false; }
+    if _sv_expr_escapes(g, name, st.let_value) { return true; }
+    if _sv_expr_escapes(g, name, st.expr_value) { return true; }
+    if _sv_expr_escapes(g, name, st.cond) { return true; }
+    if _sv_expr_escapes(g, name, st.for_step) { return true; }
+    if _sv_expr_escapes(g, name, st.scrutinee) { return true; }
+    if st.for_init != null && _sv_stmt_escapes(g, name, st.for_init) { return true; }
+    if _sv_stmts_escape(g, name, st.then_body) { return true; }
+    if _sv_stmts_escape(g, name, st.else_body) { return true; }
+    if _sv_stmts_escape(g, name, st.fn_body) { return true; }
+    if _sv_arms_escape(g, name, st.arms) { return true; }
+    if _sv_selectarms_escape(g, name, st.select_arms) { return true; }
+    if _sv_args_escape(g, name, st.asm_out_exprs) { return true; }
+    if _sv_args_escape(g, name, st.asm_in_exprs) { return true; }
+    return false;
+}
+// The list of string field names whose struct-literal init is a fresh, inline,
+// unaliased producer — safe to free at scope end when the struct value drops.
+// A field initialized from a VARIABLE (`f: s`) is NOT included: that string may
+// be aliased by the original binding. Empty result => nothing to drop.
+fn _sv_droppable_fields(g: *CG, st: *Stmt) -> *Vector<string> {
+    let out: *Vector<string> = Vector::new();
+    // Must be a struct VALUE binding (TY_NAMED, not a pointer) with a struct
+    // literal RHS, and the type a known struct.
+    if st == null || st.let_ty == null || st.let_ty.kind != TY_NAMED || st.let_ty.name == null { return out; }
+    if st.let_value == null || st.let_value.kind != EX_STRUCT_LIT { return out; }
+    if !g.structs.contains(st.let_ty.name) { return out; }
+    if st.name == null || st.name.eq("") { return out; }
+    if g.cur_fn_body == null { return out; }
+    let lit: *Expr = st.let_value;
+    if lit.field_names == null || lit.args == null { return out; }
+    let sd: Stmt = g.structs.get(st.let_ty.name);
+    if sd.struct_fields == null { return out; }
+    for let i: i32 = 0; i < lit.field_names.len() && i < lit.args.len(); i = i + 1 {
+        let fname: string = lit.field_names.get(i);
+        let fval: Expr = lit.args.get(i);
+        // The field must be typed `string` in the struct decl.
+        let mut is_str_field: bool = false;
+        for let j: i32 = 0; j < sd.struct_fields.len(); j = j + 1 {
+            let sf: Field = sd.struct_fields.get(j);
+            if sf.name != null && sf.name.eq(fname) && _param_is_string(sf.ty) { is_str_field = true; }
+        }
+        if is_str_field && _str_rhs_fresh(g, &fval) {
+            out.push(fname);
+        }
+    }
+    return out;
+}
+
 // ---- Owned-collection auto-drop (Vector / HashMap) -----------------------
 // A `let v: *Vector<T> = Vector::new()` (or vec_of! / with_capacity / HashMap::
 // new) is freed at scope end IFF v never escapes: every use is a method call /
@@ -6339,6 +6477,16 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
                 print!("/* infer */ int ", cname);
             }
         }
+        // Struct VALUE with fresh string field(s), never escaping: route its
+        // fresh-string field allocations through malloc (owned bit) so the
+        // scope-end frees below actually reclaim them (arena allocs would make
+        // the free a no-op = still a leak). Decided ONCE here, used for both the
+        // RHS wrapping and the drop push.
+        let _sv_fields: *Vector<string> = _sv_droppable_fields(g, s);
+        let sv_drop: bool = !str_drop && !auto_owned && !struct_lit_auto && _sv_fields.len() > 0
+            && g.cur_fn_body != null
+            && !_sv_stmts_escape(g, s.name, g.cur_fn_body)
+            && !_defer_uses_stmts(s.name, g.cur_fn_body);
         if struct_lit_auto {
             // T* p = malloc(sizeof(T)); *p = (T){...};
             print!(" = (");
@@ -6366,6 +6514,15 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
                     print!("({ __glide_str_own_push(); const char* __sd = ");
                     emit_expr(g, s.let_value);
                     print!("; __glide_str_own_pop(); __sd; })");
+                } else if sv_drop {
+                    // Own-route the struct's fresh string fields so their frees
+                    // reclaim. own_push only affects string allocs, so Vector /
+                    // literal / variable fields are untouched.
+                    print!("({ __glide_str_own_push(); ");
+                    print!(type_to_c(s.let_ty));
+                    print!(" __svv = ");
+                    emit_expr(g, s.let_value);
+                    print!("; __glide_str_own_pop(); __svv; })");
                 } else {
                     emit_expr(g, s.let_value);
                 }
@@ -6395,6 +6552,28 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
         if auto_owned && s.name != null && !s.name.eq("") && g.cur_fn_body != null {
             if _defer_uses_stmts(s.name, g.cur_fn_body) {
                 auto_owned = false;
+            }
+        }
+        // Struct VALUE with fresh string field(s): free each such field at
+        // scope end (owned bit makes a non-owned free a safe no-op; the escape
+        // walker in sv_drop guarantees no field is aliased out, so no UAF).
+        if sv_drop {
+            for let _fi: i32 = 0; _fi < _sv_fields.len(); _fi = _fi + 1 {
+                let _fc: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+                _fc.kind = EX_CALL;
+                _fc.line = s.line;
+                _fc.column = s.column;
+                _fc.lhs = expr_ident("__glide_string_free", s.line, s.column);
+                let _fm: *Expr = calloc(1, sizeof(Expr)) as *Expr;
+                _fm.kind = EX_MEMBER;
+                _fm.line = s.line;
+                _fm.column = s.column;
+                _fm.lhs = expr_ident(s.name, s.line, s.column);
+                _fm.field = _sv_fields.get(_fi);
+                let _fa: *Vector<Expr> = Vector::new();
+                _fa.push(*_fm);
+                _fc.args = _fa;
+                g.auto_drop_stack.push(*_fc);
             }
         }
         if str_drop {
