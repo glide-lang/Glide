@@ -3308,13 +3308,15 @@ fn parse_prefix(p: *Parser) -> *Expr {
             p.expect_op("(");
             let params: *Vector<Param> = Vector::new();
             while !p.at_op(")") && !p.at_eof() {
-                p.eat_kw("mut");
+                // `mut` rides on the Param, same as named-fn params, so the
+                // typer can hold closure params to the same immutability rule.
+                let pn_mut: bool = p.eat_kw("mut");
                 let pn_line: i32 = p.current.line;
                 let pn_col: i32 = p.current.column;
-                let pname: string = p.expect_ident();
+                let pname: string = p.expect_binder_ident();
                 p.expect_op(":");
                 let pty: *Type = parse_type(p);
-                params.push(Param { name: pname, ty: pty, name_line: pn_line, name_col: pn_col, is_mut: false });
+                params.push(Param { name: pname, ty: pty, name_line: pn_line, name_col: pn_col, is_mut: pn_mut });
                 if !p.eat_op(",") {
                     break;
                 }
@@ -3336,12 +3338,15 @@ fn parse_prefix(p: *Parser) -> *Expr {
                 p.expect_op("(");
                 let params: *Vector<Param> = Vector::new();
                 while !p.at_op(")") && !p.at_eof() {
+                    // Same param shape as the plain `fn(...)` arm: `mut` is
+                    // recorded, keywords are rejected as binder names.
+                    let pn_mut: bool = p.eat_kw("mut");
                     let pn_line: i32 = p.current.line;
                     let pn_col: i32 = p.current.column;
-                    let pname: string = p.expect_ident();
+                    let pname: string = p.expect_binder_ident();
                     p.expect_op(":");
                     let pty: *Type = parse_type(p);
-                    params.push(Param { name: pname, ty: pty, name_line: pn_line, name_col: pn_col, is_mut: false });
+                    params.push(Param { name: pname, ty: pty, name_line: pn_line, name_col: pn_col, is_mut: pn_mut });
                     if !p.eat_op(",") {
                         break;
                     }
