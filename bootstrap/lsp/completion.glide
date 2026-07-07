@@ -329,6 +329,11 @@ fn build_import_edit(name: string, module: string, existing: *ImportInfo, fallba
             }
             // (b) a bare sibling (`import parent::other;`) rewrites into the group.
             let keys: *Vector<string> = imps.keys();
+            // Collect the match, break, then free ONCE after the loop. The
+            // earlier `free(); return;` inside the loop plus a `free()` after it
+            // tripped the flow-insensitive use-after-free tracker (it can't see
+            // the in-loop `return` makes the two frees mutually exclusive).
+            let mut sib_redit: *JsonValue = null;
             for let k: i32 = 0; k < keys.len(); k++ {
                 let km: string = keys.get(k);
                 if km.eq(module) || !km.starts_with(parent.concat("::")) {
@@ -354,10 +359,13 @@ fn build_import_edit(name: string, module: string, existing: *ImportInfo, fallba
                 json_obj_set(rrange, "end", rend);
                 json_obj_set(redit, "range", rrange);
                 json_obj_set(redit, "newText", json_string("import ".concat(parent).concat("::{").concat(sib_child).concat(", ").concat(child).concat("};\n")));
-                keys.free();
-                return redit;
+                sib_redit = redit;
+                break;
             }
             keys.free();
+            if sib_redit != null {
+                return sib_redit;
+            }
         }
     }
     // No existing import — fresh insertion.
@@ -4224,7 +4232,7 @@ fn _arm_insert(ctor: string, has_bind: bool, snip: bool) -> string {
         return ctor.concat("() => {}");
     }
     if snip {
-        return ctor.concat("(${1:").concat(bind).concat("}) => {$0}");
+        return ctor.concat("(\${1:").concat(bind).concat("}) => {$0}");
     }
     return ctor.concat("(").concat(bind).concat(") => {}");
 }
@@ -4238,7 +4246,7 @@ fn _arm_binds(n: i32, snip: bool) -> string {
             s = s.concat(", ");
         }
         if snip {
-            s = s.concat("${").concat(format!("{}", k + 1)).concat(":").concat(_arg_pname(k)).concat("}");
+            s = s.concat("\${").concat(format!("{}", k + 1)).concat(":").concat(_arg_pname(k)).concat("}");
         } else {
             s = s.concat(_arg_pname(k));
         }

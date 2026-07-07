@@ -1555,7 +1555,7 @@ pub fn _find_call_context(text: string, line0: i32, col0: i32) -> SigCallCtx {
     if name_tok.kind != TOK_IDENT && name_tok.kind != TOK_KEYWORD {
         return none;
     }
-    let ctx: SigCallCtx = SigCallCtx { found: true, name: name_tok.lexeme, type_qual: "", is_method: false, active_param: commas, recv_end: 0 };
+    let mut ctx: SigCallCtx = SigCallCtx { found: true, name: name_tok.lexeme, type_qual: "", is_method: false, active_param: commas, recv_end: 0 };
     if open_idx - 2 >= 0 {
         let prev: Token = toks.get(open_idx - 2);
         if prev.kind == TOK_OP && prev.lexeme.eq("::") {
@@ -3670,7 +3670,7 @@ pub fn handle_document_symbol(req: *JsonValue, state: *LspState) {
     // keeps the outline showing the user's source-level fns instead of
     // the synth `_user_*` / `_route_register_*` companions the macro
     // injects.
-    let src_stmts: *Vector<Stmt> = doc.pre_expand_stmts;
+    let mut src_stmts: *Vector<Stmt> = doc.pre_expand_stmts;
     if src_stmts == null {
         src_stmts = doc.stmts;
     }
@@ -3814,7 +3814,7 @@ pub fn handle_route_list(req: *JsonValue, state: *LspState) {
         let uri: string = uris.get(i);
         let doc: LspDoc = state.docs.get(uri);
         let path: string = uri_to_path(uri);
-        let src_stmts: *Vector<Stmt> = doc.pre_expand_stmts;
+        let mut src_stmts: *Vector<Stmt> = doc.pre_expand_stmts;
         if src_stmts == null {
             src_stmts = doc.stmts;
         }

@@ -406,7 +406,7 @@ fn check_method_signature(t: *Typer, impl_stmt: Stmt, req: Stmt, got: Stmt, _tar
         for let i: i32 = 0; i < req_arity; i++ {
             let rp: Param = req.fn_params.get(i);
             let gp: Param = got.fn_params.get(i);
-            let rty: *Type = subst_self(rp.ty, impl_stmt.impl_target);
+            let mut rty: *Type = subst_self(rp.ty, impl_stmt.impl_target);
             rty = subst_assoc(rty, impl_stmt.assoc_decls);
             if !types_compat(rty, gp.ty) {
                 t.current_origin = impl_stmt.origin;
@@ -1625,7 +1625,7 @@ pub fn analysis_expect_fulfillment(t: *Typer, program: *Vector<Stmt>) {
                 if pe.pe_done {
                     continue;
                 }
-                let updated: ExpectPending = pe;
+                let mut updated: ExpectPending = pe;
                 updated.pe_done = true;
                 pending.set(idx, updated);
                 matched = true;
@@ -1648,7 +1648,7 @@ pub fn analysis_expect_fulfillment(t: *Typer, program: *Vector<Stmt>) {
                 if d.line < pe.pe_line || d.line > pe.pe_end_line {
                     continue;
                 }
-                let updated: ExpectPending = pe;
+                let mut updated: ExpectPending = pe;
                 updated.pe_done = true;
                 pending.set(idx, updated);
                 matched = true;
@@ -1677,7 +1677,7 @@ pub fn analysis_expect_fulfillment(t: *Typer, program: *Vector<Stmt>) {
             }
             let kept_rel: *Vector<DiagRelated> = Vector::new();
             for let r_i: i32 = 0; r_i < t.related.len(); r_i++ {
-                let r: DiagRelated = t.related.get(r_i);
+                let mut r: DiagRelated = t.related.get(r_i);
                 if r.diag_index < 0 || r.diag_index >= remap.len() {
                     continue;
                 }
@@ -2101,7 +2101,7 @@ fn _ndp_collect_param_derefs(program: *Vector<Stmt>, deref_params: *HashMap<stri
             _ndp_index_one_fn(&s, deref_params, guards_params);
         }
         if s.kind == ST_IMPL && s.impl_methods != null && s.impl_target != null {
-            let tname: string = "";
+            let mut tname: string = "";
             if s.impl_target.kind == TY_NAMED {
                 tname = s.impl_target.name;
             } else {
@@ -2268,7 +2268,7 @@ fn _ndp_collect_param_guards(program: *Vector<Stmt>, guards_params: *HashMap<str
             _ndp_index_guards_one_fn(&s, guards_params);
         }
         if s.kind == ST_IMPL && s.impl_methods != null && s.impl_target != null {
-            let tname: string = "";
+            let mut tname: string = "";
             if s.impl_target.kind == TY_NAMED {
                 tname = s.impl_target.name;
             } else {
@@ -2519,7 +2519,7 @@ pub fn analysis_bad_free(t: *Typer, program: *Vector<Stmt>) {
             // a method is `free(self as *void)` a legitimate pattern;
             // outside, calling libc free on a Vector / HashMap value
             // leaks its internal buffers.
-            let impl_target: string = "";
+            let mut impl_target: string = "";
             if s.impl_target != null {
                 if s.impl_target.kind == TY_NAMED {
                     impl_target = s.impl_target.name;
@@ -2649,11 +2649,11 @@ fn _seq_check_expr(t: *Typer, e: *Expr, tys: *HashMap<string>) {
             let lhs_str: bool = _seq_is_string_expr(e.lhs, tys);
             let rhs_str: bool = _seq_is_string_expr(e.rhs, tys);
             if lhs_str || rhs_str {
-                let op_name: string = "==";
+                let mut op_name: string = "==";
                 if e.op_code == OP_NE {
                     op_name = "!=";
                 }
-                let suggest: string = ".eq(…)";
+                let mut suggest: string = ".eq(…)";
                 if e.op_code == OP_NE {
                     suggest = "!… .eq(…)";
                 }
@@ -3543,7 +3543,7 @@ fn _ur_collect_sigs(program: *Vector<Stmt>, ret_kinds: *HashMap<i32>, method_ret
             ret_kinds.insert(s.name, s.fn_ret_ty.kind);
         }
         if s.kind == ST_IMPL && s.impl_methods != null && s.impl_target != null {
-            let tname: string = "";
+            let mut tname: string = "";
             if s.impl_target.kind == TY_NAMED {
                 tname = s.impl_target.name;
             } else {
@@ -3597,7 +3597,7 @@ fn _ur_check_call(t: *Typer, e: *Expr, ret_kinds: *HashMap<i32>, method_rets: *H
     if e.kind != EX_CALL || e.lhs == null {
         return;
     }
-    let fn_label: string = "";
+    let mut fn_label: string = "";
     let mut k: i32 = -1;
     if e.lhs.kind == EX_IDENT {
         // Bare fn: `foo(…)`.
@@ -4350,7 +4350,7 @@ fn _mu_walk_path(t: *Typer, body: *Vector<Stmt>, held: *HashMap<i32>, held_col: 
             _mu_update_state(s.let_value, held, held_col);
         }
         if s.kind == ST_RETURN || s.kind == ST_BREAK || s.kind == ST_CONTINUE {
-            let exit_label: string = "return";
+            let mut exit_label: string = "return";
             if s.kind == ST_BREAK {
                 exit_label = "break";
             }
@@ -4592,7 +4592,7 @@ fn _cl_walk(t: *Typer, body: *Vector<Stmt>, nm: string, closed_in: bool, chan_li
         }
         if s.kind == ST_RETURN || s.kind == ST_BREAK || s.kind == ST_CONTINUE {
             if !closed && !*warned {
-                let exit_label: string = "return";
+                let mut exit_label: string = "return";
                 if s.kind == ST_BREAK {
                     exit_label = "break";
                 }

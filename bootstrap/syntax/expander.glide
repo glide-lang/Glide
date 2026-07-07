@@ -55,7 +55,7 @@ pub fn expand_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
     let type_macros: *Vector<TypeMacro> = Vector::new();
     let cleaned: *Vector<Stmt> = Vector::new();
     for let i: i32 = 0; i < program.len(); i++ {
-        let s: Stmt = program.get(i);
+        let mut s: Stmt = program.get(i);
         if s.kind == ST_MACRO_DEF {
             static_macros.insert(s.name, s);
             continue;
@@ -1212,7 +1212,7 @@ fn expr_references_self(e: *Expr) -> bool {
 // statement position.
 fn expand_in_program(program: *Vector<Stmt>, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>, pr: *HashMap<ProcMacroDef>, it: *Interp) {
     for let i: i32 = 0; i < program.len(); i++ {
-        let s: Stmt = program.get(i);
+        let mut s: Stmt = program.get(i);
         // Tell bare-macro resolution which file this stmt came from, so a
         // collision is disambiguated against THAT file's imports.
         if it != null && s.origin != null {
@@ -1224,7 +1224,7 @@ fn expand_in_program(program: *Vector<Stmt>, sm: *HashMap<Stmt>, tm: *Vector<Typ
         } else {
             if s.kind == ST_IMPL && s.impl_methods != null {
                 for let j: i32 = 0; j < s.impl_methods.len(); j++ {
-                    let m: Stmt = s.impl_methods.get(j);
+                    let mut m: Stmt = s.impl_methods.get(j);
                     if m.fn_body != null {
                         m.fn_body = expand_in_block(m.fn_body, sm, tm, pr, it, 0);
                         s.impl_methods.set(j, m);
@@ -1247,7 +1247,7 @@ fn expand_in_program(program: *Vector<Stmt>, sm: *HashMap<Stmt>, tm: *Vector<Typ
 fn expand_in_block(stmts: *Vector<Stmt>, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>, pr: *HashMap<ProcMacroDef>, it: *Interp, depth: i32) -> *Vector<Stmt> {
     let out: *Vector<Stmt> = Vector::new();
     for let i: i32 = 0; i < stmts.len(); i++ {
-        let s: Stmt = stmts.get(i);
+        let mut s: Stmt = stmts.get(i);
         // Macro at statement position: `name!(args);` becomes ST_EXPR holding
         // an EX_MACRO. Replace it with the expansion's stmts.
         if s.kind == ST_EXPR && s.expr_value != null && s.expr_value.kind == EX_MACRO {

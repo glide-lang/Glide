@@ -118,7 +118,7 @@ impl SmtpClient {
         s.auth_mechs = "";
 
         if self.use_tls {
-            let cfg: *TlsConfig = TlsConfig::client();
+            let mut cfg: *TlsConfig = TlsConfig::client();
             if self.tls_insecure { cfg = TlsConfig::client_insecure(); }
             let tr: !*TlsStream = TlsStream::connect(self.host, self.port, cfg);
             cfg.free();
@@ -152,7 +152,7 @@ impl SmtpClient {
             let st: !i32 = s._cmd_check("STARTTLS\r\n", 220);
             if !st.ok { s.close(); return err(st.err); }
 
-            let cfg: *TlsConfig = TlsConfig::client();
+            let mut cfg: *TlsConfig = TlsConfig::client();
             if self.tls_insecure { cfg = TlsConfig::client_insecure(); }
             let tcp: *TcpStream = s.tcp;
             s.tcp = null as *TcpStream;

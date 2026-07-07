@@ -357,7 +357,7 @@ impl ArgParser {
                           .concat("]");
             }
             if ty.eq("bool") {
-                let dv: string = "false";
+                let mut dv: string = "false";
                 if self.bool_flags.get(name).default_value { dv = "true"; }
                 out = out.concat("[bool, default=").concat(dv).concat("]");
             }

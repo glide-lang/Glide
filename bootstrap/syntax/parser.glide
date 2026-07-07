@@ -937,7 +937,7 @@ fn parse_struct(p: *Parser) -> *Stmt {
             // `own Conn` and assign a pointer-returning ctor; the drop frees it.
             fty = ty_pointer(fty);
         }
-        let f: Field = Field { name: fname, ty: fty, doc: fdoc, is_pub: fpub, bang_pub: fbang, trail: "", is_own: fown };
+        let mut f: Field = Field { name: fname, ty: fty, doc: fdoc, is_pub: fpub, bang_pub: fbang, trail: "", is_own: fown };
         let had_comma: bool = p.eat_op(",");
         if p.current.trail != null && !p.current.trail.eq("") {
             f.trail = p.current.trail;
@@ -993,7 +993,7 @@ fn parse_enum(p: *Parser) -> *Stmt {
             }
             p.expect_op(")");
         }
-        let v: EnumVariant = EnumVariant { name: vname, fields: fields, doc: vdoc, trail: "" };
+        let mut v: EnumVariant = EnumVariant { name: vname, fields: fields, doc: vdoc, trail: "" };
         let had_comma: bool = p.eat_op(",");
         if p.current.trail != null && !p.current.trail.eq("") {
             v.trail = p.current.trail;
@@ -1245,10 +1245,10 @@ pub fn substitute_self_in_methods(methods: *Vector<Stmt>, target: *Type) {
         }
     }
     for let i: i32 = 0; i < methods.len(); i++ {
-        let m: Stmt = methods.get(i);
+        let mut m: Stmt = methods.get(i);
         if m.fn_params != null {
             for let j: i32 = 0; j < m.fn_params.len(); j++ {
-                let p: Param = m.fn_params.get(j);
+                let mut p: Param = m.fn_params.get(j);
                 if p.ty != null {
                     p.ty = substitute_self_in_type(p.ty, target);
                 }
@@ -1315,7 +1315,7 @@ fn _subst_self_clone_expr(e: *Expr, target: *Type, name: string) -> *Expr {
     if e.match_arms != null {
         let nm: *Vector<MatchArm> = Vector::new();
         for let i: i32 = 0; i < e.match_arms.len(); i++ {
-            let arm: MatchArm = e.match_arms.get(i);
+            let mut arm: MatchArm = e.match_arms.get(i);
             if arm.body != null {
                 arm.body = _subst_self_clone_stmts(arm.body, target, name);
             }
@@ -1369,7 +1369,7 @@ fn _subst_self_clone_stmt(s: *Stmt, target: *Type, name: string) -> *Stmt {
     if s.arms != null {
         let na: *Vector<MatchArm> = Vector::new();
         for let i: i32 = 0; i < s.arms.len(); i++ {
-            let arm: MatchArm = s.arms.get(i);
+            let mut arm: MatchArm = s.arms.get(i);
             if arm.body != null {
                 arm.body = _subst_self_clone_stmts(arm.body, target, name);
             }
@@ -1389,7 +1389,7 @@ fn _subst_self_clone_stmt(s: *Stmt, target: *Type, name: string) -> *Stmt {
     if s.fn_params != null {
         let np: *Vector<Param> = Vector::new();
         for let j: i32 = 0; j < s.fn_params.len(); j++ {
-            let p: Param = s.fn_params.get(j);
+            let mut p: Param = s.fn_params.get(j);
             if p.ty != null {
                 p.ty = substitute_self_in_type(p.ty, target);
             }
@@ -1433,10 +1433,10 @@ pub fn substitute_self_assoc_in_methods(methods: *Vector<Stmt>, assocs: *Vector<
         return;
     }
     for let i: i32 = 0; i < methods.len(); i++ {
-        let m: Stmt = methods.get(i);
+        let mut m: Stmt = methods.get(i);
         if m.fn_params != null {
             for let j: i32 = 0; j < m.fn_params.len(); j++ {
-                let p: Param = m.fn_params.get(j);
+                let mut p: Param = m.fn_params.get(j);
                 if p.ty != null {
                     p.ty = substitute_self_assoc_in_type(p.ty, assocs);
                 }
@@ -2152,7 +2152,7 @@ fn parse_match(p: *Parser) -> *Stmt {
             let ass: *Expr = parse_maybe_assign(p, e);
             body.push(*stmt_expr(ass));
         }
-        let arm: MatchArm = MatchArm { variant: variant, qualifier: qual, bindings: bindings, body: body, line: lit_line, col: lit_col, lead: arm_lead, trail: "", lit: lit };
+        let mut arm: MatchArm = MatchArm { variant: variant, qualifier: qual, bindings: bindings, body: body, line: lit_line, col: lit_col, lead: arm_lead, trail: "", lit: lit };
         p.eat_op(",");
         if p.current.trail != null && !p.current.trail.eq("") {
             arm.trail = p.current.trail;
@@ -2264,7 +2264,7 @@ fn parse_match_expr(p: *Parser) -> *Expr {
             yr.is_arm_yield = true;
             body.push(*yr);
         }
-        let arm: MatchArm = MatchArm { variant: variant, qualifier: qual, bindings: bindings, body: body, line: lit_line, col: lit_col, lead: arm_lead, trail: "", lit: lit };
+        let mut arm: MatchArm = MatchArm { variant: variant, qualifier: qual, bindings: bindings, body: body, line: lit_line, col: lit_col, lead: arm_lead, trail: "", lit: lit };
         p.eat_op(",");
         if p.current.trail != null && !p.current.trail.eq("") {
             arm.trail = p.current.trail;

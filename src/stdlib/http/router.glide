@@ -282,9 +282,9 @@ fn _run_chain(parent_mws: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse>,
               local_mws:  *Vector<fn(*HttpRequest, *Chain) -> HttpResponse>,
               handler:    fn(*HttpRequest) -> HttpResponse,
               req:        *HttpRequest) -> HttpResponse {
-    let plen: i32 = 0;
+    let mut plen: i32 = 0;
     if parent_mws != null { plen = parent_mws.len(); }
-    let llen: i32 = 0;
+    let mut llen: i32 = 0;
     if local_mws != null { llen = local_mws.len(); }
     if plen + llen == 0 {
         let h: fn(*HttpRequest) -> HttpResponse = handler;

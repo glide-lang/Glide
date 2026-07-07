@@ -518,7 +518,7 @@ fn infer_let_types(g: *CG, body: *Vector<Stmt>) {
     }
     let n: i32 = body.len();
     for let i: i32 = 0; i < n; i++ {
-        let s: Stmt = body.get(i);
+        let mut s: Stmt = body.get(i);
         if s.kind == ST_LET {
             let resolved: *Type = try_resolve_open_let(g, &s, body, i);
             if resolved != null {
@@ -659,7 +659,7 @@ fn _main_takes_argv(s: *Stmt) -> bool {
 fn _emit_main_wrapper(g: *CG, s: *Stmt) {
     let ret_ty: *Type = s.fn_ret_ty;
     let takes_argv: bool = _main_takes_argv(s);
-    let call_args: string = "";
+    let mut call_args: string = "";
     if takes_argv {
         call_args = "argc, argv";
     }
@@ -835,7 +835,7 @@ fn emit_fn(g: *CG, s: *Stmt) {
         // declared return + params (`fn main()`, `fn main() -> !`, etc.);
         // the wrapper adapts it into a process exit code.
         let main_ret_c: string = _main_user_c_ret(s.fn_ret_ty);
-        let main_params: string = "void";
+        let mut main_params: string = "void";
         if _main_takes_argv(s) {
             main_params = "int __glide_main_argc, char** __glide_main_argv";
         }
@@ -2387,7 +2387,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         if template.fn_params != null {
             for let i: i32 = 0; i < template.fn_params.len(); i++ {
                 let p: Param = template.fn_params.get(i);
-                let pt: *Type = subst_type(p.ty, template.type_params, e.args);
+                let mut pt: *Type = subst_type(p.ty, template.type_params, e.args);
                 pt = resolve_assoc_recursive(g, pt);
                 let np: Param = Param { name: p.name, ty: pt, name_line: p.name_line, name_col: p.name_col, is_mut: p.is_mut };
                 new_params_v.push(np);

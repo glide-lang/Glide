@@ -293,7 +293,7 @@ fn jp_object(p: *JsonParser) -> *JsonValue {
         if jp_peek(p) == 58 {
             p.pos = p.pos + 1;
         }
-        let v: *JsonValue = jp_value(p);
+        let mut v: *JsonValue = jp_value(p);
         if v == null {
             v = json_null();
         }

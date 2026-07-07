@@ -2322,7 +2322,7 @@ pub fn resolve_method_call_args(g: *CG, call: *Expr, template: *Stmt, recv_args:
         return recv_args;
     }
     let n_total: i32 = template.type_params.len();
-    let n_recv: i32 = 0;
+    let mut n_recv: i32 = 0;
     if recv_args != null {
         n_recv = recv_args.len();
     }
@@ -2338,7 +2338,7 @@ pub fn resolve_method_call_args(g: *CG, call: *Expr, template: *Stmt, recv_args:
     }
     // Infer extras from call args. fn_params[0] is `self`.
     if call.args != null && template.fn_params != null && template.fn_params.len() > 1 {
-        let nargs: i32 = template.fn_params.len() - 1;
+        let mut nargs: i32 = template.fn_params.len() - 1;
         if call.args.len() < nargs {
             nargs = call.args.len();
         }
@@ -2407,7 +2407,7 @@ fn try_mono_call(g: *CG, call: *Expr, ret_hint: *Type) -> bool {
     }
     // Infer from arg types.
     if call.args != null && template.fn_params != null {
-        let n: i32 = template.fn_params.len();
+        let mut n: i32 = template.fn_params.len();
         if call.args.len() < n {
             n = call.args.len();
         }
@@ -2643,7 +2643,7 @@ fn prescan_expr(g: *CG, e: *Expr, ret_hint: *Type) {
                     }
                 }
                 if e.args != null && mtmpl.fn_params != null && mtmpl.fn_params.len() > self_off {
-                    let n: i32 = mtmpl.fn_params.len() - self_off;
+                    let mut n: i32 = mtmpl.fn_params.len() - self_off;
                     if e.args.len() < n {
                         n = e.args.len();
                     }
@@ -2671,7 +2671,7 @@ fn prescan_expr(g: *CG, e: *Expr, ret_hint: *Type) {
                         }
                     }
                     if recv.args != null && inner_tmpl.fn_params != null && inner_tmpl.fn_params.len() > inner_off {
-                        let n2: i32 = inner_tmpl.fn_params.len() - inner_off;
+                        let mut n2: i32 = inner_tmpl.fn_params.len() - inner_off;
                         if recv.args.len() < n2 {
                             n2 = recv.args.len();
                         }

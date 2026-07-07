@@ -66,7 +66,7 @@ fn expand_trait_defaults(stmts: *Vector<Stmt>) {
         }
     }
     for let i: i32 = 0; i < stmts.len(); i++ {
-        let imp: Stmt = stmts.get(i);
+        let mut imp: Stmt = stmts.get(i);
         if imp.kind != ST_IMPL {
             continue;
         }
@@ -184,7 +184,7 @@ fn lower_expr(e: *Expr) {
         lower_expr(e.lhs);
         if e.match_arms != null {
             for let i: i32 = 0; i < e.match_arms.len(); i++ {
-                let arm: MatchArm = e.match_arms.get(i);
+                let mut arm: MatchArm = e.match_arms.get(i);
                 if arm.body != null {
                     arm.body = lower_block(arm.body);
                 }

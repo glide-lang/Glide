@@ -39,7 +39,7 @@ pub fn load_into_str(stmts: *Vector<Stmt>, src: string, origin: string, loaded: 
     let parsed: *Vector<Stmt> = parse_program(p);
     if pdiags != null && p.diags != null {
         for let k: i32 = 0; k < p.diags.len(); k++ {
-            let d: ParseDiag = p.diags.get(k);
+            let mut d: ParseDiag = p.diags.get(k);
             d.origin = origin;
             pdiags.push(d);
         }
@@ -64,7 +64,7 @@ pub fn load_into_str(stmts: *Vector<Stmt>, src: string, origin: string, loaded: 
         }
     }
     for let i: i32 = 0; i < parsed.len(); i++ {
-        let s: Stmt = parsed.get(i);
+        let mut s: Stmt = parsed.get(i);
         if s.kind == ST_IMPORT {
             // Decide whether the trailing path segment names a file (module
             // import) or an item from the parent file. `imported_items` /
@@ -151,7 +151,7 @@ pub fn load_into_str_with_cache(stmts: *Vector<Stmt>, src: string, origin: strin
     let parsed: *Vector<Stmt> = parse_program(p);
     if pdiags != null && p.diags != null {
         for let k: i32 = 0; k < p.diags.len(); k++ {
-            let d: ParseDiag = p.diags.get(k);
+            let mut d: ParseDiag = p.diags.get(k);
             d.origin = origin;
             pdiags.push(d);
         }
@@ -203,7 +203,7 @@ pub fn load_into_with_cache(stmts: *Vector<Stmt>, path: string, loaded: *HashMap
         let heap_key: string = path.concat("");
         if pdiags != null && p.diags != null {
             for let k: i32 = 0; k < p.diags.len(); k++ {
-                let d: ParseDiag = p.diags.get(k);
+                let mut d: ParseDiag = p.diags.get(k);
                 d.origin = heap_key;
                 pdiags.push(d);
             }
@@ -211,7 +211,7 @@ pub fn load_into_with_cache(stmts: *Vector<Stmt>, path: string, loaded: *HashMap
         p.free();
         lex.free();
         for let i: i32 = 0; i < parsed_raw.len(); i++ {
-            let s: Stmt = parsed_raw.get(i);
+            let mut s: Stmt = parsed_raw.get(i);
             s.origin = heap_key;
             parsed_raw.set(i, s);
         }
@@ -421,7 +421,7 @@ pub fn cached_resolve_and_push(stmts: *Vector<Stmt>, parsed: *Vector<Stmt>, orig
     auto_loads.free();
     auto_seen.free();
     for let i: i32 = 0; i < parsed.len(); i++ {
-        let s: Stmt = parsed.get(i);
+        let mut s: Stmt = parsed.get(i);
         if s.kind == ST_IMPORT {
             let unq: string = strip_quotes(s.import_path);
             let mut resolved: string = resolve_import(dir, unq);
@@ -1157,8 +1157,8 @@ pub fn path_is_builtin(path: string) -> bool {
     for let i: i32 = 0; i + m <= n; i++ {
         let mut matched: bool = true;
         for let j: i32 = 0; j < m; j++ {
-            let c: i32 = path.at(i + j).to_int();
-            let d: i32 = needle.at(j).to_int();
+            let mut c: i32 = path.at(i + j).to_int();
+            let mut d: i32 = needle.at(j).to_int();
             // accept '\\' as equivalent to '/' so installer paths match.
             if c == 92 {
                 c = 47;

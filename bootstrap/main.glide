@@ -2851,6 +2851,11 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     merge_parse_diags(t, pdiags);
     build_visibility(t, stmts);
     t.enforce_visibility = true;
+    // A build checks EVERY file's bodies whole-program, but scope/visibility
+    // rules apply only to the entry file (imported files are trusted — see
+    // Typer.entry_origin). Not user_origin: that would skip imported bodies
+    // and we want their real errors.
+    t.entry_origin = src_path;
     check_program(t, stmts);
     run_extra_analyses(t, stmts, "");
     let src_text: string = read_file(src_path);
@@ -2861,7 +2866,13 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         if dpath.eq("") {
             dpath = src_path;
         }
-        if !dpath.eq(src_path) {
+        // A build compiles the WHOLE program, so a hard error in ANY file it
+        // pulls in must surface — dropping imported-file errors is what let a
+        // type mismatch in an imported fn reach cc as a confusing C cascade,
+        // and a broken `defer` in the TLS stack silently skip its cleanup.
+        // Warnings stay entry-file-only so stdlib lints don't flood every
+        // build. So skip only NON-error diagnostics from imported files.
+        if !dpath.eq(src_path) && d.severity != 1 {
             continue;
         }
         // Drop warnings the project's `lint.allow` covers (manifest-wide).
@@ -2873,7 +2884,12 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         // diagnostic list at severity 2), but we count it against the
         // error budget so the build refuses.
         let promoted: bool = d.severity == 2 && _is_lint_promoted(d.code);
-        print_pretty_diag(d, src_text, dpath);
+        // Imported-file diagnostics need their OWN source text for the caret.
+        let mut dsnip: string = src_text;
+        if !dpath.eq(src_path) {
+            dsnip = read_file(dpath);
+        }
+        print_pretty_diag(d, dsnip, dpath);
         if d.severity == 1 || promoted {
             errors = errors + 1;
         }

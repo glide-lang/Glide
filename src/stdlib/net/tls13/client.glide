@@ -252,7 +252,7 @@ fn _tls13_client_handshake_body(conn: *TlsConn, host: string,
     let ecdhe: !string = x25519(sk, sh.unwrap().server_key_share);
     if !ecdhe.is_ok() { return err(ecdhe.unwrap_err()); }
     let cipher: i32 = sh.unwrap().cipher_suite;
-    let keylen: i32 = 16;
+    let mut keylen: i32 = 16;
     conn.aead = AEAD_AES128_GCM;
     if cipher == TLS_CHACHA20_POLY1305_SHA256 { conn.aead = AEAD_CHACHA20_POLY1305; keylen = 32; }
     else if cipher != TLS_AES_128_GCM_SHA256 { return err("tls13: unsupported cipher suite"); }

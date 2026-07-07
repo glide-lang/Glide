@@ -977,7 +977,7 @@ impl TlsStream {
         if ips.len() == 0 { return err("tls: no addresses for ".concat(host)); }
 
         let last_err: string = "tls: connect failed";
-        let verify_int: i32 = 0;
+        let mut verify_int: i32 = 0;
         if cfg.verify { verify_int = 1; }
 
         for let i: i32 = 0; i < ips.len(); i++ {

@@ -635,7 +635,7 @@ fn _jp_object(p: *JsonParser) -> *JsonValue {
         if k == null { return obj; }
         _jp_skip_ws(p);
         if _jp_peek(p) == 58 { p.pos = p.pos + 1; }
-        let v: *JsonValue = _jp_value(p);
+        let mut v: *JsonValue = _jp_value(p);
         if v == null { v = JsonValue::null(); }
         obj.obj_keys.push(k.s);
         obj.obj_vals.push(*v);

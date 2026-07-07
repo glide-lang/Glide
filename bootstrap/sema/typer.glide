@@ -902,6 +902,16 @@ pub struct Typer {
     // (_canon_decls / pre_register / build_visibility) is still whole-program,
     // so cross-file resolution is unchanged. Empty ("") = full checking (CLI).
     pub user_origin: string,
+    // The CLI entry file being compiled. Unlike user_origin (which SKIPS
+    // imported bodies), this only scopes the visibility/scope checks
+    // (`unknown-name`, `type-not-in-scope`, module-path-allowed): those rules
+    // apply to the entry file only. Imported files still get their BODIES
+    // checked whole-program (real type/borrow/mut errors surface), but their
+    // import-scope is trusted — the per-file visibility map does not model
+    // transitive/wildcard re-exports well enough to judge them without false
+    // positives, and each file's own scope is validated when IT is the entry.
+    // Empty ("") = enforce visibility everywhere (the old whole-program mode).
+    pub entry_origin: string,
     // Per-file visibility: `<origin>::<name>` -> bool. A name is visible
     // from file `F` only if it appears in `F`'s visibility set. Selective
     // imports (`import a::b::c::Item;`) populate this; src/builtins/ pub
@@ -1701,6 +1711,7 @@ impl Typer {
         t.impl_type_params = null;
         t.current_origin = "";
         t.user_origin = "";
+        t.entry_origin = "";
         let vis: *HashMap<bool> = HashMap::new();
         t.visibility = vis;
         let mi: *HashMap<bool> = HashMap::new();
@@ -1745,6 +1756,13 @@ impl Typer {
         if !self.enforce_visibility {
             return true;
         }
+        // Visibility is an entry-file concern: an imported file's own scope was
+        // validated when it was authored/checked, and the per-file map can't
+        // judge its transitive imports without false positives. So trust any
+        // file that isn't the entry.
+        if self.entry_origin != null && !self.entry_origin.eq("") && self.current_origin != null && !self.current_origin.eq(self.entry_origin) {
+            return true;
+        }
         if self.current_origin == null || self.current_origin.eq("") {
             return true;
         }
@@ -1767,6 +1785,11 @@ impl Typer {
             return true;
         }
         if self.module_full_paths.contains(prefix) {
+            return true;
+        }
+        // Same entry-file scoping as is_visible: trust imported files' own
+        // module qualifiers (validated when they are the entry).
+        if self.entry_origin != null && !self.entry_origin.eq("") && self.current_origin != null && !self.current_origin.eq(self.entry_origin) {
             return true;
         }
         if self.current_origin == null || self.current_origin.eq("") {
@@ -4613,9 +4636,15 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
             final_ty = val_ty;
         }
     }
+    // A `let` with NO initializer (`let v: T;`) is a deferred-init slot: its
+    // later `v = …` assignments are initialization, not mutation, so they are
+    // allowed without `mut` (the `let v; if c { v = a } else { v = b }` idiom,
+    // sound like Rust's definite assignment). A `let` WITH an initializer stays
+    // immutable — reassigning it needs `mut`.
+    let _deferred_init: bool = s.let_value == null && (s.let_names == null || s.let_names.len() == 0);
     if final_ty != null {
         t.scope.insert(s.name, *final_ty);
-        _reg_mut(t, s.name, s.is_mut, s.name_line, s.name_col);
+        _reg_mut(t, s.name, s.is_mut || _deferred_init, s.name_line, s.name_col);
         if is_auto_owned {
             t.owned_locals.insert(s.name, true);
         }
@@ -4626,7 +4655,7 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
         // placeholder is treated as compatible-with-anything in types_compat.
         let placeholder: *Type = ty_named("__unknown__");
         t.scope.insert(s.name, *placeholder);
-        _reg_mut(t, s.name, s.is_mut, s.name_line, s.name_col);
+        _reg_mut(t, s.name, s.is_mut || _deferred_init, s.name_line, s.name_col);
         if is_auto_owned {
             t.owned_locals.insert(s.name, true);
         }
@@ -4785,7 +4814,7 @@ fn check_spawn(t: *Typer, s: *Stmt) {
     if call.args == null {
         return;
     }
-    let kind: string = "spawn";
+    let mut kind: string = "spawn";
     if s.is_spawn_thread {
         kind = "spawn_thread";
     }
@@ -4924,6 +4953,19 @@ fn _is_surviving_builtin_macro(name: string) -> bool {
         || name.eq("pkg") || name.eq("cfg") || name.eq("env") || name.eq("stringify");
 }
 
+// `*void` — the type of a bare `null` literal.
+fn _is_void_ptr(ty: *Type) -> bool {
+    return ty != null && ty.kind == TY_POINTER && ty.inner != null && ty.inner.kind == TY_NAMED && ty.inner.name.eq("void");
+}
+
+// A pointer-ish (nullable) type that a `null` may stand in for.
+fn _is_ptr_like(ty: *Type) -> bool {
+    if ty == null {
+        return false;
+    }
+    return ty.kind == TY_POINTER || ty.kind == TY_BORROW || ty.kind == TY_BORROW_MUT;
+}
+
 pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
     if e == null {
         return null;
@@ -4975,7 +5017,13 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         }
         let then_ty: *Type = infer_expr(t, e.rhs);
         let else_ty: *Type = infer_expr(t, e.operand);
-        if then_ty != null && else_ty != null && !type_eq(then_ty, else_ty) {
+        // `null` (typed `*void`) unifies with any pointer branch — `if c {
+        // g.lookup(x) } else { null }` yields `*Type`, not a mismatch. Skip
+        // when one side is null-typed and the other is pointer-ish.
+        let then_null: bool = _is_void_ptr(then_ty);
+        let else_null: bool = _is_void_ptr(else_ty);
+        let null_ok: bool = (then_null && _is_ptr_like(else_ty)) || (else_null && _is_ptr_like(then_ty));
+        if then_ty != null && else_ty != null && !type_eq(then_ty, else_ty) && !null_ok {
             t.push_diag(e.line, e.column, 1, "if-branch-type-mismatch", "`if` branches produce different types: `".concat(type_to_string(then_ty)).concat("` vs `").concat(type_to_string(else_ty)).concat("`"));
         }
         if then_ty != null {
@@ -5285,7 +5333,7 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         if op == OP_COALESCE {
             // `??` extracts the inner of an Option/Result/nullable. Result
             // type matches the LHS inner; the RHS supplies the fallback.
-            let inner_lt: *Type = lt;
+            let mut inner_lt: *Type = lt;
             if lt != null && (lt.kind == TY_OPTION || lt.kind == TY_RESULT || lt.kind == TY_OPT_RESULT) {
                 inner_lt = lt.inner;
             }
@@ -5333,8 +5381,8 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         // `f32`), the whole expression takes the wider type. Without this
         // `2 * NANOS_PER_HOUR` infers `int` from the literal and overflows
         // (or formats with `%d` instead of `%lld`) downstream.
-        let lname: string = "";
-        let rname: string = "";
+        let mut lname: string = "";
+        let mut rname: string = "";
         if lt != null && lt.kind == TY_NAMED {
             lname = lt.name;
         }
@@ -5884,9 +5932,14 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                         if msig.type_params != null && msig.type_params.len() > 0 && _type_references_any(substituted, msig.type_params) {
                             let subst_params: *Vector<Param> = Vector::new();
                             for let i: i32 = 0; i < params_after_self.len(); i++ {
-                                let p: Param = params_after_self.get(i);
-                                let np: Param = p;
-                                np.ty = _subst_type_local(p.ty, msig.owner_type_params, stripped.args);
+                                // Copy the param, then rewrite its type. `let np
+                                // = p` on a value struct with a `string` field
+                                // trips the move tracker (POD-copy of string-
+                                // bearing structs is entangled with the string
+                                // memory model), so mutate the fresh copy in
+                                // place instead of aliasing a second binding.
+                                let mut np: Param = params_after_self.get(i);
+                                np.ty = _subst_type_local(np.ty, msig.owner_type_params, stripped.args);
                                 subst_params.push(np);
                             }
                             substituted = _infer_method_tparams(substituted, msig.type_params, subst_params, user_arg_types);

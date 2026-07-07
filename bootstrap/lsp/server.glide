@@ -1607,7 +1607,7 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     if old_arena != null {
         // Null this doc's stmts before the free (it's rebuilt below); other
         // docs are untouched because their AST lives in their own arenas.
-        let d0: LspDoc = state.docs.get(uri);
+        let mut d0: LspDoc = state.docs.get(uri);
         d0.stmts = null;
         d0.arena = null;
         state.docs.insert(uri, d0);
@@ -1723,7 +1723,7 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     // stmts remain valid for hover / completion / goto on the same
     // doc. Other docs' stmts are now dangling.
     if state.docs.contains(uri) {
-        let d: LspDoc = state.docs.get(uri);
+        let mut d: LspDoc = state.docs.get(uri);
         d.stmts = stmts;
         d.pre_expand_stmts = pre_expand_stmts;
         d.macro_defs = macro_defs;
@@ -1760,7 +1760,7 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     let final_arena: *void = __glide_palloc_get();
     state.last_arena = final_arena;
     if state.docs.contains(uri) {
-        let da: LspDoc = state.docs.get(uri);
+        let mut da: LspDoc = state.docs.get(uri);
         da.arena = final_arena;
         state.docs.insert(uri, da);
     }
@@ -1780,7 +1780,7 @@ fn handle_did_open(req: *JsonValue, state: *LspState) {
     // (jp_string_value's substring or jp_unescape's heap buffer).
     // json_free at end of lsp_main only frees tree wrappers, not leaf
     // strings, so retaining the pointer on doc keeps it alive.
-    let prev_text: string = "";
+    let mut prev_text: string = "";
     let mut prev_arena: *void = null;
     if state.docs.contains(uri) {
         let prev: LspDoc = state.docs.get(uri);
@@ -1843,7 +1843,7 @@ fn _lsp_cache_doc(state: *LspState, path: string, text: string) {
     p.free();
     lex.free();
     for let i: i32 = 0; i < parsed_raw.len(); i++ {
-        let s: Stmt = parsed_raw.get(i);
+        let mut s: Stmt = parsed_raw.get(i);
         s.origin = heap_key;
         parsed_raw.set(i, s);
     }
@@ -1928,8 +1928,8 @@ fn handle_did_change(req: *JsonValue, state: *LspState) {
     if !applied {
         return;
     }
-    let prev_stmts: *Vector<Stmt> = null;
-    let prev_text: string = "";
+    let mut prev_stmts: *Vector<Stmt> = null;
+    let mut prev_text: string = "";
     let mut prev_arena2: *void = null;
     if state.docs.contains(uri) {
         let prev: LspDoc = state.docs.get(uri);
@@ -1959,7 +1959,7 @@ fn handle_did_close(req: *JsonValue, state: *LspState) {
     let params: *JsonValue = json_get(req, "params");
     let td: *JsonValue = json_get(params, "textDocument");
     let uri: string = json_as_string(json_get(td, "uri"));
-    let prev_text: string = "";
+    let mut prev_text: string = "";
     let mut prev_arena3: *void = null;
     if state.docs.contains(uri) {
         let prev: LspDoc = state.docs.get(uri);
