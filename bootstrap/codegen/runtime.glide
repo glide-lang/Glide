@@ -774,7 +774,7 @@ fn _emit_result_template(g: *CG, inner: *Type) {
     g.module_aliases.insert(dedup_key, "1");
     emit_tuple_typedefs_in_type(g, inner);
     let tc: string = type_to_c(inner);
-    let tmpl: string = "#ifndef __GLIDE_RESULT_@M@_GUARD\n#define __GLIDE_RESULT_@M@_GUARD\ntypedef struct __glide_result_@M@_t { int ok; @TC@ val; const char* err; } __glide_result_@M@_t;\nstatic __glide_result_@M@_t __glide_ok_@M@(@TC@ v) { __glide_result_@M@_t r; r.ok = 1; r.val = v; r.err = (const char*)0; return r; }\nstatic __glide_result_@M@_t __glide_err_@M@(const char* msg) { __glide_result_@M@_t r; r.ok = 0; r.err = msg; return r; }\nstatic @TC@ __glide_unwrap_@M@(__glide_result_@M@_t r) { @TC@ z; if (r.ok) return r.val; memset(&z, 0, sizeof(z)); return z; }\n#endif\n";
+    let tmpl: string = "#ifndef __GLIDE_RESULT_@M@_GUARD\n#define __GLIDE_RESULT_@M@_GUARD\ntypedef struct __glide_result_@M@_t { int ok; @TC@ val; const char* err; } __glide_result_@M@_t;\nstatic __glide_result_@M@_t __glide_ok_@M@(@TC@ v) { __glide_result_@M@_t r; r.ok = 1; r.val = v; r.err = (const char*)0; return r; }\nstatic __glide_result_@M@_t __glide_err_@M@(const char* msg) { __glide_result_@M@_t r; r.ok = 0; r.err = msg; return r; }\nstatic @TC@ __glide_unwrap_@M@(__glide_result_@M@_t r) { if (!r.ok) __glide_panic(\"called `unwrap()` on an err value\", \"\", 0); return r.val; }\n#endif\n";
     // `!void` uses a different template (no `val` field). Fall back to
     // emit_result_runtime by NOT emitting here; the later pass picks it up.
     if inner.kind == TY_NAMED && inner.name.eq("void") {
@@ -1061,7 +1061,7 @@ fn _emit_one_result(g: *CG, t: *Type) {
     }
     emit_tuple_typedefs_in_type(g, t);
     let tc: string = type_to_c(t);
-    let tmpl: string = "#ifndef __GLIDE_RESULT_@M@_GUARD\n#define __GLIDE_RESULT_@M@_GUARD\ntypedef struct __glide_result_@M@_t { int ok; @TC@ val; const char* err; } __glide_result_@M@_t;\nstatic __glide_result_@M@_t __glide_ok_@M@(@TC@ v) { __glide_result_@M@_t r; r.ok = 1; r.val = v; r.err = (const char*)0; return r; }\nstatic __glide_result_@M@_t __glide_err_@M@(const char* msg) { __glide_result_@M@_t r; r.ok = 0; r.err = msg; return r; }\nstatic @TC@ __glide_unwrap_@M@(__glide_result_@M@_t r) { @TC@ z; if (r.ok) return r.val; memset(&z, 0, sizeof(z)); return z; }\n#endif\n";
+    let tmpl: string = "#ifndef __GLIDE_RESULT_@M@_GUARD\n#define __GLIDE_RESULT_@M@_GUARD\ntypedef struct __glide_result_@M@_t { int ok; @TC@ val; const char* err; } __glide_result_@M@_t;\nstatic __glide_result_@M@_t __glide_ok_@M@(@TC@ v) { __glide_result_@M@_t r; r.ok = 1; r.val = v; r.err = (const char*)0; return r; }\nstatic __glide_result_@M@_t __glide_err_@M@(const char* msg) { __glide_result_@M@_t r; r.ok = 0; r.err = msg; return r; }\nstatic @TC@ __glide_unwrap_@M@(__glide_result_@M@_t r) { if (!r.ok) __glide_panic(\"called `unwrap()` on an err value\", \"\", 0); return r.val; }\n#endif\n";
     let s1: string = _cg_replace(tmpl, "@M@", m);
     let s2: string = _cg_replace(s1, "@TC@", tc);
     print!(s2);

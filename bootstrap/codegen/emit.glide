@@ -697,12 +697,14 @@ fn _emit_opt_res_method(g: *CG, e: *Expr) -> bool {
     }
     if mname.eq("unwrap") && nargs == 0 {
         let mut kind: string = "err";
+        let mut article: string = "an";
         if is_opt {
             kind = "none";
+            article = "a";
         }
         // Build the message literal in one piece — multi-arg print! joins with
         // spaces, which would land inside the C string literal.
-        let pmsg: string = "\"called `unwrap()` on a ".concat(kind).concat(" value\"");
+        let pmsg: string = "\"called `unwrap()` on ".concat(article).concat(" ").concat(kind).concat(" value\"");
         print!("({ ", cty, " __v = ", derefs, "(");
         emit_expr(g, recv_e);
         print!("); if (!__v.", flag, ") __glide_panic(", pmsg, ", \"\", ", line, "); __v.val; })");
