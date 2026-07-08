@@ -6215,6 +6215,19 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 }
                 if !mkey.eq("") {
                     let msig: FnSig = t.fns.get(mkey);
+                    // A `&mut self` method call IS an implicit `&mut <recv>`:
+                    // the explicit form already errors on an immutable binding
+                    // (assign-immutable), but the receiver sugar bypassed it —
+                    // `let node = …; node.insert(x)` mutated a plain let.
+                    // Pointer/&mut receivers stay exempt (pointee write, the
+                    // documented carve-out: `v.push(…)` on `let v` is legal).
+                    if msig.params != null && msig.params.len() > 0 {
+                        let _selfp: Param = msig.params.get(0);
+                        if _selfp.ty != null && _selfp.ty.kind == TY_BORROW_MUT
+                            && recv_ty != null && recv_ty.kind != TY_POINTER && recv_ty.kind != TY_BORROW_MUT {
+                            _check_immutable_write(t, e.lhs.lhs, "call the `&mut self` method `".concat(mname).concat("` on"));
+                        }
+                    }
                     // `impl<T: Bound> Type<T>` bounds enforce at the method
                     // call: the receiver's concrete type args must satisfy
                     // the impl's declared bounds — parsed-and-dropped bounds

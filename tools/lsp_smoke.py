@@ -2149,6 +2149,17 @@ case_diagnostics("using a &mut binder after copying it is use-after-move",
     '    a.v = 2;\n    return b.v;\n}',
     expect_codes_present=["use-after-move"])
 
+case_diag_message("calling a &mut self method on an immutable binding is rejected",
+    'struct P { v: i32 }\n'
+    'impl P {\n'
+    '    pub fn bump(&mut self) { self.v = self.v + 1; }\n'
+    '}\n'
+    'fn main() {\n'
+    '    let p: P = P { v: 1 };\n'
+    '    p.bump();\n'
+    '}',
+    "cannot call the `&mut self` method `bump` on `p`")
+
 case_diag_message("generic method arg checked against the ctor-inferred T",
     'struct LL<T> { next: ?Box<LL<T>>, data: T }\n'
     'impl<T> LL<T> {\n'
