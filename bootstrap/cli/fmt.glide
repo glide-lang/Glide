@@ -981,8 +981,12 @@ fn fmt_fn(s: *Stmt, depth: i32) -> string {
             }
             if _imp_printed { continue; }
             // The receiver renders Rust-style — `self`, `&self`, or
-            // `&mut self`; the annotation carries no information beyond the
-            // borrow kind (the type is always the impl target).
+            // `&mut self` — ONLY for pointer/borrow receivers, where the
+            // annotation carries no information beyond the borrow kind. A
+            // VALUE receiver (`self: ErrorKind`, stdlib errors/time) keeps
+            // its annotation: bare `self` reads as the pointer form, so
+            // collapsing it would silently flip copy-semantics methods to
+            // in-place.
             if i == 0 && p.name != null && p.name.eq("self") {
                 if p.ty != null && p.ty.kind == TY_BORROW_MUT {
                     head = head.concat("&mut self");
@@ -990,7 +994,11 @@ fn fmt_fn(s: *Stmt, depth: i32) -> string {
                     if p.ty != null && p.ty.kind == TY_BORROW {
                         head = head.concat("&self");
                     } else {
-                        head = head.concat("self");
+                        if p.ty != null && p.ty.kind == TY_POINTER {
+                            head = head.concat("self");
+                        } else {
+                            head = head.concat("self: ").concat(fmt_type(p.ty));
+                        }
                     }
                 }
             } else {
