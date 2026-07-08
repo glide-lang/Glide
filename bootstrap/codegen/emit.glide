@@ -6525,7 +6525,17 @@ pub fn emit_expr(g: *CG, e: *Expr) {
         return;
     }
     if e.kind == EX_STRUCT_LIT {
-        print!("((", e.str_val, "){");
+        // A generic struct-lit inside a mono'd method body still carries the
+        // TEMPLATE name in str_val (`Self { .. }` -> `LinkedList { .. }`); the
+        // C tag must be the mono. subst_expr leaves the concrete generic on
+        // cast_to — mangle from it. (The let-hint path pre-mangles str_val for
+        // annotated lets; this covers assignment / field / argument positions,
+        // which emitted the raw template name — invalid C.)
+        let mut lit_name: string = e.str_val;
+        if e.cast_to != null && e.cast_to.kind == TY_GENERIC && g.generic_structs.contains(e.str_val) {
+            lit_name = mangle_generic(e.cast_to.name, e.cast_to.args);
+        }
+        print!("((", lit_name, "){");
         if e.field_names != null && e.args != null {
             for let i: i32 = 0; i < e.args.len(); i++ {
                 if i > 0 {
