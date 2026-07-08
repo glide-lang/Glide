@@ -420,7 +420,9 @@ fn find_macro_in_impl_anywhere(stmts: *Vector<Stmt>, name: string) -> ImplMethod
             if !m.name.eq(name) {
                 continue;
             }
-            let p: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+            // Request-arena copy (was malloc: flagged unfreed — the hit only
+            // needs to outlive this LSP request, which the arena guarantees).
+            let p: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
             *p = m;
             if (p.origin == null || p.origin.eq("")) && s.origin != null {
                 p.origin = s.origin;
@@ -674,7 +676,8 @@ pub fn find_method_anywhere(stmts: *Vector<Stmt>, method_name: string) -> ImplMe
             if !m.name.eq(method_name) {
                 continue;
             }
-            let p: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+            // Request-arena copy (see find-anywhere above).
+            let p: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
             *p = m;
             if (p.origin == null || p.origin.eq("")) && s.origin != null {
                 p.origin = s.origin;
@@ -2760,13 +2763,19 @@ pub fn handle_inlay_hint(req: *JsonValue, state: *LspState) {
     for let i: i32 = 0; i < doc.stmts.len(); i++ {
         let s: Stmt = doc.stmts.get(i);
         let own: bool = s.origin == null || s.origin.eq("") || s.origin.eq(dpath);
+        // Foreign-origin fns (builtins / imported files in the doc's closure)
+        // must not emit ANY inlays: their stmts carry line numbers from THEIR
+        // source, which land on arbitrary lines of this document — `moves
+        // out` / type hints appeared on comments and closing braces. `own`
+        // used to gate only the param-name hints.
+        if !own {
+            continue;
+        }
         if s.kind == ST_FN && s.fn_body != null {
             let host: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
             *host = s;
             _collect_inlay_lets(doc.stmts, host, s.fn_body, s.fn_body, lines, line_start, line_end, hints, state);
-            if own {
-                _collect_param_inlays(doc.stmts, s.fn_body, dpath, line_start, line_end, hints);
-            }
+            _collect_param_inlays(doc.stmts, s.fn_body, dpath, line_start, line_end, hints);
         } else {
             if s.kind == ST_IMPL && s.impl_methods != null {
                 for let j: i32 = 0; j < s.impl_methods.len(); j++ {
@@ -2775,9 +2784,7 @@ pub fn handle_inlay_hint(req: *JsonValue, state: *LspState) {
                         let mh: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
                         *mh = m;
                         _collect_inlay_lets(doc.stmts, mh, m.fn_body, m.fn_body, lines, line_start, line_end, hints, state);
-                        if own {
-                            _collect_param_inlays(doc.stmts, m.fn_body, dpath, line_start, line_end, hints);
-                        }
+                        _collect_param_inlays(doc.stmts, m.fn_body, dpath, line_start, line_end, hints);
                     }
                 }
             }
@@ -5008,14 +5015,6 @@ fn _collect_closure_params_in_expr(e: *Expr, line0: i32, out: *Vector<Param>) {
     }
 }
 
-fn lsp_strip_quotes(s: string) -> string {
-    let n: i32 = s.len();
-    if n >= 2 && s.at(0).to_int() == 34 && s.at(n - 1).to_int() == 34 {
-        return s.substring(1, n - 1);
-    }
-    return s;
-}
-
 // Walk back from (line0, col0) and skip any partial identifier the user is
 // typing. Returns the cursor position just before that partial.
 pub fn cursor_before_partial(text: string, line0: i32, col0: i32) -> i32 {
@@ -5715,7 +5714,7 @@ fn _module_header_comment(file: string) -> string {
 // On an import line, the module path truncated at the hovered segment,
 // resolved to a file: `import stdlib::http::client;` hovered at `http`
 // yields the resolved path of `stdlib/http.glide` ("" when none resolves).
-fn _import_segment_file(text: string, line0: i32, col0: i32, word: string) -> string {
+fn _import_segment_file(text: string, line0: i32, _col0: i32, word: string) -> string {
     // slice the line
     let mut ln: i32 = 0;
     let mut start: i32 = 0;
@@ -5744,7 +5743,7 @@ fn _import_segment_file(text: string, line0: i32, col0: i32, word: string) -> st
     if wi < 0 {
         return "";
     }
-    let mut p: string = after.substring(0, wi + word.len());
+    let p: string = after.substring(0, wi + word.len());
     // strip spaces
     let mut cleaned: string = "";
     for let i: i32 = 0; i < p.len(); i++ {
