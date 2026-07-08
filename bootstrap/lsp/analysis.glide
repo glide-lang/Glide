@@ -490,7 +490,6 @@ fn subst_self(t: *Type, impl_target: *Type) -> *Type {
         copy.fnptr_ret = subst_self(copy.fnptr_ret, impl_target);
     }
     return copy;
-    return t;
 }
 
 // Walk a fn body collecting let names, then walk again to find references.

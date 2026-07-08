@@ -1742,11 +1742,6 @@ fn run_proc_passes(program: *Vector<Stmt>) -> *Vector<Stmt> {
     return cur;
 }
 
-fn expand_with_def(call: *Expr, def: *Stmt) -> *Vector<Stmt> {
-    let no_recv: *Expr = null;
-    return expand_with_def_recv(call, def, no_recv);
-}
-
 // Walk a macro body and record every name it declares (`let`/`const`, incl.
 // for-init), mapping each to `<name><suffix>`. These are the names hygiene
 // renames; references to them are rewritten during substitution. `$param`

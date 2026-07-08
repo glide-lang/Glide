@@ -7859,23 +7859,6 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
 
 // ---- top-level -----------------------------------------------------------
 
-// Resolve a possibly-qualified path to its short C-symbol form. If `prefix`
-// is empty the path is already bare; otherwise we look up `<prefix>::<name>`
-// in the alias table and return the registered short name. Falls back to the
-// last-segment of `prefix` (e.g. `Vector` from `stdlib::vector::Vector`)
-// when no alias matches — that lets new user-written paths still resolve to
-// the existing flat naming as long as the trailing type name is unique.
-fn resolve_path_alias(g: *CG, prefix: string, name: string) -> string {
-    if prefix == null || prefix.eq("") {
-        return name;
-    }
-    let qual: string = prefix.concat("::").concat(name);
-    if g.module_aliases.contains(qual) {
-        return g.module_aliases.get(qual);
-    }
-    return name;
-}
-
 // Resolve the type-prefix of a multi-segment path (e.g. for
 // `stdlib::vector::Vector::new`, `prefix` is `stdlib::vector::Vector` and we
 // want `Vector` back). Used by EX_PATH normalisation in expression handlers.

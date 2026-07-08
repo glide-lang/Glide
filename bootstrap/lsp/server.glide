@@ -132,7 +132,6 @@ extern fn __glide_cwd() -> string;
 import bootstrap::pkg::loader::*;
 import bootstrap::lsp::analysis::*; // custom analysis/lint passes (extracted)
 import bootstrap::lsp::completion::*; // extracted
-import bootstrap::lsp::features::*; // extracted
 
 // ---- Document store ----------------------------------------------------
 pub struct LspDoc {
@@ -1222,28 +1221,6 @@ fn _fp_walk_glide_files_content(dir: string, out: *string) {
         }
         _fp_walk_glide_files_content(dir.concat("/").concat(sub), out);
     }
-}
-
-// Read the `name` field from `<root>/glide.glide` so the project's
-// own modules live under the user-chosen namespace (e.g. `my_app`).
-// Falls back to the directory's basename for malformed manifests.
-fn _project_namespace(root: string) -> string {
-    let m: *Manifest = read_manifest(root);
-    if m != null && !m.name.eq("") {
-        return m.name;
-    }
-    // basename(root) fallback.
-    let mut cut: i32 = -1;
-    for let i: i32 = 0; i < root.len(); i++ {
-        let c: i32 = root.at(i).to_int();
-        if c == 47 || c == 92 {
-            cut = i;
-        }
-    }
-    if cut < 0 || cut + 1 >= root.len() {
-        return "project";
-    }
-    return root.substring(cut + 1, root.len());
 }
 
 // Parse one source file and append every pub item to `target`, plus

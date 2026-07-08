@@ -234,12 +234,6 @@ fn jp_peek(p: *JsonParser) -> i32 {
     return p.src.at(p.pos).to_int();
 }
 
-fn jp_advance(p: *JsonParser) -> i32 {
-    let c: i32 = jp_peek(p);
-    p.pos = p.pos + 1;
-    return c;
-}
-
 fn jp_skip_ws(p: *JsonParser) {
     while p.pos < p.n {
         let c: i32 = jp_peek(p);

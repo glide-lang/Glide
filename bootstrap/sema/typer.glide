@@ -4922,7 +4922,7 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
         // Marked AFTER inferring the RHS so the read on this line is not
         // itself flagged.
         if s.kind == ST_LET && s.let_value != null && s.let_value.kind == EX_IDENT {
-            let mut _rebind_moves: bool = t.owned_locals.contains(s.let_value.str_val) || t.call_owned.contains(s.let_value.str_val);
+            let _rebind_moves: bool = t.owned_locals.contains(s.let_value.str_val) || t.call_owned.contains(s.let_value.str_val);
             // Value semantics (2B/2D): a non-POD struct rebind `let b = a` is
             // ALWAYS a copy — never a move-error. A CONTAINED copy leaves the
             // source droppable exactly once (codegen free-once); a copy that

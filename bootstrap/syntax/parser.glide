@@ -814,30 +814,6 @@ fn parse_fn(p: *Parser) -> *Stmt {
     return s;
 }
 
-fn parse_type_params(p: *Parser) -> *Vector<string> {
-    let tps: *Vector<string> = Vector::new();
-    if !p.eat_op("<") {
-        return tps;
-    }
-    while !p.at_op(">") && !p.at_eof() {
-        let name: string = p.expect_ident();
-        tps.push(name);
-        // Optional bounds: `T: Trait1 + Trait2`. Discarded here; the caller
-        // version `parse_type_params_with_bounds` is what records them.
-        if p.eat_op(":") {
-            let _b: string = p.expect_ident();
-            while p.eat_op("+") {
-                let _nb: string = p.expect_ident();
-            }
-        }
-        if !p.eat_op(",") {
-            break;
-        }
-    }
-    p.expect_op(">");
-    return tps;
-}
-
 // Same as parse_type_params, but also fills `bounds_out` in lockstep with
 // the returned name list. Each slot is a `+`-joined string of trait names
 // (or `""` for an unbounded slot). Use this in the parse paths that record

@@ -7142,62 +7142,6 @@ fn _impl_written_methods(text: string, line0: i32, done: *HashMap<bool>) {
     }
 }
 
-// The target type of the enclosing `impl … for <Target> {` header// The target type of the enclosing `impl … for <Target> {` header (the bare
-// type name), or "" — companion to _enclosing_impl_trait.
-fn _enclosing_impl_target(text: string, line0: i32) -> string {
-    let mut ln: i32 = 0;
-    let mut cur: i32 = 0;
-    let starts: *Vector<string> = Vector::new();
-    let n: i32 = text.len();
-    let mut line_start: i32 = 0;
-    while cur <= n && ln <= line0 {
-        if cur == n || text.at(cur).to_int() == 10 {
-            starts.push(text.substring(line_start, cur));
-            line_start = cur + 1;
-            ln = ln + 1;
-        }
-        cur = cur + 1;
-    }
-    for let i: i32 = starts.len() - 1; i >= 0; i = i - 1 {
-        let line: string = starts.get(i);
-        let mut j: i32 = 0;
-        while j < line.len() && (line.at(j).to_int() == 32 || line.at(j).to_int() == 9) {
-            j = j + 1;
-        }
-        let rest: string = line.substring(j, line.len());
-        if rest.starts_with("impl ") || rest.starts_with("impl<") {
-            let fi: i32 = rest.index_of(" for ");
-            if fi < 0 {
-                return "";
-            }
-            let mut tail: string = rest.substring(fi + 5, rest.len());
-            // stop at the first `{`, whitespace, or generic bracket
-            let mut out: string = "";
-            for let k: i32 = 0; k < tail.len(); k++ {
-                let c: i32 = tail.at(k).to_int();
-                if c == 32 || c == 9 || c == 123 || c == 60 {
-                    break;
-                }
-                out = out.concat(tail.substring(k, k + 1));
-            }
-            // drop a module qualifier on the target too
-            let mut cc: i32 = -1;
-            for let z: i32 = 0; z + 1 < out.len(); z++ {
-                if out.at(z).to_int() == 58 && out.at(z + 1).to_int() == 58 {
-                    cc = z;
-                }
-            }
-            if cc >= 0 {
-                out = out.substring(cc + 2, out.len());
-            }
-            return out;
-        }
-        if line.len() > 0 && line.at(0).to_int() == 125 {
-            return "";
-        }
-    }
-    return "";
-}
 
 fn _enclosing_impl_trait(text: string, line0: i32) -> string {
     let mut ln: i32 = 0;
@@ -7234,7 +7178,7 @@ fn _enclosing_impl_trait(text: string, line0: i32) -> string {
                 }
                 hs = gc + 1;
             }
-            let mut tn: string = rest.substring(hs, fi);
+            let tn: string = rest.substring(hs, fi);
             let mut cleaned: string = "";
             for let k: i32 = 0; k < tn.len(); k++ {
                 let c: i32 = tn.at(k).to_int();

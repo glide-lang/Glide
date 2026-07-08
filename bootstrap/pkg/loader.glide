@@ -338,7 +338,7 @@ fn peel_child_module_items(stmts: *Vector<Stmt>, s: *Stmt, resolved: string, dir
 // (`<short>::<child>::…`) are loaded — each also pushed as a synthesized
 // module import so the short form (`client::X`) works exactly like a
 // hand-written `import stdlib::http::client;`.
-fn load_referenced_pkg_children(stmts: *Vector<Stmt>, src_in: string, origin: string, imp_unq: string, short: string, resolved: string, loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>, cache: *HashMap<*Vector<Stmt>>) {
+fn load_referenced_pkg_children(stmts: *Vector<Stmt>, src_in: string, origin: string, _imp_unq: string, short: string, resolved: string, loaded: *HashMap<bool>, pdiags: *Vector<ParseDiag>, cache: *HashMap<*Vector<Stmt>>) {
     if short == null || short.eq("") || !resolved.ends_with(".glide") {
         return;
     }
