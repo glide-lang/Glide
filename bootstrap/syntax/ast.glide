@@ -429,42 +429,18 @@ pub struct Stmt {
 // null strings, which crash downstream walks. Procedural macros call
 // this on every Stmt they emit before splicing it into the program.
 pub fn ast_fill_defaults(s: *Stmt) {
-    if s == null {
-        return;
-    }
-    if s.origin == null {
-        s.origin = "";
-    }
-    if s.doc_comment == null {
-        s.doc_comment = "";
-    }
-    if s.name == null {
-        s.name = "";
-    }
-    if s.cfg_target == null {
-        s.cfg_target = "";
-    }
-    if s.impl_trait_name == null {
-        s.impl_trait_name = "";
-    }
-    if s.import_path == null {
-        s.import_path = "";
-    }
-    if s.import_short == null {
-        s.import_short = "";
-    }
-    if s.import_mod_line < 0 {
-        s.import_mod_line = 0;
-    }
-    if s.import_mod_col < 0 {
-        s.import_mod_col = 0;
-    }
-    if s.import_mod_name == null {
-        s.import_mod_name = "";
-    }
-    if s.macro_rep_sep == null {
-        s.macro_rep_sep = "";
-    }
+    if s == null { return; }
+    if s.origin == null { s.origin = ""; }
+    if s.doc_comment == null { s.doc_comment = ""; }
+    if s.name == null { s.name = ""; }
+    if s.cfg_target == null { s.cfg_target = ""; }
+    if s.impl_trait_name == null { s.impl_trait_name = ""; }
+    if s.import_path == null { s.import_path = ""; }
+    if s.import_short == null { s.import_short = ""; }
+    if s.import_mod_line < 0 { s.import_mod_line = 0; }
+    if s.import_mod_col < 0 { s.import_mod_col = 0; }
+    if s.import_mod_name == null { s.import_mod_name = ""; }
+    if s.macro_rep_sep == null { s.macro_rep_sep = ""; }
     if s.attrs == null {
         let v: *Vector<Attr> = Vector::new();
         s.attrs = v;
@@ -626,6 +602,7 @@ pub fn ty_pointer(inner: *Type) -> *Type {
     t.inner = inner;
     return t;
 }
+
 pub fn ty_slice(inner: *Type) -> *Type {
     let t: *Type = __glide_palloc(sizeof(Type)) as *Type;
     t.kind = TY_SLICE;
@@ -655,9 +632,15 @@ pub fn ty_tuple(args: *Vector<Type>) -> *Type {
 // Numeric literal type suffixes (`0i32`, `3u8`, `1.5f32`, `2.0f64`). The lexer
 // folds the suffix into the lexeme; these three helpers split it back out.
 pub fn _is_num_suffix(s: string) -> bool {
-    return s.eq("i8") || s.eq("i16") || s.eq("i32") || s.eq("i64") || s.eq("i128")
-        || s.eq("u8") || s.eq("u16") || s.eq("u32") || s.eq("u64") || s.eq("u128")
-        || s.eq("usize") || s.eq("isize") || s.eq("f32") || s.eq("f64");
+    return s.eq("i8") || s.eq("i16") || s.eq("i32") || s.eq("i64") || s.eq("i128") || s.eq("u8")
+        || s.eq("u16")
+        || s.eq("u32")
+        || s.eq("u64")
+        || s.eq("u128")
+        || s.eq("usize")
+        || s.eq("isize")
+        || s.eq("f32")
+        || s.eq("f64");
 }
 
 // The suffix at the end of a numeric lexeme, or "" if none. Hex/binary
@@ -667,9 +650,7 @@ fn _num_suffix_of(s: string) -> string {
     let n: i32 = s.len();
     if n >= 2 && s.at(0).to_int() == 48 {
         let p: i32 = s.at(1).to_int();
-        if p == 120 || p == 88 || p == 98 || p == 66 {
-            return "";
-        }
+        if p == 120 || p == 88 || p == 98 || p == 66 { return ""; }
     }
     // A suffix is i/u/f followed by digits; scan back over the trailing run.
     let mut k: i32 = n;
@@ -685,35 +666,27 @@ fn _num_suffix_of(s: string) -> string {
         let c: i32 = s.at(k - 1).to_int();
         if c == 105 || c == 117 || c == 102 || c == 122 || c == 115 || c == 101 {
             let cand: string = s.substring(k - 1, n);
-            if _is_num_suffix(cand) {
-                return cand;
-            }
+            if _is_num_suffix(cand) { return cand; }
         }
         // usize / isize end in a letter, not a digit — try the whole tail.
     }
     // Broad fallback: check the known letter-terminal suffixes.
     if s.len() > 5 {
         let tail5: string = s.substring(s.len() - 5, s.len());
-        if tail5.eq("usize") || tail5.eq("isize") {
-            return tail5;
-        }
+        if tail5.eq("usize") || tail5.eq("isize") { return tail5; }
     }
     return "";
 }
 
 pub fn _num_strip_suffix(s: string) -> string {
     let sfx: string = _num_suffix_of(s);
-    if sfx.eq("") {
-        return s;
-    }
+    if sfx.eq("") { return s; }
     return s.substring(0, s.len() - sfx.len());
 }
 
 pub fn _num_suffix_type(s: string) -> *Type {
     let sfx: string = _num_suffix_of(s);
-    if sfx.eq("") {
-        return null;
-    }
+    if sfx.eq("") { return null; }
     return ty_named(sfx);
 }
 
@@ -806,9 +779,7 @@ pub fn stmt_let(name: string, ty: *Type, value: *Expr, is_mut: bool, line: i32, 
 // Strip the lexer's \x02 ///-marker prefixes from a doc block for DISPLAY
 // (hover, completion, glide doc). fmt is the only consumer that keeps them.
 pub fn doc_clean(raw: string) -> string {
-    if raw == null || raw.eq("") {
-        return raw;
-    }
+    if raw == null || raw.eq("") { return raw; }
     let mut out: string = "";
     let n: i32 = raw.len();
     let mut i: i32 = 0;
@@ -828,9 +799,7 @@ pub fn doc_clean(raw: string) -> string {
 }
 
 pub fn int_to_str(n: i64) -> string {
-    if n == 0 {
-        return "0";
-    }
+    if n == 0 { return "0"; }
     let mut x: i64 = n;
     let mut neg: bool = false;
     if x < 0 {
@@ -844,58 +813,32 @@ pub fn int_to_str(n: i64) -> string {
         s = ch.concat(s);
         x = x / 10;
     }
-    if neg {
-        s = "-".concat(s);
-    }
+    if neg { s = "-".concat(s); }
     return s;
 }
 
 pub fn digit_str(d: i32) -> string {
-    if d == 0 {
-        return "0";
-    }
-    if d == 1 {
-        return "1";
-    }
-    if d == 2 {
-        return "2";
-    }
-    if d == 3 {
-        return "3";
-    }
-    if d == 4 {
-        return "4";
-    }
-    if d == 5 {
-        return "5";
-    }
-    if d == 6 {
-        return "6";
-    }
-    if d == 7 {
-        return "7";
-    }
-    if d == 8 {
-        return "8";
-    }
+    if d == 0 { return "0"; }
+    if d == 1 { return "1"; }
+    if d == 2 { return "2"; }
+    if d == 3 { return "3"; }
+    if d == 4 { return "4"; }
+    if d == 5 { return "5"; }
+    if d == 6 { return "6"; }
+    if d == 7 { return "7"; }
+    if d == 8 { return "8"; }
     return "9";
 }
 
 // True if `s` is a non-empty run of ASCII digits. Used to recognise a
 // tuple-index member (`t.0`, `t.12`) where the field name is numeric.
 pub fn tuple_field_is_index(s: string) -> bool {
-    if s == null {
-        return false;
-    }
+    if s == null { return false; }
     let n: i32 = s.len();
-    if n == 0 {
-        return false;
-    }
+    if n == 0 { return false; }
     for let i: i32 = 0; i < n; i++ {
         let c: i32 = s.at(i).to_int();
-        if c < 48 || c > 57 {
-            return false;
-        }
+        if c < 48 || c > 57 { return false; }
     }
     return true;
 }
@@ -914,9 +857,7 @@ pub fn tuple_index_value(s: string) -> i32 {
 // Strip pointer / borrow wrappers from a type. Used by the typer +
 // codegen + LSP whenever they need the bare element type.
 pub fn strip_ptr(t: *Type) -> *Type {
-    if t == null {
-        return null;
-    }
+    if t == null { return null; }
     if t.kind == TY_POINTER || t.kind == TY_BORROW || t.kind == TY_BORROW_MUT {
         return strip_ptr(t.inner);
     }

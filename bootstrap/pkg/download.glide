@@ -4,12 +4,14 @@
 // handles Content-Length / chunked / connection-close) and does NOT import
 // stdlib::http (its JsonValue collides with bootstrap::json); API responses
 // are parsed by bootstrap's own JSON.
-
 import stdlib::net::tls::*;
 import stdlib::fs::*;
 import stdlib::bytes::*;
 
-fn _dl_byte(s: string, i: i32) -> i32 { return s.at(i).to_int() & 255; }
+fn _dl_byte(s: string, i: i32) -> i32 {
+    return s.at(i).to_int() & 255;
+}
+
 fn _dl_atoi(s: string) -> i32 {
     let mut v: i32 = 0;
     for let i: i32 = 0; i < s.len(); i++ {
@@ -21,7 +23,12 @@ fn _dl_atoi(s: string) -> i32 {
 }
 
 // Parse "https://host[:port]/path".
-struct _Url { host: string, port: i32, path: string }
+struct _Url {
+    host: string,
+    port: i32,
+    path: string,
+}
+
 fn _dl_parse(url: string) -> !*_Url {
     if !url.starts_with("https://") { return err("download: only https:// URLs are supported"); }
     let u: string = url.substring(8, url.len());
@@ -41,14 +48,24 @@ fn _dl_parse(url: string) -> !*_Url {
     return ok(out);
 }
 
-struct _Resp { status: i32, location: string, body: string }
+struct _Resp {
+    status: i32,
+    location: string,
+    body: string,
+}
 
 fn _dl_trim(s: string) -> string {
-    let mut a: i32 = 0; let mut b: i32 = s.len();
-    while a < b && (_dl_byte(s, a) == 32 || _dl_byte(s, a) == 9) { a = a + 1; }
-    while b > a && (_dl_byte(s, b - 1) == 32 || _dl_byte(s, b - 1) == 9 || _dl_byte(s, b - 1) == 13) { b = b - 1; }
+    let mut a: i32 = 0;
+    let mut b: i32 = s.len();
+    while a < b && (_dl_byte(s, a) == 32 || _dl_byte(s, a) == 9) {
+        a = a + 1;
+    }
+    while b > a && (_dl_byte(s, b - 1) == 32 || _dl_byte(s, b - 1) == 9 || _dl_byte(s, b - 1) == 13) {
+        b = b - 1;
+    }
     return s.substring(a, b);
 }
+
 fn _dl_header(headers: string, name_lc: string) -> string {
     let lc: string = headers.to_lower();
     let key: string = "\r\n".concat(name_lc).concat(":");
@@ -57,7 +74,9 @@ fn _dl_header(headers: string, name_lc: string) -> string {
     let vstart: i32 = at + key.len();
     let mut vend: i32 = vstart;
     let n: i32 = headers.len();
-    while vend + 1 < n && !(_dl_byte(headers, vend) == 13 && _dl_byte(headers, vend + 1) == 10) { vend = vend + 1; }
+    while vend + 1 < n && !(_dl_byte(headers, vend) == 13 && _dl_byte(headers, vend + 1) == 10) {
+        vend = vend + 1;
+    }
     return _dl_trim(headers.substring(vstart, vend));
 }
 
@@ -66,27 +85,39 @@ fn _dl_hex(s: string) -> i32 {
     for let i: i32 = 0; i < s.len(); i++ {
         let c: i32 = _dl_byte(s, i);
         let mut d: i32 = -1;
-        if c >= 48 && c <= 57 { d = c - 48; }
-        else if c >= 97 && c <= 102 { d = c - 87; }
-        else if c >= 65 && c <= 70 { d = c - 55; }
-        else { break; }
+        if c >= 48 && c <= 57 {
+            d = c - 48;
+        } else {
+            if c >= 97 && c <= 102 {
+                d = c - 87;
+            } else {
+                if c >= 65 && c <= 70 {
+                    d = c - 55;
+                } else {
+                    break;
+                }
+            }
+        }
         v = v * 16 + d;
     }
     return v;
 }
+
 fn _dl_dechunk(body: string) -> string {
     let out: *ByteBuffer = ByteBuffer::new();
     let mut p: i32 = 0;
     let n: i32 = body.len();
     while p < n {
         let mut le: i32 = p;
-        while le + 1 < n && !(_dl_byte(body, le) == 13 && _dl_byte(body, le + 1) == 10) { le = le + 1; }
+        while le + 1 < n && !(_dl_byte(body, le) == 13 && _dl_byte(body, le + 1) == 10) {
+            le = le + 1;
+        }
         let size: i32 = _dl_hex(body.substring(p, le));
         p = le + 2;
         if size <= 0 { break; }
         if p + size > n { break; }
         out.push_str(body.substring(p, p + size));
-        p = p + size + 2;                       // chunk + trailing CRLF
+        p = p + size + 2; // chunk + trailing CRLF
     }
     let s: string = out.to_string();
     out.free();
@@ -101,14 +132,25 @@ fn _dl_get_once(u: *_Url, accept: string) -> !*_Resp {
     if !sr.is_ok() { return err(sr.unwrap_err()); }
     let s: *TlsStream = sr.unwrap();
     let req: *ByteBuffer = ByteBuffer::new();
-    req.push_str("GET "); req.push_str(u.path); req.push_str(" HTTP/1.1\r\n");
-    req.push_str("Host: "); req.push_str(u.host); req.push_str("\r\n");
+    req.push_str("GET ");
+    req.push_str(u.path);
+    req.push_str(" HTTP/1.1\r\n");
+    req.push_str("Host: ");
+    req.push_str(u.host);
+    req.push_str("\r\n");
     req.push_str("User-Agent: glide\r\n");
-    if accept.len() > 0 { req.push_str("Accept: "); req.push_str(accept); req.push_str("\r\n"); }
+    if accept.len() > 0 {
+        req.push_str("Accept: ");
+        req.push_str(accept);
+        req.push_str("\r\n");
+    }
     req.push_str("Connection: close\r\n\r\n");
     let wr: !i32 = s.write_all(req.to_string());
     req.free();
-    if !wr.is_ok() { s.close(); return err(wr.unwrap_err()); }
+    if !wr.is_ok() {
+        s.close();
+        return err(wr.unwrap_err());
+    }
     let raw_r: !string = s.read_to_end();
     s.close();
     if !raw_r.is_ok() { return err(raw_r.unwrap_err()); }

@@ -12,9 +12,7 @@ import bootstrap::codegen::decls::*; // extracted
 fn _cg_replace(s: string, find: string, repl: string) -> string {
     let n: i32 = s.len();
     let m: i32 = find.len();
-    if m == 0 {
-        return s;
-    }
+    if m == 0 { return s; }
     let mut out: string = "";
     let mut prev: i32 = 0; // start of the not-yet-flushed verbatim span
     let mut i: i32 = 0;
@@ -31,9 +29,7 @@ fn _cg_replace(s: string, find: string, repl: string) -> string {
         if matched {
             // Flush the verbatim run before this match as ONE concat instead of
             // one per character (the old form was O(n^2) — a copy per byte).
-            if i > prev {
-                out = out.concat(s.substring(prev, i));
-            }
+            if i > prev { out = out.concat(s.substring(prev, i)); }
             out = out.concat(repl);
             i = i + m;
             prev = i;
@@ -41,9 +37,7 @@ fn _cg_replace(s: string, find: string, repl: string) -> string {
             i = i + 1;
         }
     }
-    if prev < n {
-        out = out.concat(s.substring(prev, n));
-    }
+    if prev < n { out = out.concat(s.substring(prev, n)); }
     return out;
 }
 
@@ -52,9 +46,7 @@ fn _cg_replace(s: string, find: string, repl: string) -> string {
 // instances (`*Vector<T>`, `*HashMap`) are TY_GENERIC, not TY_NAMED, so they're
 // excluded and keep printing as pointers.
 fn _display_struct_name(g: *CG, t: *Type) -> string {
-    if t == null {
-        return "";
-    }
+    if t == null { return ""; }
     let mut nm: string = "";
     if t.kind == TY_NAMED {
         nm = t.name;
@@ -63,65 +55,46 @@ fn _display_struct_name(g: *CG, t: *Type) -> string {
             nm = t.inner.name;
         }
     }
-    if nm.eq("") {
-        return "";
-    }
+    if nm.eq("") { return ""; }
     // Software-int "structs" have their own print path (__glide_*_to_string).
-    if nm.eq("i128") || nm.eq("u128") || nm.eq("i256") || nm.eq("u256") {
-        return "";
-    }
-    if g.structs.contains(nm) {
-        return nm;
-    }
+    if nm.eq("i128") || nm.eq("u128") || nm.eq("i256") || nm.eq("u256") { return ""; }
+    if g.structs.contains(nm) { return nm; }
     return "";
 }
 
 // True for any value the Display path can render: struct / *struct, option,
 // result, Vector / *Vector, or enum. Primitives keep the printf fast path.
 pub fn cg_is_display(g: *CG, t: *Type) -> bool {
-    if t == null {
-        return false;
-    }
-    if !_display_struct_name(g, t).eq("") {
-        return true;
-    }
-    if t.kind == TY_OPTION || t.kind == TY_RESULT || t.kind == TY_OPT_RESULT {
-        return true;
-    }
-    if t.kind == TY_GENERIC && t.name.eq("Vector") {
-        return true;
-    }
-    if t.kind == TY_POINTER && t.inner != null && t.inner.kind == TY_GENERIC && t.inner.name.eq("Vector") {
+    if t == null { return false; }
+    if !_display_struct_name(g, t).eq("") { return true; }
+    if t.kind == TY_OPTION || t.kind == TY_RESULT || t.kind == TY_OPT_RESULT { return true; }
+    if t.kind == TY_GENERIC && t.name.eq("Vector") { return true; }
+    if t.kind == TY_POINTER && t.inner != null && t.inner.kind == TY_GENERIC
+        && t.inner.name.eq("Vector") {
         return true;
     }
     // User generic struct mono (`LinkedList<string>`, `Box<T>`): rendered by
     // emit_generic_struct_render_c from the template. chan/HashMap stay %p.
     if t.kind == TY_GENERIC && t.name != null && g.generic_structs.contains(t.name)
-        && !t.name.eq("HashMap") && !t.name.eq("chan") {
+        && !t.name.eq("HashMap")
+        && !t.name.eq("chan") {
         return true;
     }
-    if t.kind == TY_NAMED && g.enums.contains(t.name) {
+    if t.kind == TY_NAMED && g.enums.contains(t.name) { return true; }
+    if t.kind == TY_POINTER && t.inner != null && t.inner.kind == TY_NAMED
+        && g.enums.contains(t.inner.name) {
         return true;
     }
-    if t.kind == TY_POINTER && t.inner != null && t.inner.kind == TY_NAMED && g.enums.contains(t.inner.name) {
-        return true;
-    }
-    if t.kind == TY_TUPLE {
-        return true;
-    }
+    if t.kind == TY_TUPLE { return true; }
     return false;
 }
 
 // Does `<sname>_to_string` take its receiver by pointer? (vs by value)
 fn cg_to_string_byref(g: *CG, sname: string) -> bool {
     let fname: string = sname.concat("_to_string");
-    if !g.fns.contains(fname) {
-        return false;
-    }
+    if !g.fns.contains(fname) { return false; }
     let f: Stmt = g.fns.get(fname);
-    if f.fn_params == null || f.fn_params.len() == 0 {
-        return false;
-    }
+    if f.fn_params == null || f.fn_params.len() == 0 { return false; }
     let p: Param = f.fn_params.get(0);
     return p.ty != null && p.ty.kind == TY_POINTER;
 }
@@ -165,11 +138,14 @@ pub fn emit_field_render_c(g: *CG, cexpr: string, fty: *Type, depth: i32) {
             print!("__glide_bool_to_string(", cexpr, ")");
             return;
         }
-        if n.eq("i64") || n.eq("isize") || n.eq("long") || n.eq("int") || n.eq("i8") || n.eq("i16") || n.eq("i32") {
+        if n.eq("i64") || n.eq("isize") || n.eq("long") || n.eq("int") || n.eq("i8") || n.eq("i16")
+            || n.eq("i32") {
             print!("__glide_int_to_string((long long)(", cexpr, "))");
             return;
         }
-        if n.eq("u64") || n.eq("usize") || n.eq("ulong") || n.eq("uint") || n.eq("u8") || n.eq("u16") || n.eq("u32") {
+        if n.eq("u64") || n.eq("usize") || n.eq("ulong") || n.eq("uint") || n.eq("u8")
+            || n.eq("u16")
+            || n.eq("u32") {
             print!("__glide_uint_to_string((unsigned long long)(", cexpr, "))");
             return;
         }
@@ -216,7 +192,10 @@ pub fn emit_field_render_c(g: *CG, cexpr: string, fty: *Type, depth: i32) {
     }
     if k == TY_POINTER && fty.inner != null {
         let it: *Type = fty.inner;
-        if it.kind == TY_NAMED && g.structs.contains(it.name) && !it.name.eq("i128") && !it.name.eq("u128") && !it.name.eq("i256") && !it.name.eq("u256") {
+        if it.kind == TY_NAMED && g.structs.contains(it.name) && !it.name.eq("i128")
+            && !it.name.eq("u128")
+            && !it.name.eq("i256")
+            && !it.name.eq("u256") {
             if g.render_fns.contains(it.name) {
                 print!("((", cexpr, ") ? __glide_render_".concat(it.name).concat("(*("), cexpr, ")) : \"null\")");
                 return;
@@ -256,9 +235,7 @@ pub fn emit_field_render_c(g: *CG, cexpr: string, fty: *Type, depth: i32) {
         let tn: i32 = if fty.args != null { fty.args.len() } else { 0 };
         print!("__glide_format(\"(");
         for let i: i32 = 0; i < tn; i++ {
-            if i > 0 {
-                print!(", ");
-            }
+            if i > 0 { print!(", "); }
             print!("%s");
         }
         print!(")\"");
@@ -277,7 +254,9 @@ pub fn emit_field_render_c(g: *CG, cexpr: string, fty: *Type, depth: i32) {
     // would otherwise inline-expand forever at codegen time; deep tails
     // render as "...".
     if k == TY_GENERIC && fty.name != null && g.generic_structs.contains(fty.name)
-        && !fty.name.eq("Vector") && !fty.name.eq("HashMap") && !fty.name.eq("chan") {
+        && !fty.name.eq("Vector")
+        && !fty.name.eq("HashMap")
+        && !fty.name.eq("chan") {
         // ~3 levels per list node (struct -> option -> Box): 12 shows four
         // nodes before "..." truncates the tail.
         if depth >= 12 {
@@ -302,10 +281,9 @@ pub fn emit_field_render_c(g: *CG, cexpr: string, fty: *Type, depth: i32) {
     // Vector (value or pointer): [e0, e1, ...]
     let mut vty: *Type = null;
     let mut acc: string = ".";
-    if k == TY_GENERIC && fty.name.eq("Vector") {
-        vty = fty;
-    }
-    if k == TY_POINTER && fty.inner != null && fty.inner.kind == TY_GENERIC && fty.inner.name.eq("Vector") {
+    if k == TY_GENERIC && fty.name.eq("Vector") { vty = fty; }
+    if k == TY_POINTER && fty.inner != null && fty.inner.kind == TY_GENERIC
+        && fty.inner.name.eq("Vector") {
         vty = fty.inner;
         acc = "->";
     }
@@ -336,60 +314,46 @@ pub fn emit_field_render_c(g: *CG, cexpr: string, fty: *Type, depth: i32) {
 // through fields / wrappers / pointers / generic args? `seen` breaks cycles
 // that do not pass through root.
 fn _display_reaches(g: *CG, t: *Type, root: string, seen: *HashMap<bool>) -> bool {
-    if t == null {
-        return false;
-    }
+    if t == null { return false; }
     if t.kind == TY_POINTER || t.kind == TY_BORROW || t.kind == TY_BORROW_MUT || t.kind == TY_SLICE
-        || t.kind == TY_OPTION || t.kind == TY_RESULT || t.kind == TY_OPT_RESULT {
+        || t.kind == TY_OPTION
+        || t.kind == TY_RESULT
+        || t.kind == TY_OPT_RESULT {
         return _display_reaches(g, t.inner, root, seen);
     }
     if t.kind == TY_TUPLE {
         if t.args != null {
             for let i: i32 = 0; i < t.args.len(); i++ {
                 let a: Type = t.args.get(i);
-                if _display_reaches(g, &a, root, seen) {
-                    return true;
-                }
+                if _display_reaches(g, &a, root, seen) { return true; }
             }
         }
         return false;
     }
     if t.kind == TY_NAMED && t.name != null && g.structs.contains(t.name) {
-        if t.name.eq(root) {
-            return true;
-        }
-        if seen.contains(t.name) {
-            return false;
-        }
+        if t.name.eq(root) { return true; }
+        if seen.contains(t.name) { return false; }
         seen.insert(t.name, true);
         let sd: Stmt = g.structs.get(t.name);
         if sd.struct_fields != null {
             for let i: i32 = 0; i < sd.struct_fields.len(); i++ {
                 let f: Field = sd.struct_fields.get(i);
-                if _display_reaches(g, f.ty, root, seen) {
-                    return true;
-                }
+                if _display_reaches(g, f.ty, root, seen) { return true; }
             }
         }
         return false;
     }
     if t.kind == TY_GENERIC && t.name != null && g.generic_structs.contains(t.name) {
         let m: string = mangle_generic(t.name, t.args);
-        if m.eq(root) {
-            return true;
-        }
-        if seen.contains(m) {
-            return false;
-        }
+        if m.eq(root) { return true; }
+        if seen.contains(m) { return false; }
         seen.insert(m, true);
         let tmpl: Stmt = g.generic_structs.get(t.name);
         if tmpl.struct_fields != null && tmpl.type_params != null {
             for let i: i32 = 0; i < tmpl.struct_fields.len(); i++ {
                 let f: Field = tmpl.struct_fields.get(i);
                 let fsub: *Type = subst_type(f.ty, tmpl.type_params, t.args);
-                if _display_reaches(g, fsub, root, seen) {
-                    return true;
-                }
+                if _display_reaches(g, fsub, root, seen) { return true; }
             }
         }
         return false;
@@ -406,52 +370,34 @@ pub fn emit_struct_render_fns(g: *CG, program: *Vector<Stmt>) {
     // Concrete structs.
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind != ST_STRUCT || s.struct_fields == null {
-            continue;
-        }
-        if s.type_params != null && s.type_params.len() > 0 {
-            continue;
-        }
+        if s.kind != ST_STRUCT || s.struct_fields == null { continue; }
+        if s.type_params != null && s.type_params.len() > 0 { continue; }
         let seen: *HashMap<bool> = HashMap::new();
         let mut rec: bool = false;
         for let j: i32 = 0; j < s.struct_fields.len(); j++ {
             let f: Field = s.struct_fields.get(j);
-            if _display_reaches(g, f.ty, s.name, seen) {
-                rec = true;
-            }
+            if _display_reaches(g, f.ty, s.name, seen) { rec = true; }
         }
         seen.free();
-        if rec {
-            g.render_fns.insert(s.name, true);
-        }
+        if rec { g.render_fns.insert(s.name, true); }
     }
     // Queued struct monos (skip Box — the dispatcher's deref sugar covers it).
     for let i: i32 = 0; i < g.struct_mono_queue.len(); i++ {
         let t: Type = g.struct_mono_queue.get(i);
-        if t.name == null || t.name.eq("Box") || !g.generic_structs.contains(t.name) {
-            continue;
-        }
+        if t.name == null || t.name.eq("Box") || !g.generic_structs.contains(t.name) { continue; }
         let m: string = mangle_generic(t.name, t.args);
-        if g.render_fns.contains(m) {
-            continue;
-        }
+        if g.render_fns.contains(m) { continue; }
         let tmpl: Stmt = g.generic_structs.get(t.name);
-        if tmpl.struct_fields == null || tmpl.type_params == null {
-            continue;
-        }
+        if tmpl.struct_fields == null || tmpl.type_params == null { continue; }
         let seen: *HashMap<bool> = HashMap::new();
         let mut rec: bool = false;
         for let j: i32 = 0; j < tmpl.struct_fields.len(); j++ {
             let f: Field = tmpl.struct_fields.get(j);
             let fsub: *Type = subst_type(f.ty, tmpl.type_params, t.args);
-            if _display_reaches(g, fsub, m, seen) {
-                rec = true;
-            }
+            if _display_reaches(g, fsub, m, seen) { rec = true; }
         }
         seen.free();
-        if rec {
-            g.render_fns.insert(m, true);
-        }
+        if rec { g.render_fns.insert(m, true); }
     }
     // Decls first (mutual recursion), then bodies. The body renders ONE level
     // inline (direct emit_*_render_c call, bypassing the dispatcher's routing
@@ -470,7 +416,8 @@ pub fn emit_struct_render_fns(g: *CG, program: *Vector<Stmt>) {
             // Recover the mono's generic type from the queue entry.
             for let j: i32 = 0; j < g.struct_mono_queue.len(); j++ {
                 let t: Type = g.struct_mono_queue.get(j);
-                if t.name != null && g.generic_structs.contains(t.name) && mangle_generic(t.name, t.args).eq(n) {
+                if t.name != null && g.generic_structs.contains(t.name)
+                    && mangle_generic(t.name, t.args).eq(n) {
                     let gp: *Type = __glide_palloc(sizeof(Type)) as *Type;
                     *gp = t;
                     emit_generic_struct_render_c(g, "__v", gp, 1);
@@ -492,9 +439,7 @@ fn emit_generic_struct_render_c(g: *CG, cexpr: string, gty: *Type, depth: i32) {
     let mut fmt: string = gty.name.concat(" { ");
     if tmpl.struct_fields != null {
         for let i: i32 = 0; i < tmpl.struct_fields.len(); i++ {
-            if i > 0 {
-                fmt = fmt.concat(", ");
-            }
+            if i > 0 { fmt = fmt.concat(", "); }
             let f: Field = tmpl.struct_fields.get(i);
             fmt = fmt.concat(f.name).concat(": %s");
         }
@@ -531,9 +476,7 @@ fn emit_struct_render_c(g: *CG, cexpr: string, sname: string, depth: i32) {
     let mut fmt: string = sname.concat(" { ");
     if sd.struct_fields != null {
         for let i: i32 = 0; i < sd.struct_fields.len(); i++ {
-            if i > 0 {
-                fmt = fmt.concat(", ");
-            }
+            if i > 0 { fmt = fmt.concat(", "); }
             let f: Field = sd.struct_fields.get(i);
             fmt = fmt.concat(f.name).concat(": %s");
         }
@@ -560,21 +503,11 @@ fn emit_struct_render_c(g: *CG, cexpr: string, sname: string, depth: i32) {
 // from the value the same expression has when stored in an i8 variable. "" for
 // anything that doesn't need a truncating cast.
 pub fn _narrow_int_ctype(t: *Type) -> string {
-    if t == null || t.kind != TY_NAMED {
-        return "";
-    }
-    if t.name.eq("i8") {
-        return "int8_t";
-    }
-    if t.name.eq("i16") {
-        return "int16_t";
-    }
-    if t.name.eq("u8") {
-        return "uint8_t";
-    }
-    if t.name.eq("u16") {
-        return "uint16_t";
-    }
+    if t == null || t.kind != TY_NAMED { return ""; }
+    if t.name.eq("i8") { return "int8_t"; }
+    if t.name.eq("i16") { return "int16_t"; }
+    if t.name.eq("u8") { return "uint8_t"; }
+    if t.name.eq("u16") { return "uint16_t"; }
     return "";
 }
 
@@ -588,62 +521,32 @@ pub fn emit_display_arg(g: *CG, a: *Expr, at: *Type) {
 
 fn stdlib_method_ret(ty_name: string, method: string) -> *Type {
     if ty_name.eq("string") {
-        if method.eq("len") {
-            return ty_named("i32");
-        }
-        if method.eq("eq") {
-            return ty_named("bool");
-        }
-        if method.eq("cmp") {
-            return ty_named("i32");
-        }
-        if method.eq("at") {
-            return ty_named("char");
-        }
-        if method.eq("concat") {
-            return ty_named("string");
-        }
-        if method.eq("substring") {
-            return ty_named("string");
-        }
+        if method.eq("len") { return ty_named("i32"); }
+        if method.eq("eq") { return ty_named("bool"); }
+        if method.eq("cmp") { return ty_named("i32"); }
+        if method.eq("at") { return ty_named("char"); }
+        if method.eq("concat") { return ty_named("string"); }
+        if method.eq("substring") { return ty_named("string"); }
     }
     if ty_name.eq("char") {
-        if method.eq("to_int") {
-            return ty_named("i32");
-        }
-        if method.eq("is_digit") {
-            return ty_named("bool");
-        }
-        if method.eq("is_alpha") {
-            return ty_named("bool");
-        }
-        if method.eq("to_string") {
-            return ty_named("string");
-        }
+        if method.eq("to_int") { return ty_named("i32"); }
+        if method.eq("is_digit") { return ty_named("bool"); }
+        if method.eq("is_alpha") { return ty_named("bool"); }
+        if method.eq("to_string") { return ty_named("string"); }
     }
     if _is_int_family(ty_name) {
         // `abs` keeps the receiver's own width (i64.abs() -> i64); `to_string`
         // works on every int type now (codegen routes them all through the
         // 64-bit __glide_int_* runtime helpers).
-        if method.eq("abs") {
-            return ty_named(ty_name);
-        }
-        if method.eq("to_string") {
-            return ty_named("string");
-        }
+        if method.eq("abs") { return ty_named(ty_name); }
+        if method.eq("to_string") { return ty_named("string"); }
     }
     if ty_name.eq("u256") || ty_name.eq("i256") {
-        if method.eq("abs") {
-            return ty_named(ty_name);
-        }
-        if method.eq("to_string") {
-            return ty_named("string");
-        }
+        if method.eq("abs") { return ty_named(ty_name); }
+        if method.eq("to_string") { return ty_named("string"); }
     }
     if ty_name.eq("bool") {
-        if method.eq("to_string") {
-            return ty_named("string");
-        }
+        if method.eq("to_string") { return ty_named("string"); }
     }
     return null;
 }
@@ -651,9 +554,7 @@ fn stdlib_method_ret(ty_name: string, method: string) -> *Type {
 // Walk a stmt/expr tree, replacing every EX_FNEXPR with EX_IDENT pointing
 // to a uniquely-named synthetic fn collected in g.anon_fns.
 fn lift_anons_in_expr(g: *CG, e: *Expr) {
-    if e == null {
-        return;
-    }
+    if e == null { return; }
     if e.kind == EX_FNEXPR {
         // Lift the closure body too — it may contain nested closures whose
         // arg-position lifts (below) need to land before this fn is emitted.
@@ -674,15 +575,9 @@ fn lift_anons_in_expr(g: *CG, e: *Expr) {
         e.str_val = name;
         return;
     }
-    if e.lhs != null {
-        lift_anons_in_expr(g, e.lhs);
-    }
-    if e.rhs != null {
-        lift_anons_in_expr(g, e.rhs);
-    }
-    if e.operand != null {
-        lift_anons_in_expr(g, e.operand);
-    }
+    if e.lhs != null { lift_anons_in_expr(g, e.lhs); }
+    if e.rhs != null { lift_anons_in_expr(g, e.rhs); }
+    if e.operand != null { lift_anons_in_expr(g, e.operand); }
     if e.args != null {
         // Vector::get returns a by-value copy, so the recursive lift mutates
         // a temporary. Write the (possibly rewritten) copy back so a closure
@@ -698,24 +593,12 @@ fn lift_anons_in_expr(g: *CG, e: *Expr) {
 }
 
 pub fn lift_anons_in_stmt(g: *CG, s: *Stmt) {
-    if s == null {
-        return;
-    }
-    if s.let_value != null {
-        lift_anons_in_expr(g, s.let_value);
-    }
-    if s.expr_value != null {
-        lift_anons_in_expr(g, s.expr_value);
-    }
-    if s.cond != null {
-        lift_anons_in_expr(g, s.cond);
-    }
-    if s.for_init != null {
-        lift_anons_in_stmt(g, s.for_init);
-    }
-    if s.for_step != null {
-        lift_anons_in_expr(g, s.for_step);
-    }
+    if s == null { return; }
+    if s.let_value != null { lift_anons_in_expr(g, s.let_value); }
+    if s.expr_value != null { lift_anons_in_expr(g, s.expr_value); }
+    if s.cond != null { lift_anons_in_expr(g, s.cond); }
+    if s.for_init != null { lift_anons_in_stmt(g, s.for_init); }
+    if s.for_step != null { lift_anons_in_expr(g, s.for_step); }
     // Vector::get returns a by-value copy; write back so lifts inside nested
     // blocks / fn bodies actually persist in the AST. Without the set-back
     // the expression-emit path lifts the closure a second time with a fresh
@@ -753,28 +636,16 @@ pub fn lift_anons_in_stmt(g: *CG, s: *Stmt) {
 // Walk a type tree post-substitution, resolving any TY_ASSOC whose owner
 // became concrete during mono. Leaves still-generic types intact.
 pub fn resolve_assoc_recursive(g: *CG, t: *Type) -> *Type {
-    if t == null {
-        return null;
-    }
+    if t == null { return null; }
     if t.kind == TY_ASSOC {
         let r: *Type = resolve_concrete_assoc(g, t);
-        if r != null {
-            return r;
-        }
+        if r != null { return r; }
         return t;
     }
-    if t.kind == TY_OPTION {
-        return ty_option(resolve_assoc_recursive(g, t.inner));
-    }
-    if t.kind == TY_RESULT {
-        return ty_result(resolve_assoc_recursive(g, t.inner));
-    }
-    if t.kind == TY_OPT_RESULT {
-        return ty_optres(resolve_assoc_recursive(g, t.inner));
-    }
-    if t.kind == TY_POINTER {
-        return ty_pointer(resolve_assoc_recursive(g, t.inner));
-    }
+    if t.kind == TY_OPTION { return ty_option(resolve_assoc_recursive(g, t.inner)); }
+    if t.kind == TY_RESULT { return ty_result(resolve_assoc_recursive(g, t.inner)); }
+    if t.kind == TY_OPT_RESULT { return ty_optres(resolve_assoc_recursive(g, t.inner)); }
+    if t.kind == TY_POINTER { return ty_pointer(resolve_assoc_recursive(g, t.inner)); }
     if t.kind == TY_BORROW {
         let p: *Type = malloc(sizeof(Type)) as *Type;
         p.kind = TY_BORROW;
@@ -802,38 +673,22 @@ pub fn resolve_assoc_recursive(g: *CG, t: *Type) -> *Type {
 // linear scan since assoc_table is keyed by trait, but we don't always
 // know the trait (TY_ASSOC carries owner + name only).
 fn resolve_concrete_assoc(g: *CG, t: *Type) -> *Type {
-    if t == null {
-        return null;
-    }
-    if t.kind != TY_ASSOC {
-        return null;
-    }
-    if t.inner == null {
-        return null;
-    }
+    if t == null { return null; }
+    if t.kind != TY_ASSOC { return null; }
+    if t.inner == null { return null; }
     let mut owner_name: string = "";
-    if t.inner.kind == TY_NAMED {
-        owner_name = t.inner.name;
-    }
-    if t.inner.kind == TY_GENERIC {
-        owner_name = t.inner.name;
-    }
-    if owner_name.eq("") {
-        return null;
-    }
+    if t.inner.kind == TY_NAMED { owner_name = t.inner.name; }
+    if t.inner.kind == TY_GENERIC { owner_name = t.inner.name; }
+    if owner_name.eq("") { return null; }
     // Linear scan: try every trait registered in assoc_table.
     let keys: *Vector<string> = g.assoc_table.keys();
     for let i: i32 = 0; i < keys.len(); i++ {
         let k: string = keys.get(i);
         // Key shape is `<Trait>::<Owner>::<Name>`. Match suffix.
         let suffix: string = "::".concat(owner_name).concat("::").concat(t.name);
-        if k.len() < suffix.len() {
-            continue;
-        }
+        if k.len() < suffix.len() { continue; }
         let tail: string = k.substring(k.len() - suffix.len(), k.len());
-        if !tail.eq(suffix) {
-            continue;
-        }
+        if !tail.eq(suffix) { continue; }
         let resolved: Type = g.assoc_table.get(k);
         let p: *Type = malloc(sizeof(Type)) as *Type;
         *p = resolved;
@@ -852,9 +707,7 @@ fn resolve_concrete_assoc(g: *CG, t: *Type) -> *Type {
 // `__glide_chan_T_t` typedef and a stray `chan__T` here would just
 // shadow the real one without ever being referenced.
 pub fn forward_decl_generic_monos(g: *CG, t: *Type) {
-    if t == null {
-        return;
-    }
+    if t == null { return; }
     if t.kind == TY_GENERIC && t.name != null && t.args != null && !t.name.eq("chan") {
         let mangled: string = mangle_generic(t.name, t.args);
         if !g.emitted_monos.contains(mangled) {
@@ -863,12 +716,8 @@ pub fn forward_decl_generic_monos(g: *CG, t: *Type) {
             emit_struct_mono(g, t);
         }
     }
-    if t.inner != null {
-        forward_decl_generic_monos(g, t.inner);
-    }
-    if t.fnptr_ret != null {
-        forward_decl_generic_monos(g, t.fnptr_ret);
-    }
+    if t.inner != null { forward_decl_generic_monos(g, t.inner); }
+    if t.fnptr_ret != null { forward_decl_generic_monos(g, t.fnptr_ret); }
     if t.args != null {
         for let i: i32 = 0; i < t.args.len(); i++ {
             let a: Type = t.args.get(i);
@@ -891,12 +740,8 @@ pub fn forward_decl_generic_monos(g: *CG, t: *Type) {
 // which is otherwise emitted only by the option pre-pass that runs
 // AFTER the result pre-pass that triggered this struct emission.
 pub fn _forward_decl_field_monos(g: *CG, s: *Stmt) {
-    if s == null {
-        return;
-    }
-    if s.struct_fields == null {
-        return;
-    }
+    if s == null { return; }
+    if s.struct_fields == null { return; }
     for let i: i32 = 0; i < s.struct_fields.len(); i++ {
         let f: Field = s.struct_fields.get(i);
         forward_decl_generic_monos(g, f.ty);
@@ -910,9 +755,7 @@ pub fn _forward_decl_field_monos(g: *CG, s: *Stmt) {
 // or for wrapper-of-named-struct (the named body must come first; the
 // guarded later emission picks it up).
 pub fn _emit_wrapper_for_type(g: *CG, t: *Type) {
-    if t == null {
-        return;
-    }
+    if t == null { return; }
     if t.kind == TY_OPTION && t.inner != null && _is_primitive_or_emitted(g, t.inner) {
         _emit_option_template(g, t.inner);
     }
@@ -922,9 +765,7 @@ pub fn _emit_wrapper_for_type(g: *CG, t: *Type) {
     if t.kind == TY_OPT_RESULT && t.inner != null && _is_primitive_or_emitted(g, t.inner) {
         _emit_optres_template(g, t.inner);
     }
-    if t.inner != null {
-        _emit_wrapper_for_type(g, t.inner);
-    }
+    if t.inner != null { _emit_wrapper_for_type(g, t.inner); }
     if t.args != null {
         for let i: i32 = 0; i < t.args.len(); i++ {
             let a: Type = t.args.get(i);
@@ -934,36 +775,18 @@ pub fn _emit_wrapper_for_type(g: *CG, t: *Type) {
 }
 
 fn _is_primitive_or_emitted(g: *CG, t: *Type) -> bool {
-    if t == null {
-        return false;
-    }
+    if t == null { return false; }
     if t.kind == TY_NAMED && t.name != null {
         let n: string = t.name;
-        if n.eq("int") || n.eq("uint") || n.eq("long") || n.eq("ulong") {
-            return true;
-        }
-        if n.eq("i8") || n.eq("i16") || n.eq("i32") || n.eq("i64") {
-            return true;
-        }
-        if n.eq("u8") || n.eq("u16") || n.eq("u32") || n.eq("u64") {
-            return true;
-        }
-        if n.eq("usize") || n.eq("isize") {
-            return true;
-        }
-        if n.eq("f32") || n.eq("f64") || n.eq("float") {
-            return true;
-        }
-        if n.eq("bool") || n.eq("char") || n.eq("string") || n.eq("void") {
-            return true;
-        }
-        if g.emitted_named.contains(n) {
-            return true;
-        }
+        if n.eq("int") || n.eq("uint") || n.eq("long") || n.eq("ulong") { return true; }
+        if n.eq("i8") || n.eq("i16") || n.eq("i32") || n.eq("i64") { return true; }
+        if n.eq("u8") || n.eq("u16") || n.eq("u32") || n.eq("u64") { return true; }
+        if n.eq("usize") || n.eq("isize") { return true; }
+        if n.eq("f32") || n.eq("f64") || n.eq("float") { return true; }
+        if n.eq("bool") || n.eq("char") || n.eq("string") || n.eq("void") { return true; }
+        if g.emitted_named.contains(n) { return true; }
     }
-    if t.kind == TY_POINTER {
-        return true;
-    }
+    if t.kind == TY_POINTER { return true; }
     if t.kind == TY_GENERIC && t.name != null && t.args != null && !t.name.eq("chan") {
         let mangled: string = mangle_generic(t.name, t.args);
         return g.emitted_monos.contains(mangled);
@@ -974,9 +797,7 @@ fn _is_primitive_or_emitted(g: *CG, t: *Type) -> bool {
 fn _emit_option_template(g: *CG, inner: *Type) {
     let m: string = mangle_type(inner);
     let dedup_key: string = "__rt_option_emit_".concat(m);
-    if g.module_aliases.contains(dedup_key) {
-        return;
-    }
+    if g.module_aliases.contains(dedup_key) { return; }
     g.module_aliases.insert(dedup_key, "1");
     emit_tuple_typedefs_in_type(g, inner);
     let tc: string = type_to_c(inner);
@@ -994,17 +815,13 @@ fn _emit_option_template(g: *CG, inner: *Type) {
             break;
         }
     }
-    if !already {
-        g.option_types.push(*inner);
-    }
+    if !already { g.option_types.push(*inner); }
 }
 
 fn _emit_result_template(g: *CG, inner: *Type) {
     let m: string = mangle_type(inner);
     let dedup_key: string = "__rt_result_emit_".concat(m);
-    if g.module_aliases.contains(dedup_key) {
-        return;
-    }
+    if g.module_aliases.contains(dedup_key) { return; }
     g.module_aliases.insert(dedup_key, "1");
     emit_tuple_typedefs_in_type(g, inner);
     let tc: string = type_to_c(inner);
@@ -1027,17 +844,13 @@ fn _emit_result_template(g: *CG, inner: *Type) {
             break;
         }
     }
-    if !already {
-        g.result_types.push(*inner);
-    }
+    if !already { g.result_types.push(*inner); }
 }
 
 fn _emit_optres_template(g: *CG, inner: *Type) {
     let m: string = mangle_type(inner);
     let dedup_key: string = "__rt_optres_emit_".concat(m);
-    if g.module_aliases.contains(dedup_key) {
-        return;
-    }
+    if g.module_aliases.contains(dedup_key) { return; }
     g.module_aliases.insert(dedup_key, "1");
     emit_tuple_typedefs_in_type(g, inner);
     let tc: string = type_to_c(inner);
@@ -1054,59 +867,41 @@ fn _emit_optres_template(g: *CG, inner: *Type) {
             break;
         }
     }
-    if !already {
-        g.optres_types.push(*inner);
-    }
+    if !already { g.optres_types.push(*inner); }
 }
 
 // Register an option/result wrapper for `inner` (deduped, skips `void`),
 // without recursing — used to register the conjugate so `.ok()` / `.ok_or()`
 // always find their sibling ctors.
 fn _register_option_wrapper(g: *CG, inner: *Type) {
-    if inner == null {
-        return;
-    }
-    if inner.kind == TY_NAMED && inner.name.eq("void") {
-        return;
-    }
+    if inner == null { return; }
+    if inner.kind == TY_NAMED && inner.name.eq("void") { return; }
     let m: string = mangle_type(inner);
     for let i: i32 = 0; i < g.option_types.len(); i++ {
         let ex: Type = g.option_types.get(i);
-        if mangle_type(&ex).eq(m) {
-            return;
-        }
+        if mangle_type(&ex).eq(m) { return; }
     }
     g.option_types.push(*inner);
 }
 
 fn _register_result_wrapper(g: *CG, inner: *Type) {
-    if inner == null {
-        return;
-    }
-    if inner.kind == TY_NAMED && inner.name.eq("void") {
-        return;
-    }
+    if inner == null { return; }
+    if inner.kind == TY_NAMED && inner.name.eq("void") { return; }
     let m: string = mangle_type(inner);
     for let i: i32 = 0; i < g.result_types.len(); i++ {
         let ex: Type = g.result_types.get(i);
-        if mangle_type(&ex).eq(m) {
-            return;
-        }
+        if mangle_type(&ex).eq(m) { return; }
     }
     g.result_types.push(*inner);
 }
 
 pub fn collect_result_in_type(g: *CG, t: *Type) {
-    if t == null {
-        return;
-    }
+    if t == null { return; }
     if t.kind == TY_RESULT && t.inner != null {
         let m: string = mangle_type(t.inner);
         for let i: i32 = 0; i < g.result_types.len(); i++ {
             let ex: Type = g.result_types.get(i);
-            if mangle_type(&ex).eq(m) {
-                return;
-            }
+            if mangle_type(&ex).eq(m) { return; }
         }
         g.result_types.push(*t.inner);
         _register_option_wrapper(g, t.inner);
@@ -1115,9 +910,7 @@ pub fn collect_result_in_type(g: *CG, t: *Type) {
         let m: string = mangle_type(t.inner);
         for let i: i32 = 0; i < g.option_types.len(); i++ {
             let ex: Type = g.option_types.get(i);
-            if mangle_type(&ex).eq(m) {
-                return;
-            }
+            if mangle_type(&ex).eq(m) { return; }
         }
         g.option_types.push(*t.inner);
         _register_result_wrapper(g, t.inner);
@@ -1126,21 +919,15 @@ pub fn collect_result_in_type(g: *CG, t: *Type) {
         let m: string = mangle_type(t.inner);
         for let i: i32 = 0; i < g.optres_types.len(); i++ {
             let ex: Type = g.optres_types.get(i);
-            if mangle_type(&ex).eq(m) {
-                return;
-            }
+            if mangle_type(&ex).eq(m) { return; }
         }
         g.optres_types.push(*t.inner);
         // `?!T ?? err(m)` collapses to a plain `!T`, so its ok/err ctors
         // must exist in the header region too.
         _register_result_wrapper(g, t.inner);
     }
-    if t.inner != null {
-        collect_result_in_type(g, t.inner);
-    }
-    if t.fnptr_ret != null {
-        collect_result_in_type(g, t.fnptr_ret);
-    }
+    if t.inner != null { collect_result_in_type(g, t.inner); }
+    if t.fnptr_ret != null { collect_result_in_type(g, t.fnptr_ret); }
     if t.args != null {
         for let i: i32 = 0; i < t.args.len(); i++ {
             let a: Type = t.args.get(i);
@@ -1150,17 +937,14 @@ pub fn collect_result_in_type(g: *CG, t: *Type) {
 }
 
 fn collect_result_in_expr(g: *CG, e: *Expr) {
-    if e == null {
-        return;
-    }
-    if e.cast_to != null {
-        collect_result_in_type(g, e.cast_to);
-    }
+    if e == null { return; }
+    if e.cast_to != null { collect_result_in_type(g, e.cast_to); }
     // Option/Result `map`/`and_then`: register the closure-return wrapper so its
     // some/none/ok/err ctors are emitted in the header region (the call site
     // can't emit a typedef mid-expression). Over-registers for Vector.map etc.,
     // which only costs an unused struct.
-    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER && e.args != null && e.args.len() == 1 {
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER && e.args != null
+        && e.args.len() == 1 {
         let _mn: string = e.lhs.field;
         if _mn.eq("map") {
             let _cl: Expr = e.args.get(0);
@@ -1173,20 +957,12 @@ fn collect_result_in_expr(g: *CG, e: *Expr) {
         if _mn.eq("and_then") {
             let _cl: Expr = e.args.get(0);
             let _cr: *Type = _closure_ret_ty(g, &_cl);
-            if _cr != null {
-                collect_result_in_type(g, _cr);
-            }
+            if _cr != null { collect_result_in_type(g, _cr); }
         }
     }
-    if e.lhs != null {
-        collect_result_in_expr(g, e.lhs);
-    }
-    if e.rhs != null {
-        collect_result_in_expr(g, e.rhs);
-    }
-    if e.operand != null {
-        collect_result_in_expr(g, e.operand);
-    }
+    if e.lhs != null { collect_result_in_expr(g, e.lhs); }
+    if e.rhs != null { collect_result_in_expr(g, e.rhs); }
+    if e.operand != null { collect_result_in_expr(g, e.operand); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
@@ -1196,41 +972,23 @@ fn collect_result_in_expr(g: *CG, e: *Expr) {
 }
 
 pub fn collect_result_in_stmt(g: *CG, s: *Stmt) {
-    if s == null {
-        return;
-    }
+    if s == null { return; }
     // Trait sigs reference Self / Self::Item placeholders; impls collect
     // their own substituted versions.
-    if s.kind == ST_TRAIT {
-        return;
-    }
-    if s.let_ty != null {
-        collect_result_in_type(g, s.let_ty);
-    }
-    if s.fn_ret_ty != null {
-        collect_result_in_type(g, s.fn_ret_ty);
-    }
+    if s.kind == ST_TRAIT { return; }
+    if s.let_ty != null { collect_result_in_type(g, s.let_ty); }
+    if s.fn_ret_ty != null { collect_result_in_type(g, s.fn_ret_ty); }
     if s.fn_params != null {
         for let i: i32 = 0; i < s.fn_params.len(); i++ {
             let p: Param = s.fn_params.get(i);
             collect_result_in_type(g, p.ty);
         }
     }
-    if s.let_value != null {
-        collect_result_in_expr(g, s.let_value);
-    }
-    if s.expr_value != null {
-        collect_result_in_expr(g, s.expr_value);
-    }
-    if s.cond != null {
-        collect_result_in_expr(g, s.cond);
-    }
-    if s.for_step != null {
-        collect_result_in_expr(g, s.for_step);
-    }
-    if s.for_init != null {
-        collect_result_in_stmt(g, s.for_init);
-    }
+    if s.let_value != null { collect_result_in_expr(g, s.let_value); }
+    if s.expr_value != null { collect_result_in_expr(g, s.expr_value); }
+    if s.cond != null { collect_result_in_expr(g, s.cond); }
+    if s.for_step != null { collect_result_in_expr(g, s.for_step); }
+    if s.for_init != null { collect_result_in_stmt(g, s.for_init); }
     if s.then_body != null {
         for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
@@ -1262,14 +1020,10 @@ pub fn collect_result_in_stmt(g: *CG, s: *Stmt) {
 // defined first — emit it before this one. This fixes nested `?(?T)` (whose
 // conjugate `!?T` embeds `?T`) failing cc with "unknown type __glide_option_*".
 fn _emit_one_result(g: *CG, t: *Type) {
-    if t == null {
-        return;
-    }
+    if t == null { return; }
     let m: string = mangle_type(t);
     let dedup_key: string = "__rt_result_emit_".concat(m);
-    if g.module_aliases.contains(dedup_key) {
-        return;
-    }
+    if g.module_aliases.contains(dedup_key) { return; }
     g.module_aliases.insert(dedup_key, "1");
     // Special case `!void` — a Result with no value. `void val;` is invalid C,
     // so emit a struct without the val field, an ok ctor with no args, an err
@@ -1289,9 +1043,7 @@ fn _emit_one_result(g: *CG, t: *Type) {
     if t.kind == TY_OPTION {
         _emit_one_option(g, t.inner);
     } else {
-        if t.kind == TY_RESULT {
-            _emit_one_result(g, t.inner);
-        }
+        if t.kind == TY_RESULT { _emit_one_result(g, t.inner); }
     }
     emit_tuple_typedefs_in_type(g, t);
     let tc: string = type_to_c(t);
@@ -1302,9 +1054,7 @@ fn _emit_one_result(g: *CG, t: *Type) {
 }
 
 pub fn emit_result_runtime(g: *CG) {
-    if g.result_types.len() == 0 {
-        return;
-    }
+    if g.result_types.len() == 0 { return; }
     for let i: i32 = 0; i < g.result_types.len(); i++ {
         let t: Type = g.result_types.get(i);
         _emit_one_result(g, &t);
@@ -1315,21 +1065,15 @@ pub fn emit_result_runtime(g: *CG) {
 // Emit ONE `?T` Option struct (with dedup), inner Option/Result by-value
 // dependency first (mirrors _emit_one_result).
 fn _emit_one_option(g: *CG, t: *Type) {
-    if t == null {
-        return;
-    }
+    if t == null { return; }
     let m: string = mangle_type(t);
     let dedup_key: string = "__rt_option_emit_".concat(m);
-    if g.module_aliases.contains(dedup_key) {
-        return;
-    }
+    if g.module_aliases.contains(dedup_key) { return; }
     g.module_aliases.insert(dedup_key, "1");
     if t.kind == TY_OPTION {
         _emit_one_option(g, t.inner);
     } else {
-        if t.kind == TY_RESULT {
-            _emit_one_result(g, t.inner);
-        }
+        if t.kind == TY_RESULT { _emit_one_result(g, t.inner); }
     }
     emit_tuple_typedefs_in_type(g, t);
     let tc: string = type_to_c(t);
@@ -1340,9 +1084,7 @@ fn _emit_one_option(g: *CG, t: *Type) {
 }
 
 pub fn emit_option_runtime(g: *CG) {
-    if g.option_types.len() == 0 {
-        return;
-    }
+    if g.option_types.len() == 0 { return; }
     for let i: i32 = 0; i < g.option_types.len(); i++ {
         let t: Type = g.option_types.get(i);
         _emit_one_option(g, &t);
@@ -1351,17 +1093,13 @@ pub fn emit_option_runtime(g: *CG) {
 }
 
 pub fn emit_optres_runtime(g: *CG) {
-    if g.optres_types.len() == 0 {
-        return;
-    }
+    if g.optres_types.len() == 0 { return; }
     let tmpl: string = "#ifndef __GLIDE_OPTRES_@M@_GUARD\n#define __GLIDE_OPTRES_@M@_GUARD\n/* tag: 0=Some, 1=None, 2=Err */\ntypedef struct __glide_optres_@M@_t { int tag; @TC@ val; const char* err; } __glide_optres_@M@_t;\nstatic __glide_optres_@M@_t __glide_optres_some_@M@(@TC@ v) { __glide_optres_@M@_t r; r.tag = 0; r.val = v; r.err = (const char*)0; return r; }\nstatic __glide_optres_@M@_t __glide_optres_none_@M@(void) { __glide_optres_@M@_t r; r.tag = 1; r.err = (const char*)0; return r; }\nstatic __glide_optres_@M@_t __glide_optres_err_@M@(const char* msg) { __glide_optres_@M@_t r; r.tag = 2; r.err = msg; return r; }\n#endif\n";
     for let i: i32 = 0; i < g.optres_types.len(); i++ {
         let t: Type = g.optres_types.get(i);
         let m: string = mangle_type(&t);
         let dedup_key: string = "__rt_optres_emit_".concat(m);
-        if g.module_aliases.contains(dedup_key) {
-            continue;
-        }
+        if g.module_aliases.contains(dedup_key) { continue; }
         g.module_aliases.insert(dedup_key, "1");
         emit_tuple_typedefs_in_type(g, &t);
         let tc: string = type_to_c(&t);
@@ -1376,41 +1114,27 @@ pub fn emit_optres_runtime(g: *CG) {
 // registered first so the emission order has inner tuples before the
 // containers that store them by value.
 pub fn register_tuple_type(g: *CG, t: *Type) {
-    if t == null || t.kind != TY_TUPLE {
-        return;
-    }
+    if t == null || t.kind != TY_TUPLE { return; }
     if t.args != null {
         for let i: i32 = 0; i < t.args.len(); i++ {
             let a: Type = t.args.get(i);
-            if a.kind == TY_TUPLE {
-                register_tuple_type(g, &a);
-            }
+            if a.kind == TY_TUPLE { register_tuple_type(g, &a); }
         }
     }
     let m: string = mangle_type(t);
     for let i: i32 = 0; i < g.tuple_types.len(); i++ {
         let ex: Type = g.tuple_types.get(i);
-        if mangle_type(&ex).eq(m) {
-            return;
-        }
+        if mangle_type(&ex).eq(m) { return; }
     }
     g.tuple_types.push(*t);
 }
 
 // Walk a type registering every tuple it (recursively) contains.
 pub fn collect_tuple_in_type(g: *CG, t: *Type) {
-    if t == null {
-        return;
-    }
-    if t.kind == TY_TUPLE {
-        register_tuple_type(g, t);
-    }
-    if t.inner != null {
-        collect_tuple_in_type(g, t.inner);
-    }
-    if t.fnptr_ret != null {
-        collect_tuple_in_type(g, t.fnptr_ret);
-    }
+    if t == null { return; }
+    if t.kind == TY_TUPLE { register_tuple_type(g, t); }
+    if t.inner != null { collect_tuple_in_type(g, t.inner); }
+    if t.fnptr_ret != null { collect_tuple_in_type(g, t.fnptr_ret); }
     if t.args != null {
         for let i: i32 = 0; i < t.args.len(); i++ {
             let a: Type = t.args.get(i);
@@ -1420,27 +1144,15 @@ pub fn collect_tuple_in_type(g: *CG, t: *Type) {
 }
 
 fn collect_tuple_in_expr(g: *CG, e: *Expr) {
-    if e == null {
-        return;
-    }
+    if e == null { return; }
     if e.kind == EX_TUPLE {
         let tt: *Type = infer_for_codegen(g, e);
-        if tt != null && tt.kind == TY_TUPLE {
-            register_tuple_type(g, tt);
-        }
+        if tt != null && tt.kind == TY_TUPLE { register_tuple_type(g, tt); }
     }
-    if e.cast_to != null {
-        collect_tuple_in_type(g, e.cast_to);
-    }
-    if e.lhs != null {
-        collect_tuple_in_expr(g, e.lhs);
-    }
-    if e.rhs != null {
-        collect_tuple_in_expr(g, e.rhs);
-    }
-    if e.operand != null {
-        collect_tuple_in_expr(g, e.operand);
-    }
+    if e.cast_to != null { collect_tuple_in_type(g, e.cast_to); }
+    if e.lhs != null { collect_tuple_in_expr(g, e.lhs); }
+    if e.rhs != null { collect_tuple_in_expr(g, e.rhs); }
+    if e.operand != null { collect_tuple_in_expr(g, e.operand); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
@@ -1467,18 +1179,10 @@ fn collect_tuple_in_expr(g: *CG, e: *Expr) {
 }
 
 pub fn collect_tuple_in_stmt(g: *CG, s: *Stmt) {
-    if s == null {
-        return;
-    }
-    if s.kind == ST_TRAIT {
-        return;
-    }
-    if s.let_ty != null {
-        collect_tuple_in_type(g, s.let_ty);
-    }
-    if s.fn_ret_ty != null {
-        collect_tuple_in_type(g, s.fn_ret_ty);
-    }
+    if s == null { return; }
+    if s.kind == ST_TRAIT { return; }
+    if s.let_ty != null { collect_tuple_in_type(g, s.let_ty); }
+    if s.fn_ret_ty != null { collect_tuple_in_type(g, s.fn_ret_ty); }
     if s.fn_params != null {
         for let i: i32 = 0; i < s.fn_params.len(); i++ {
             let p: Param = s.fn_params.get(i);
@@ -1491,21 +1195,11 @@ pub fn collect_tuple_in_stmt(g: *CG, s: *Stmt) {
             collect_tuple_in_type(g, f.ty);
         }
     }
-    if s.let_value != null {
-        collect_tuple_in_expr(g, s.let_value);
-    }
-    if s.expr_value != null {
-        collect_tuple_in_expr(g, s.expr_value);
-    }
-    if s.cond != null {
-        collect_tuple_in_expr(g, s.cond);
-    }
-    if s.for_step != null {
-        collect_tuple_in_expr(g, s.for_step);
-    }
-    if s.for_init != null {
-        collect_tuple_in_stmt(g, s.for_init);
-    }
+    if s.let_value != null { collect_tuple_in_expr(g, s.let_value); }
+    if s.expr_value != null { collect_tuple_in_expr(g, s.expr_value); }
+    if s.cond != null { collect_tuple_in_expr(g, s.cond); }
+    if s.for_step != null { collect_tuple_in_expr(g, s.for_step); }
+    if s.for_init != null { collect_tuple_in_stmt(g, s.for_init); }
     if s.then_body != null {
         for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
@@ -1536,14 +1230,10 @@ pub fn collect_tuple_in_stmt(g: *CG, s: *Stmt) {
 // path for `!(tuple)` / `?(tuple)` and the general program-wide pass) emit
 // it at most once. Nested tuple element typedefs are emitted first.
 fn emit_one_tuple_typedef(g: *CG, t: *Type) {
-    if t == null || t.kind != TY_TUPLE {
-        return;
-    }
+    if t == null || t.kind != TY_TUPLE { return; }
     let m: string = mangle_tuple(t);
     let dedup_key: string = "__rt_tuple_emit_".concat(m);
-    if g.module_aliases.contains(dedup_key) {
-        return;
-    }
+    if g.module_aliases.contains(dedup_key) { return; }
     // Element types are stored by value, so each must be fully defined first:
     //   - nested tuples emit their own typedef,
     //   - a by-value user struct/enum emits its body now (the forward typedef
@@ -1551,9 +1241,7 @@ fn emit_one_tuple_typedef(g: *CG, t: *Type) {
     if t.args != null {
         for let i: i32 = 0; i < t.args.len(); i++ {
             let a: Type = t.args.get(i);
-            if a.kind == TY_TUPLE {
-                emit_one_tuple_typedef(g, &a);
-            }
+            if a.kind == TY_TUPLE { emit_one_tuple_typedef(g, &a); }
             if a.kind == TY_NAMED && a.name != null && !g.emitted_named.contains(a.name) {
                 if g.structs.contains(a.name) {
                     let sd: Stmt = g.structs.get(a.name);
@@ -1593,18 +1281,10 @@ fn emit_one_tuple_typedef(g: *CG, t: *Type) {
 // result/option/optres pre-pass so `!(i32, i32)` has its element struct in
 // scope before the wrapper struct that stores it by value.
 fn emit_tuple_typedefs_in_type(g: *CG, t: *Type) {
-    if t == null {
-        return;
-    }
-    if t.kind == TY_TUPLE {
-        emit_one_tuple_typedef(g, t);
-    }
-    if t.inner != null {
-        emit_tuple_typedefs_in_type(g, t.inner);
-    }
-    if t.fnptr_ret != null {
-        emit_tuple_typedefs_in_type(g, t.fnptr_ret);
-    }
+    if t == null { return; }
+    if t.kind == TY_TUPLE { emit_one_tuple_typedef(g, t); }
+    if t.inner != null { emit_tuple_typedefs_in_type(g, t.inner); }
+    if t.fnptr_ret != null { emit_tuple_typedefs_in_type(g, t.fnptr_ret); }
     if t.args != null {
         for let i: i32 = 0; i < t.args.len(); i++ {
             let a: Type = t.args.get(i);
@@ -1614,9 +1294,7 @@ fn emit_tuple_typedefs_in_type(g: *CG, t: *Type) {
 }
 
 pub fn emit_tuple_runtime(g: *CG) {
-    if g.tuple_types.len() == 0 {
-        return;
-    }
+    if g.tuple_types.len() == 0 { return; }
     for let i: i32 = 0; i < g.tuple_types.len(); i++ {
         let t: Type = g.tuple_types.get(i);
         emit_one_tuple_typedef(g, &t);
@@ -1628,34 +1306,21 @@ pub fn emit_tuple_runtime(g: *CG) {
 // A `[T]` is a borrowed view (ptr + length), emitted on demand like the dyn
 // fat pointers. Register the element type; emit one typedef per distinct elem.
 pub fn register_slice_type(g: *CG, elem: *Type) {
-    if elem == null {
-        return;
-    }
-    if elem.kind == TY_SLICE {
-        register_slice_type(g, elem.inner);
-    }
+    if elem == null { return; }
+    if elem.kind == TY_SLICE { register_slice_type(g, elem.inner); }
     let m: string = mangle_type(elem);
     for let i: i32 = 0; i < g.slice_types.len(); i++ {
         let ex: Type = g.slice_types.get(i);
-        if mangle_type(&ex).eq(m) {
-            return;
-        }
+        if mangle_type(&ex).eq(m) { return; }
     }
     g.slice_types.push(*elem);
 }
+
 pub fn collect_slice_in_type(g: *CG, t: *Type) {
-    if t == null {
-        return;
-    }
-    if t.kind == TY_SLICE {
-        register_slice_type(g, t.inner);
-    }
-    if t.inner != null {
-        collect_slice_in_type(g, t.inner);
-    }
-    if t.fnptr_ret != null {
-        collect_slice_in_type(g, t.fnptr_ret);
-    }
+    if t == null { return; }
+    if t.kind == TY_SLICE { register_slice_type(g, t.inner); }
+    if t.inner != null { collect_slice_in_type(g, t.inner); }
+    if t.fnptr_ret != null { collect_slice_in_type(g, t.fnptr_ret); }
     if t.args != null {
         for let i: i32 = 0; i < t.args.len(); i++ {
             let a: Type = t.args.get(i);
@@ -1663,17 +1328,20 @@ pub fn collect_slice_in_type(g: *CG, t: *Type) {
         }
     }
 }
+
 pub fn collect_slice_in_expr(g: *CG, e: *Expr) {
-    if e == null {
-        return;
-    }
+    if e == null { return; }
     // Annotation-free `v.as_slice()` / `s.as_bytes()`: no []T annotation to walk,
     // so the element type is known only by inference (needs the live g.scope set
     // by the scoped collect driver in emit_program). Mirrors _emit_slice_method.
-    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.field != null && e.lhs.lhs != null && (e.args == null || e.args.len() == 0) {
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.field != null
+        && e.lhs.lhs != null
+        && (e.args == null || e.args.len() == 0) {
         if e.lhs.field.eq("as_slice") {
             let _rt: *Type = strip_ptr(infer_for_codegen(g, e.lhs.lhs));
-            if _rt != null && _rt.kind == TY_GENERIC && _rt.name != null && _rt.name.eq("Vector") && _rt.args != null && _rt.args.len() > 0 {
+            if _rt != null && _rt.kind == TY_GENERIC && _rt.name != null && _rt.name.eq("Vector")
+                && _rt.args != null
+                && _rt.args.len() > 0 {
                 let _ep: *Type = __glide_palloc(sizeof(Type)) as *Type;
                 *_ep = _rt.args.get(0);
                 register_slice_type(g, _ep);
@@ -1690,25 +1358,18 @@ pub fn collect_slice_in_expr(g: *CG, e: *Expr) {
     // typedef must be declared (mirrors the as_slice path above).
     if e.kind == EX_INDEX && e.rhs != null && e.rhs.kind == EX_RANGE {
         let _rb: *Type = infer_for_codegen(g, e.lhs);
-        if _rb != null && _rb.inner != null && (_rb.kind == TY_SLICE || _rb.kind == TY_POINTER || _rb.kind == TY_BORROW || _rb.kind == TY_BORROW_MUT) {
+        if _rb != null && _rb.inner != null
+            && (_rb.kind == TY_SLICE || _rb.kind == TY_POINTER || _rb.kind == TY_BORROW || _rb.kind == TY_BORROW_MUT) {
             register_slice_type(g, _rb.inner);
         }
         if _rb != null && _rb.kind == TY_NAMED && _rb.name != null && _rb.name.eq("string") {
             register_slice_type(g, ty_named("u8"));
         }
     }
-    if e.cast_to != null {
-        collect_slice_in_type(g, e.cast_to);
-    }
-    if e.lhs != null {
-        collect_slice_in_expr(g, e.lhs);
-    }
-    if e.rhs != null {
-        collect_slice_in_expr(g, e.rhs);
-    }
-    if e.operand != null {
-        collect_slice_in_expr(g, e.operand);
-    }
+    if e.cast_to != null { collect_slice_in_type(g, e.cast_to); }
+    if e.lhs != null { collect_slice_in_expr(g, e.lhs); }
+    if e.rhs != null { collect_slice_in_expr(g, e.rhs); }
+    if e.operand != null { collect_slice_in_expr(g, e.operand); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
@@ -1733,22 +1394,17 @@ pub fn collect_slice_in_expr(g: *CG, e: *Expr) {
         }
     }
 }
+
 pub fn collect_slice_in_stmt(g: *CG, s: *Stmt) {
-    if s == null {
-        return;
-    }
+    if s == null { return; }
     // Declare a let's local into the live scope (its let_ty was backfilled by
     // the driver's infer_let_types) so a later `local.as_slice()`/`.as_bytes()`
     // in a sibling statement can infer the receiver's type during collection.
     if s.kind == ST_LET && s.let_ty != null && s.name != null && !s.name.eq("") {
         g.declare(s.name, s.let_ty);
     }
-    if s.let_ty != null {
-        collect_slice_in_type(g, s.let_ty);
-    }
-    if s.fn_ret_ty != null {
-        collect_slice_in_type(g, s.fn_ret_ty);
-    }
+    if s.let_ty != null { collect_slice_in_type(g, s.let_ty); }
+    if s.fn_ret_ty != null { collect_slice_in_type(g, s.fn_ret_ty); }
     if s.fn_params != null {
         for let i: i32 = 0; i < s.fn_params.len(); i++ {
             let p: Param = s.fn_params.get(i);
@@ -1761,21 +1417,11 @@ pub fn collect_slice_in_stmt(g: *CG, s: *Stmt) {
             collect_slice_in_type(g, f.ty);
         }
     }
-    if s.let_value != null {
-        collect_slice_in_expr(g, s.let_value);
-    }
-    if s.expr_value != null {
-        collect_slice_in_expr(g, s.expr_value);
-    }
-    if s.cond != null {
-        collect_slice_in_expr(g, s.cond);
-    }
-    if s.for_init != null {
-        collect_slice_in_stmt(g, s.for_init);
-    }
-    if s.for_step != null {
-        collect_slice_in_expr(g, s.for_step);
-    }
+    if s.let_value != null { collect_slice_in_expr(g, s.let_value); }
+    if s.expr_value != null { collect_slice_in_expr(g, s.expr_value); }
+    if s.cond != null { collect_slice_in_expr(g, s.cond); }
+    if s.for_init != null { collect_slice_in_stmt(g, s.for_init); }
+    if s.for_step != null { collect_slice_in_expr(g, s.for_step); }
     if s.then_body != null {
         for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
@@ -1801,10 +1447,9 @@ pub fn collect_slice_in_stmt(g: *CG, s: *Stmt) {
         }
     }
 }
+
 pub fn emit_slice_fat_pointers(g: *CG) {
-    if g.slice_types.len() == 0 {
-        return;
-    }
+    if g.slice_types.len() == 0 { return; }
     for let i: i32 = 0; i < g.slice_types.len(); i++ {
         let elem: Type = g.slice_types.get(i);
         let m: string = mangle_type(&elem);
@@ -1820,9 +1465,7 @@ pub fn emit_slice_fat_pointers(g: *CG) {
 }
 
 fn collect_chan_in_type(g: *CG, t: *Type) {
-    if t == null {
-        return;
-    }
+    if t == null { return; }
     if t.kind == TY_GENERIC && t.name.eq("chan") && t.args != null && t.args.len() > 0 {
         let inner: Type = t.args.get(0);
         let m: string = mangle_type(&inner);
@@ -1830,18 +1473,12 @@ fn collect_chan_in_type(g: *CG, t: *Type) {
         let n: i32 = g.chan_types.len();
         for let i: i32 = 0; i < n; i++ {
             let existing: Type = g.chan_types.get(i);
-            if mangle_type(&existing).eq(m) {
-                return;
-            }
+            if mangle_type(&existing).eq(m) { return; }
         }
         g.chan_types.push(inner);
     }
-    if t.inner != null {
-        collect_chan_in_type(g, t.inner);
-    }
-    if t.fnptr_ret != null {
-        collect_chan_in_type(g, t.fnptr_ret);
-    }
+    if t.inner != null { collect_chan_in_type(g, t.inner); }
+    if t.fnptr_ret != null { collect_chan_in_type(g, t.fnptr_ret); }
     if t.args != null {
         for let i: i32 = 0; i < t.args.len(); i++ {
             let a: Type = t.args.get(i);
@@ -1851,21 +1488,11 @@ fn collect_chan_in_type(g: *CG, t: *Type) {
 }
 
 fn collect_chan_in_expr(g: *CG, e: *Expr) {
-    if e == null {
-        return;
-    }
-    if e.cast_to != null {
-        collect_chan_in_type(g, e.cast_to);
-    }
-    if e.lhs != null {
-        collect_chan_in_expr(g, e.lhs);
-    }
-    if e.rhs != null {
-        collect_chan_in_expr(g, e.rhs);
-    }
-    if e.operand != null {
-        collect_chan_in_expr(g, e.operand);
-    }
+    if e == null { return; }
+    if e.cast_to != null { collect_chan_in_type(g, e.cast_to); }
+    if e.lhs != null { collect_chan_in_expr(g, e.lhs); }
+    if e.rhs != null { collect_chan_in_expr(g, e.rhs); }
+    if e.operand != null { collect_chan_in_expr(g, e.operand); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
@@ -1875,20 +1502,12 @@ fn collect_chan_in_expr(g: *CG, e: *Expr) {
 }
 
 fn collect_dyn_in_type(g: *CG, t: *Type) {
-    if t == null {
-        return;
-    }
+    if t == null { return; }
     if t.kind == TY_DYN {
-        if t.name != null && !t.name.eq("") {
-            g.dyn_traits.insert(t.name, true);
-        }
+        if t.name != null && !t.name.eq("") { g.dyn_traits.insert(t.name, true); }
     }
-    if t.inner != null {
-        collect_dyn_in_type(g, t.inner);
-    }
-    if t.fnptr_ret != null {
-        collect_dyn_in_type(g, t.fnptr_ret);
-    }
+    if t.inner != null { collect_dyn_in_type(g, t.inner); }
+    if t.fnptr_ret != null { collect_dyn_in_type(g, t.fnptr_ret); }
     if t.args != null {
         for let i: i32 = 0; i < t.args.len(); i++ {
             let a: Type = t.args.get(i);
@@ -1898,21 +1517,11 @@ fn collect_dyn_in_type(g: *CG, t: *Type) {
 }
 
 fn collect_dyn_in_expr(g: *CG, e: *Expr) {
-    if e == null {
-        return;
-    }
-    if e.cast_to != null {
-        collect_dyn_in_type(g, e.cast_to);
-    }
-    if e.lhs != null {
-        collect_dyn_in_expr(g, e.lhs);
-    }
-    if e.rhs != null {
-        collect_dyn_in_expr(g, e.rhs);
-    }
-    if e.operand != null {
-        collect_dyn_in_expr(g, e.operand);
-    }
+    if e == null { return; }
+    if e.cast_to != null { collect_dyn_in_type(g, e.cast_to); }
+    if e.lhs != null { collect_dyn_in_expr(g, e.lhs); }
+    if e.rhs != null { collect_dyn_in_expr(g, e.rhs); }
+    if e.operand != null { collect_dyn_in_expr(g, e.operand); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
@@ -1922,32 +1531,18 @@ fn collect_dyn_in_expr(g: *CG, e: *Expr) {
 }
 
 pub fn collect_dyn_in_stmt(g: *CG, s: *Stmt) {
-    if s == null {
-        return;
-    }
-    if s.let_ty != null {
-        collect_dyn_in_type(g, s.let_ty);
-    }
-    if s.fn_ret_ty != null {
-        collect_dyn_in_type(g, s.fn_ret_ty);
-    }
+    if s == null { return; }
+    if s.let_ty != null { collect_dyn_in_type(g, s.let_ty); }
+    if s.fn_ret_ty != null { collect_dyn_in_type(g, s.fn_ret_ty); }
     if s.fn_params != null {
         for let i: i32 = 0; i < s.fn_params.len(); i++ {
             let p: Param = s.fn_params.get(i);
-            if p.ty != null {
-                collect_dyn_in_type(g, p.ty);
-            }
+            if p.ty != null { collect_dyn_in_type(g, p.ty); }
         }
     }
-    if s.let_value != null {
-        collect_dyn_in_expr(g, s.let_value);
-    }
-    if s.expr_value != null {
-        collect_dyn_in_expr(g, s.expr_value);
-    }
-    if s.cond != null {
-        collect_dyn_in_expr(g, s.cond);
-    }
+    if s.let_value != null { collect_dyn_in_expr(g, s.let_value); }
+    if s.expr_value != null { collect_dyn_in_expr(g, s.expr_value); }
+    if s.cond != null { collect_dyn_in_expr(g, s.cond); }
     if s.then_body != null {
         for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
@@ -1981,9 +1576,7 @@ pub fn collect_dyn_in_stmt(g: *CG, s: *Stmt) {
     if s.struct_fields != null {
         for let i: i32 = 0; i < s.struct_fields.len(); i++ {
             let f: Field = s.struct_fields.get(i);
-            if f.ty != null {
-                collect_dyn_in_type(g, f.ty);
-            }
+            if f.ty != null { collect_dyn_in_type(g, f.ty); }
         }
     }
     if s.enum_variants != null {
@@ -2006,20 +1599,12 @@ pub fn collect_dyn_in_stmt(g: *CG, s: *Stmt) {
 // `?Struct`/`!Struct`). The full vtable struct body + thunks come later in
 // emit_dyn_runtime, which must wait for option/result method-sig types.
 pub fn emit_dyn_fat_pointers(g: *CG, program: *Vector<Stmt>) {
-    if g.dyn_traits == null {
-        return;
-    }
+    if g.dyn_traits == null { return; }
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind != ST_TRAIT {
-            continue;
-        }
-        if s.name == null || s.name.eq("") {
-            continue;
-        }
-        if !g.dyn_traits.contains(s.name) {
-            continue;
-        }
+        if s.kind != ST_TRAIT { continue; }
+        if s.name == null || s.name.eq("") { continue; }
+        if !g.dyn_traits.contains(s.name) { continue; }
         let trait_name: string = s.name;
         println!("struct __glide_".concat(trait_name).concat("_vt;"));
         println!("typedef struct __glide_dyn_".concat(trait_name).concat(" {"));
@@ -2036,29 +1621,19 @@ pub fn emit_dyn_fat_pointers(g: *CG, program: *Vector<Stmt>) {
 //     `impl Trait for Type` block in the program.
 // The fat-pointer typedef itself is emitted earlier by emit_dyn_fat_pointers.
 pub fn emit_dyn_runtime(g: *CG, program: *Vector<Stmt>) {
-    if g.dyn_traits == null {
-        return;
-    }
+    if g.dyn_traits == null { return; }
     // Helper: index trait defs by name.
     let traits: *HashMap<Stmt> = HashMap::new();
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind == ST_TRAIT && s.name != null && !s.name.eq("") {
-            traits.insert(s.name, s);
-        }
+        if s.kind == ST_TRAIT && s.name != null && !s.name.eq("") { traits.insert(s.name, s); }
     }
     // Iterate over the program and emit per-trait runtime support.
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind != ST_TRAIT {
-            continue;
-        }
-        if s.name == null || s.name.eq("") {
-            continue;
-        }
-        if !g.dyn_traits.contains(s.name) {
-            continue;
-        }
+        if s.kind != ST_TRAIT { continue; }
+        if s.name == null || s.name.eq("") { continue; }
+        if !g.dyn_traits.contains(s.name) { continue; }
         let trait_name: string = s.name;
         // Vtable struct: one fn-ptr field per trait method. `data` is
         // always passed as the first arg (`void*`), then the user params.
@@ -2066,9 +1641,7 @@ pub fn emit_dyn_runtime(g: *CG, program: *Vector<Stmt>) {
         if s.impl_methods != null {
             for let k: i32 = 0; k < s.impl_methods.len(); k++ {
                 let m: Stmt = s.impl_methods.get(k);
-                if m.name == null || m.name.eq("") {
-                    continue;
-                }
+                if m.name == null || m.name.eq("") { continue; }
                 let ret_ty: string = type_to_c(m.fn_ret_ty);
                 print!("    ".concat(ret_ty).concat(" (*").concat(m.name).concat(")(void* self"));
                 if m.fn_params != null && m.fn_params.len() > 1 {
@@ -2094,39 +1667,23 @@ pub fn emit_dyn_runtime(g: *CG, program: *Vector<Stmt>) {
     //   - emit the static vtable instance pointing at the thunks.
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind != ST_IMPL {
-            continue;
-        }
-        if s.impl_trait_name == null || s.impl_trait_name.eq("") {
-            continue;
-        }
-        if !g.dyn_traits.contains(s.impl_trait_name) {
-            continue;
-        }
-        if s.impl_target == null || s.impl_target.kind != TY_NAMED {
-            continue;
-        }
+        if s.kind != ST_IMPL { continue; }
+        if s.impl_trait_name == null || s.impl_trait_name.eq("") { continue; }
+        if !g.dyn_traits.contains(s.impl_trait_name) { continue; }
+        if s.impl_target == null || s.impl_target.kind != TY_NAMED { continue; }
         let trait_name: string = s.impl_trait_name;
         let type_name: string = s.impl_target.name;
-        if !traits.contains(trait_name) {
-            continue;
-        }
-        if s.impl_methods == null {
-            continue;
-        }
+        if !traits.contains(trait_name) { continue; }
+        if s.impl_methods == null { continue; }
         // Forward declarations of the real impl methods.
         for let k: i32 = 0; k < s.impl_methods.len(); k++ {
             let m: Stmt = s.impl_methods.get(k);
-            if m.name == null || m.name.eq("") {
-                continue;
-            }
+            if m.name == null || m.name.eq("") { continue; }
             let ret_ty: string = type_to_c(m.fn_ret_ty);
             print!(ret_ty.concat(" ").concat(type_name).concat("_").concat(m.name).concat("("));
             if m.fn_params != null {
                 for let j: i32 = 0; j < m.fn_params.len(); j++ {
-                    if j > 0 {
-                        print!(", ");
-                    }
+                    if j > 0 { print!(", "); }
                     let p: Param = m.fn_params.get(j);
                     print!(type_to_c(p.ty));
                 }
@@ -2145,9 +1702,7 @@ pub fn emit_dyn_runtime(g: *CG, program: *Vector<Stmt>) {
         // "expected Type* but got Type" (or vice versa) at the call.
         for let k: i32 = 0; k < s.impl_methods.len(); k++ {
             let m: Stmt = s.impl_methods.get(k);
-            if m.name == null || m.name.eq("") {
-                continue;
-            }
+            if m.name == null || m.name.eq("") { continue; }
             let ret_ty: string = type_to_c(m.fn_ret_ty);
             print!("static ".concat(ret_ty).concat(" __glide_").concat(type_name).concat("_as_").concat(trait_name).concat("__").concat(m.name).concat("_thunk(void* self_p"));
             let mut _tp_start: i32 = 1;
@@ -2173,23 +1728,20 @@ pub fn emit_dyn_runtime(g: *CG, program: *Vector<Stmt>) {
                     has_self = true;
                     // `&self` / `&mut self` borrows lower to a C pointer exactly
                     // like `*Self` — all three take the cast, not the deref.
-                    if p0.ty != null && (p0.ty.kind == TY_POINTER || p0.ty.kind == TY_BORROW || p0.ty.kind == TY_BORROW_MUT) {
+                    if p0.ty != null
+                        && (p0.ty.kind == TY_POINTER || p0.ty.kind == TY_BORROW || p0.ty.kind == TY_BORROW_MUT) {
                         self_expr = "(".concat(type_name).concat("*)self_p");
                     }
                 }
             }
-            if !has_self {
-                self_expr = "";
-            }
+            if !has_self { self_expr = ""; }
             if is_void {
                 print!("    ".concat(type_name).concat("_").concat(m.name).concat("(").concat(self_expr));
             } else {
                 print!("    return ".concat(type_name).concat("_").concat(m.name).concat("(").concat(self_expr));
             }
             let mut _fw_start: i32 = 1;
-            if !has_self {
-                _fw_start = 0;
-            }
+            if !has_self { _fw_start = 0; }
             if m.fn_params != null && m.fn_params.len() > _fw_start {
                 for let j: i32 = _fw_start; j < m.fn_params.len(); j++ {
                     let p: Param = m.fn_params.get(j);
@@ -2208,12 +1760,8 @@ pub fn emit_dyn_runtime(g: *CG, program: *Vector<Stmt>) {
         let mut emitted_any: bool = false;
         for let k: i32 = 0; k < s.impl_methods.len(); k++ {
             let m: Stmt = s.impl_methods.get(k);
-            if m.name == null || m.name.eq("") {
-                continue;
-            }
-            if emitted_any {
-                print!(", ");
-            }
+            if m.name == null || m.name.eq("") { continue; }
+            if emitted_any { print!(", "); }
             emitted_any = true;
             print!(".".concat(m.name).concat(" = __glide_").concat(type_name).concat("_as_").concat(trait_name).concat("__").concat(m.name).concat("_thunk"));
         }
@@ -2223,15 +1771,9 @@ pub fn emit_dyn_runtime(g: *CG, program: *Vector<Stmt>) {
 }
 
 pub fn collect_chan_in_stmt(g: *CG, s: *Stmt) {
-    if s == null {
-        return;
-    }
-    if s.let_ty != null {
-        collect_chan_in_type(g, s.let_ty);
-    }
-    if s.fn_ret_ty != null {
-        collect_chan_in_type(g, s.fn_ret_ty);
-    }
+    if s == null { return; }
+    if s.let_ty != null { collect_chan_in_type(g, s.let_ty); }
+    if s.fn_ret_ty != null { collect_chan_in_type(g, s.fn_ret_ty); }
     if s.fn_params != null {
         for let i: i32 = 0; i < s.fn_params.len(); i++ {
             let p: Param = s.fn_params.get(i);
@@ -2244,21 +1786,11 @@ pub fn collect_chan_in_stmt(g: *CG, s: *Stmt) {
             collect_chan_in_type(g, f.ty);
         }
     }
-    if s.let_value != null {
-        collect_chan_in_expr(g, s.let_value);
-    }
-    if s.expr_value != null {
-        collect_chan_in_expr(g, s.expr_value);
-    }
-    if s.cond != null {
-        collect_chan_in_expr(g, s.cond);
-    }
-    if s.for_step != null {
-        collect_chan_in_expr(g, s.for_step);
-    }
-    if s.for_init != null {
-        collect_chan_in_stmt(g, s.for_init);
-    }
+    if s.let_value != null { collect_chan_in_expr(g, s.let_value); }
+    if s.expr_value != null { collect_chan_in_expr(g, s.expr_value); }
+    if s.cond != null { collect_chan_in_expr(g, s.cond); }
+    if s.for_step != null { collect_chan_in_expr(g, s.for_step); }
+    if s.for_init != null { collect_chan_in_stmt(g, s.for_init); }
     if s.then_body != null {
         for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
@@ -2286,9 +1818,7 @@ pub fn collect_chan_in_stmt(g: *CG, s: *Stmt) {
 }
 
 pub fn emit_chan_runtime(g: *CG) {
-    if g.chan_types.len() == 0 {
-        return;
-    }
+    if g.chan_types.len() == 0 { return; }
     g.uses_pthread = true;
     println!("#include <pthread.h>");
     println!("");
@@ -2371,18 +1901,14 @@ pub fn emit_socket_runtime() {
 // Spawn: collect every spawn site and emit a stub up-front. The same pre-walk
 // order is used at emit time to recover the matching ID.
 pub fn pre_emit_spawn_stubs_in_stmt(g: *CG, s: *Stmt) {
-    if s == null {
-        return;
-    }
+    if s == null { return; }
     if s.kind == ST_SPAWN {
         let id: i32 = g.spawn_count;
         g.spawn_count = id + 1;
         emit_spawn_stub(g, s.expr_value, id);
         return;
     }
-    if s.for_init != null {
-        pre_emit_spawn_stubs_in_stmt(g, s.for_init);
-    }
+    if s.for_init != null { pre_emit_spawn_stubs_in_stmt(g, s.for_init); }
     if s.then_body != null {
         for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
@@ -2410,20 +1936,12 @@ pub fn pre_emit_spawn_stubs_in_stmt(g: *CG, s: *Stmt) {
 }
 
 fn emit_spawn_stub(g: *CG, call: *Expr, id: i32) {
-    if call == null || call.kind != EX_CALL || call.lhs == null {
-        return;
-    }
-    if call.lhs.kind != EX_IDENT {
-        return;
-    }
+    if call == null || call.kind != EX_CALL || call.lhs == null { return; }
+    if call.lhs.kind != EX_IDENT { return; }
     let fn_name: string = call.lhs.str_val;
-    if !g.fns.contains(fn_name) {
-        return;
-    }
+    if !g.fns.contains(fn_name) { return; }
     let fnstmt: Stmt = g.fns.get(fn_name);
-    if fnstmt.fn_params == null {
-        return;
-    }
+    if fnstmt.fn_params == null { return; }
     let n: i32 = fnstmt.fn_params.len();
     let ids: string = int_to_str(id);
     // Zero-arg fast path: no args struct, no malloc, no free in stub.
@@ -2442,9 +1960,7 @@ fn emit_spawn_stub(g: *CG, call: *Expr, id: i32) {
         let p: Param = fnstmt.fn_params.get(i);
         let ix: string = int_to_str(i);
         fields = fields.concat("    ").concat(type_to_c(p.ty)).concat(" a").concat(ix).concat(";\n");
-        if i > 0 {
-            call_args = call_args.concat(", ");
-        }
+        if i > 0 { call_args = call_args.concat(", "); }
         call_args = call_args.concat("__args->a").concat(ix);
     }
     let tmpl: string = "typedef struct @AN@ {\n@FIELDS@} @AN@;\nstatic void* __glide_spawn_stub_@ID@(void* __raw) {\n    @AN@* __args = (@AN@*)__raw;\n    @FN_NAME@(@CALL_ARGS@);\n    free(__raw);\n    return NULL;\n}\n";
@@ -2458,45 +1974,27 @@ fn emit_spawn_stub(g: *CG, call: *Expr, id: i32) {
 
 // Any fixed-width integer type (the canonical family).
 pub fn _is_int_family(name: string) -> bool {
-    if name.eq("i8") || name.eq("i16") || name.eq("i32") || name.eq("i64") {
-        return true;
-    }
-    if name.eq("u8") || name.eq("u16") || name.eq("u32") || name.eq("u64") {
-        return true;
-    }
-    if name.eq("i128") || name.eq("u128") {
-        return true;
-    }
-    if name.eq("usize") || name.eq("isize") {
-        return true;
-    }
+    if name.eq("i8") || name.eq("i16") || name.eq("i32") || name.eq("i64") { return true; }
+    if name.eq("u8") || name.eq("u16") || name.eq("u32") || name.eq("u64") { return true; }
+    if name.eq("i128") || name.eq("u128") { return true; }
+    if name.eq("usize") || name.eq("isize") { return true; }
     return false;
 }
 
 // Unsigned <=64-bit ints. Their methods route through `__glide_uint_*` (%llu),
 // not the signed `__glide_int_*`, so to_string is correct above i64 max.
 pub fn _is_uint_family(name: string) -> bool {
-    if name.eq("u8") || name.eq("u16") || name.eq("u32") || name.eq("u64") {
-        return true;
-    }
-    if name.eq("usize") {
-        return true;
-    }
+    if name.eq("u8") || name.eq("u16") || name.eq("u32") || name.eq("u64") { return true; }
+    if name.eq("usize") { return true; }
     return false;
 }
 
 // `"u256"` / `"i256"` if `t` is a 256-bit int (the software-struct types whose
 // operators dispatch to `__glide_<ty>_<op>` runtime fns), else `""`.
 pub fn _u256_ty(t: *Type) -> string {
-    if t == null || t.kind != TY_NAMED {
-        return "";
-    }
-    if t.name.eq("u256") {
-        return "u256";
-    }
-    if t.name.eq("i256") {
-        return "i256";
-    }
+    if t == null || t.kind != TY_NAMED { return ""; }
+    if t.name.eq("u256") { return "u256"; }
+    if t.name.eq("i256") { return "i256"; }
     return "";
 }
 
@@ -2506,87 +2004,59 @@ pub fn _u256_ty(t: *Type) -> string {
 // runtime helpers. Doubles as the "is this a valid int-constant type" predicate.
 pub fn _int_limit_c(ty: string, hi: bool) -> string {
     if ty.eq("i8") {
-        if hi {
-            return "INT8_MAX";
-        }
+        if hi { return "INT8_MAX"; }
         return "INT8_MIN";
     }
     if ty.eq("i16") {
-        if hi {
-            return "INT16_MAX";
-        }
+        if hi { return "INT16_MAX"; }
         return "INT16_MIN";
     }
     if ty.eq("i32") {
-        if hi {
-            return "INT32_MAX";
-        }
+        if hi { return "INT32_MAX"; }
         return "INT32_MIN";
     }
     if ty.eq("i64") {
-        if hi {
-            return "INT64_MAX";
-        }
+        if hi { return "INT64_MAX"; }
         return "INT64_MIN";
     }
     if ty.eq("u8") {
-        if hi {
-            return "UINT8_MAX";
-        }
+        if hi { return "UINT8_MAX"; }
         return "0";
     }
     if ty.eq("u16") {
-        if hi {
-            return "UINT16_MAX";
-        }
+        if hi { return "UINT16_MAX"; }
         return "0";
     }
     if ty.eq("u32") {
-        if hi {
-            return "UINT32_MAX";
-        }
+        if hi { return "UINT32_MAX"; }
         return "0";
     }
     if ty.eq("u64") {
-        if hi {
-            return "UINT64_MAX";
-        }
+        if hi { return "UINT64_MAX"; }
         return "0";
     }
     if ty.eq("usize") {
-        if hi {
-            return "SIZE_MAX";
-        }
+        if hi { return "SIZE_MAX"; }
         return "0";
     }
     if ty.eq("isize") {
-        if hi {
-            return "PTRDIFF_MAX";
-        }
+        if hi { return "PTRDIFF_MAX"; }
         return "PTRDIFF_MIN";
     }
     if ty.eq("i128") {
-        if hi {
-            return "((__int128)((~(unsigned __int128)0) >> 1))";
-        }
+        if hi { return "((__int128)((~(unsigned __int128)0) >> 1))"; }
         return "(-((__int128)((~(unsigned __int128)0) >> 1)) - 1)";
     }
     if ty.eq("u128") {
-        if hi {
-            return "(~(unsigned __int128)0)";
-        }
+        if hi { return "(~(unsigned __int128)0)"; }
         return "((unsigned __int128)0)";
     }
     if ty.eq("i256") {
-        if hi {
-            return "__glide_i256_max()";
-        }
+        if hi { return "__glide_i256_max()"; }
         return "__glide_i256_min()";
     }
     if ty.eq("u256") {
-        if hi {
-            return "__glide_u256_max()";
-        }
+        if hi { return "__glide_u256_max()"; }
         return "__glide_u256_min()";
     }
     return "";
@@ -2595,58 +2065,26 @@ pub fn _int_limit_c(ty: string, hi: bool) -> string {
 // Runtime fn suffix for an arithmetic/bitwise op on a 256-bit int, or "" if
 // `op` is a comparison (handled via `_cmp`) or not applicable.
 pub fn _u256_arith_fn(op: i32) -> string {
-    if op == OP_ADD {
-        return "add";
-    }
-    if op == OP_SUB {
-        return "sub";
-    }
-    if op == OP_MUL {
-        return "mul";
-    }
-    if op == OP_DIV {
-        return "div";
-    }
-    if op == OP_MOD {
-        return "mod";
-    }
-    if op == OP_BIT_AND {
-        return "and";
-    }
-    if op == OP_BIT_OR {
-        return "or";
-    }
-    if op == OP_BIT_XOR {
-        return "xor";
-    }
-    if op == OP_SHL {
-        return "shl";
-    }
-    if op == OP_SHR {
-        return "shr";
-    }
+    if op == OP_ADD { return "add"; }
+    if op == OP_SUB { return "sub"; }
+    if op == OP_MUL { return "mul"; }
+    if op == OP_DIV { return "div"; }
+    if op == OP_MOD { return "mod"; }
+    if op == OP_BIT_AND { return "and"; }
+    if op == OP_BIT_OR { return "or"; }
+    if op == OP_BIT_XOR { return "xor"; }
+    if op == OP_SHL { return "shl"; }
+    if op == OP_SHR { return "shr"; }
     return "";
 }
 
 pub fn is_stdlib_primitive(name: string) -> bool {
-    if _is_int_family(name) {
-        return true;
-    }
-    if name.eq("u256") || name.eq("i256") {
-        return true;
-    }
-    if name.eq("f32") || name.eq("f64") {
-        return true;
-    }
-    if name.eq("char") {
-        return true;
-    }
-    if name.eq("bool") {
-        return true;
-    }
-    if name.eq("string") {
-        return true;
-    }
+    if _is_int_family(name) { return true; }
+    if name.eq("u256") || name.eq("i256") { return true; }
+    if name.eq("f32") || name.eq("f64") { return true; }
+    if name.eq("char") { return true; }
+    if name.eq("bool") { return true; }
+    if name.eq("string") { return true; }
     return false;
 }
 
@@ -2709,15 +2147,17 @@ pub fn emit_stdlib_runtime() {
 
 // Best-effort inference of an expression's type for codegen.
 pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
-    if e == null {
-        return null;
-    }
+    if e == null { return null; }
     // as_slice()/as_bytes() intrinsics — mirror the typer so an annotation-free
     // `let sl = v.as_slice()` / `let bs = s.as_bytes()` gets the right slice type.
-    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.field != null && e.lhs.lhs != null && (e.args == null || e.args.len() == 0) {
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.field != null
+        && e.lhs.lhs != null
+        && (e.args == null || e.args.len() == 0) {
         if e.lhs.field.eq("as_slice") {
             let _sr: *Type = strip_ptr(infer_for_codegen(g, e.lhs.lhs));
-            if _sr != null && _sr.kind == TY_GENERIC && _sr.name != null && _sr.name.eq("Vector") && _sr.args != null && _sr.args.len() > 0 {
+            if _sr != null && _sr.kind == TY_GENERIC && _sr.name != null && _sr.name.eq("Vector")
+                && _sr.args != null
+                && _sr.args.len() > 0 {
                 let _sep: *Type = __glide_palloc(sizeof(Type)) as *Type;
                 *_sep = _sr.args.get(0);
                 return ty_slice(_sep);
@@ -2734,33 +2174,19 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         // Mirror infer_expr in the typer: literals that overflow 32-bit
         // int widen to i64 so the emitted `let` lands the right C type
         // and downstream format!() picks `%lld` instead of `%d`.
-        if e.int_val > 2147483647 || e.int_val < -2147483648 {
-            return ty_named("i64");
-        }
+        if e.int_val > 2147483647 || e.int_val < -2147483648 { return ty_named("i64"); }
         return ty_named("i32");
     }
-    if e.kind == EX_FLOAT {
-        return ty_named("f64");
-    }
-    if e.kind == EX_STRING {
-        return ty_named("string");
-    }
-    if e.kind == EX_BOOL {
-        return ty_named("bool");
-    }
-    if e.kind == EX_CHAR {
-        return ty_named("char");
-    }
-    if e.kind == EX_NULL {
-        return ty_pointer(ty_named("void"));
-    }
+    if e.kind == EX_FLOAT { return ty_named("f64"); }
+    if e.kind == EX_STRING { return ty_named("string"); }
+    if e.kind == EX_BOOL { return ty_named("bool"); }
+    if e.kind == EX_CHAR { return ty_named("char"); }
+    if e.kind == EX_NULL { return ty_pointer(ty_named("void")); }
     if e.kind == EX_IF {
         // Both branches share a type by the typer's check; pick whichever
         // we can resolve.
         let then_ty: *Type = infer_for_codegen(g, e.rhs);
-        if then_ty != null {
-            return then_ty;
-        }
+        if then_ty != null { return then_ty; }
         return infer_for_codegen(g, e.operand);
     }
     if e.kind == EX_BLOCK {
@@ -2776,17 +2202,13 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
                     } else {
                         if b.let_value != null {
                             let bvt: *Type = infer_for_codegen(g, b.let_value);
-                            if bvt != null {
-                                g.declare(b.name, bvt);
-                            }
+                            if bvt != null { g.declare(b.name, bvt); }
                         }
                     }
                 }
             }
         }
-        if e.operand != null {
-            return infer_for_codegen(g, e.operand);
-        }
+        if e.operand != null { return infer_for_codegen(g, e.operand); }
         return null;
     }
     if e.kind == EX_MATCH {
@@ -2799,24 +2221,22 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
             for let mi: i32 = 0; mi < e.match_arms.len(); mi++ {
                 let ma: MatchArm = e.match_arms.get(mi);
                 let mv: *Expr = arm_value_expr(&ma);
-                if mv == null {
-                    continue;
-                }
-                if mv.kind == EX_IDENT && ma.bindings != null && ma.bindings.len() == 1 && ma.bindings.get(0).eq(mv.str_val) && mscrut != null {
-                    if (mscrut.kind == TY_RESULT || mscrut.kind == TY_OPT_RESULT) && ma.variant.eq("ok") {
+                if mv == null { continue; }
+                if mv.kind == EX_IDENT && ma.bindings != null && ma.bindings.len() == 1
+                    && ma.bindings.get(0).eq(mv.str_val)
+                    && mscrut != null {
+                    if (mscrut.kind == TY_RESULT || mscrut.kind == TY_OPT_RESULT)
+                        && ma.variant.eq("ok") {
                         return mscrut.inner;
                     }
-                    if (mscrut.kind == TY_RESULT || mscrut.kind == TY_OPT_RESULT) && ma.variant.eq("err") {
+                    if (mscrut.kind == TY_RESULT || mscrut.kind == TY_OPT_RESULT)
+                        && ma.variant.eq("err") {
                         return ty_named("string");
                     }
-                    if mscrut.kind == TY_OPTION && ma.variant.eq("some") {
-                        return mscrut.inner;
-                    }
+                    if mscrut.kind == TY_OPTION && ma.variant.eq("some") { return mscrut.inner; }
                 }
                 let mt: *Type = arm_value_type(g, &ma);
-                if mt != null {
-                    return mt;
-                }
+                if mt != null { return mt; }
             }
         }
         return null;
@@ -2824,14 +2244,10 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
     // Inline closure literal: `fn(x: T) -> U { ... }` has its type from the
     // params + return (`.cast_to`). Without this an untyped `let f = fn...`
     // bound to `void*` and its call emitted without a fn-ptr cast (cc error).
-    if e.kind == EX_FNEXPR {
-        return _build_fnptr_ty(e.fn_expr_params, e.cast_to);
-    }
+    if e.kind == EX_FNEXPR { return _build_fnptr_ty(e.fn_expr_params, e.cast_to); }
     if e.kind == EX_IDENT {
         let local: *Type = g.lookup(e.str_val);
-        if local != null {
-            return local;
-        }
+        if local != null { return local; }
         // Top-level const: registered in the same pre-scan as fns.
         // Without this, `println!("v=", VERSION)` codegen'd `%p` for the
         // const-typed arg and printed a raw pointer.
@@ -2851,9 +2267,7 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
             if s.fn_params != null {
                 for let i: i32 = 0; i < s.fn_params.len(); i++ {
                     let p: Param = s.fn_params.get(i);
-                    if p.ty != null {
-                        args.push(*p.ty);
-                    }
+                    if p.ty != null { args.push(*p.ty); }
                 }
             }
             let fp: *Type = __glide_palloc(sizeof(Type)) as *Type;
@@ -2871,9 +2285,7 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         // has no cast).
         for let i: i32 = 0; i < g.anon_fns.len(); i++ {
             let af: AnonFn = g.anon_fns.get(i);
-            if af.name.eq(e.str_val) {
-                return _build_fnptr_ty(af.params, af.ret_ty);
-            }
+            if af.name.eq(e.str_val) { return _build_fnptr_ty(af.params, af.ret_ty); }
         }
         return null;
     }
@@ -2882,13 +2294,12 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         if e.op_code == UN_DEREF && inner != null && inner.kind == TY_POINTER {
             return inner.inner;
         }
-        if e.op_code == UN_ADDR || e.op_code == UN_ADDR_MUT {
-            return ty_pointer(inner);
-        }
+        if e.op_code == UN_ADDR || e.op_code == UN_ADDR_MUT { return ty_pointer(inner); }
         // Postfix `?` unwraps !T / ?T / ?!T to T — the value the stmt-expr
         // yields. Mirrors the typer's infer_expr so an un-annotated
         // `let x = expr?` declares `x` as T, not the result struct.
-        if e.op_code == UN_TRY && inner != null && (inner.kind == TY_RESULT || inner.kind == TY_OPTION || inner.kind == TY_OPT_RESULT) {
+        if e.op_code == UN_TRY && inner != null
+            && (inner.kind == TY_RESULT || inner.kind == TY_OPTION || inner.kind == TY_OPT_RESULT) {
             return inner.inner;
         }
         return inner;
@@ -2896,9 +2307,7 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
     if e.kind == EX_MEMBER {
         let recv_ty: *Type = infer_for_codegen(g, e.lhs);
         let stripped: *Type = strip_ptr(recv_ty);
-        if stripped == null {
-            return null;
-        }
+        if stripped == null { return null; }
         // Tuple index `t.0` / `t.1`: numeric field selects the element type.
         if stripped.kind == TY_TUPLE && tuple_field_is_index(e.field) {
             let idx: i32 = tuple_index_value(e.field);
@@ -2912,43 +2321,25 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         }
         // Built-in field access on the synth Result/Option/OptResult structs.
         if stripped.kind == TY_RESULT {
-            if e.field.eq("val") {
-                return stripped.inner;
-            }
-            if e.field.eq("ok") {
-                return ty_named("bool");
-            }
-            if e.field.eq("err") {
-                return ty_named("string");
-            }
+            if e.field.eq("val") { return stripped.inner; }
+            if e.field.eq("ok") { return ty_named("bool"); }
+            if e.field.eq("err") { return ty_named("string"); }
             return null;
         }
         if stripped.kind == TY_OPTION {
-            if e.field.eq("val") {
-                return stripped.inner;
-            }
-            if e.field.eq("has") {
-                return ty_named("bool");
-            }
+            if e.field.eq("val") { return stripped.inner; }
+            if e.field.eq("has") { return ty_named("bool"); }
             return null;
         }
         if stripped.kind == TY_OPT_RESULT {
-            if e.field.eq("val") {
-                return stripped.inner;
-            }
-            if e.field.eq("tag") {
-                return ty_named("i32");
-            }
-            if e.field.eq("err") {
-                return ty_named("string");
-            }
+            if e.field.eq("val") { return stripped.inner; }
+            if e.field.eq("tag") { return ty_named("i32"); }
+            if e.field.eq("err") { return ty_named("string"); }
             return null;
         }
         // Slice .len → usize/int placeholder.
         if stripped.kind == TY_SLICE {
-            if e.field.eq("len") {
-                return ty_named("usize");
-            }
+            if e.field.eq("len") { return ty_named("usize"); }
             return null;
         }
         if stripped.kind == TY_NAMED && g.structs.contains(stripped.name) {
@@ -2956,9 +2347,7 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
             if sd.struct_fields != null {
                 for let i: i32 = 0; i < sd.struct_fields.len(); i++ {
                     let f: Field = sd.struct_fields.get(i);
-                    if f.name.eq(e.field) {
-                        return f.ty;
-                    }
+                    if f.name.eq(e.field) { return f.ty; }
                 }
             }
         }
@@ -2975,16 +2364,12 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         }
         return null;
     }
-    if e.kind == EX_CAST {
-        return e.cast_to;
-    }
+    if e.kind == EX_CAST { return e.cast_to; }
     if e.kind == EX_STRUCT_LIT {
         // A generic struct-lit (`Self { .. }` in an impl body) carries its
         // concrete type on cast_to; str_val is the bare TEMPLATE name, and
         // inferring that poisons monos (`Box_new__LL (LL v)`).
-        if e.cast_to != null && e.cast_to.kind == TY_GENERIC {
-            return e.cast_to;
-        }
+        if e.cast_to != null && e.cast_to.kind == TY_GENERIC { return e.cast_to; }
         return ty_named(e.str_val);
     }
     if e.kind == EX_TUPLE {
@@ -2993,18 +2378,14 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
             for let i: i32 = 0; i < e.args.len(); i++ {
                 let a: Expr = e.args.get(i);
                 let et: *Type = infer_for_codegen(g, &a);
-                if et == null {
-                    return null;
-                }
+                if et == null { return null; }
                 elems.push(*et);
             }
         }
         return ty_tuple(elems);
     }
     if e.kind == EX_MACRO {
-        if e.str_val.eq("format") {
-            return ty_named("string");
-        }
+        if e.str_val.eq("format") { return ty_named("string"); }
         if e.str_val.eq("dbg") && e.args != null && e.args.len() >= 1 {
             let da: Expr = e.args.get(0);
             return infer_for_codegen(g, &da);
@@ -3015,16 +2396,16 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         if e.str_val.eq("vec_of") && e.args != null && e.args.len() > 0 {
             let first: Expr = e.args.get(0);
             let elem: *Type = infer_for_codegen(g, &first);
-            if elem == null {
-                return null;
-            }
+            if elem == null { return null; }
             return ty_vector_of(elem);
         }
         return null;
     }
     if e.kind == EX_BINARY {
         let op: i32 = e.op_code;
-        if op == OP_EQ || op == OP_NE || op == OP_LT || op == OP_LE || op == OP_GT || op == OP_GE || op == OP_AND || op == OP_OR {
+        if op == OP_EQ || op == OP_NE || op == OP_LT || op == OP_LE || op == OP_GT || op == OP_GE
+            || op == OP_AND
+            || op == OP_OR {
             return ty_named("bool");
         }
         if op == OP_COALESCE {
@@ -3034,29 +2415,30 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
             // T, not the wrapper. A nullable `*T` stays a pointer. Fall back
             // to the RHS type when the LHS can't be resolved.
             let lt: *Type = infer_for_codegen(g, e.lhs);
-            if lt != null && (lt.kind == TY_OPTION || lt.kind == TY_RESULT || lt.kind == TY_OPT_RESULT) && lt.inner != null {
+            if lt != null
+                && (lt.kind == TY_OPTION || lt.kind == TY_RESULT || lt.kind == TY_OPT_RESULT)
+                && lt.inner != null {
                 // An `err(...)` fallback keeps Result shape (`!T`), matching
                 // the typer and the emitted none/err-substitution form.
-                if e.rhs != null && e.rhs.kind == EX_CALL && e.rhs.lhs != null && e.rhs.lhs.kind == EX_IDENT && e.rhs.lhs.str_val.eq("err") {
+                if e.rhs != null && e.rhs.kind == EX_CALL && e.rhs.lhs != null
+                    && e.rhs.lhs.kind == EX_IDENT
+                    && e.rhs.lhs.str_val.eq("err") {
                     return ty_result(lt.inner);
                 }
                 return lt.inner;
             }
-            if lt != null {
-                return lt;
-            }
+            if lt != null { return lt; }
             return infer_for_codegen(g, e.rhs);
         }
         return infer_for_codegen(g, e.lhs);
     }
     if e.kind == EX_INDEX {
         let base: *Type = infer_for_codegen(g, e.lhs);
-        if base == null {
-            return null;
-        }
+        if base == null { return null; }
         // B3 range slice: `base[lo..hi]` -> `[]elem` fat pointer.
         if e.rhs != null && e.rhs.kind == EX_RANGE {
-            if base.kind == TY_SLICE || base.kind == TY_POINTER || base.kind == TY_BORROW || base.kind == TY_BORROW_MUT {
+            if base.kind == TY_SLICE || base.kind == TY_POINTER || base.kind == TY_BORROW
+                || base.kind == TY_BORROW_MUT {
                 return ty_slice(base.inner);
             }
             if base.kind == TY_NAMED && base.name != null && base.name.eq("string") {
@@ -3064,14 +2446,16 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
             }
             return null;
         }
-        if base.kind == TY_POINTER || base.kind == TY_BORROW || base.kind == TY_BORROW_MUT || base.kind == TY_SLICE {
+        if base.kind == TY_POINTER || base.kind == TY_BORROW || base.kind == TY_BORROW_MUT
+            || base.kind == TY_SLICE {
             return base.inner;
         }
         return null;
     }
     if e.kind == EX_CALL {
         // 256-bit constructors `u256::from` / `i256::from` yield their type.
-        if e.lhs != null && e.lhs.kind == EX_PATH && e.lhs.field.eq("from") && (e.lhs.str_val.eq("u256") || e.lhs.str_val.eq("i256")) {
+        if e.lhs != null && e.lhs.kind == EX_PATH && e.lhs.field.eq("from")
+            && (e.lhs.str_val.eq("u256") || e.lhs.str_val.eq("i256")) {
             return ty_named(e.lhs.str_val);
         }
         // Direct fn ident
@@ -3081,9 +2465,7 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
             // return type (so `println!(f(x))` formats the result correctly
             // instead of as a pointer).
             let _lvt: *Type = g.lookup(nm);
-            if _lvt != null && _lvt.kind == TY_FNPTR {
-                return _lvt.fnptr_ret;
-            }
+            if _lvt != null && _lvt.kind == TY_FNPTR { return _lvt.fnptr_ret; }
             // Builtin Option/Result ctors. `some(x)`/`ok(x)` carry their inner
             // type from the argument, so a method on the bare literal (e.g.
             // `some(3).unwrap_or(0)`) can resolve the receiver as ?T/!T instead
@@ -3098,27 +2480,13 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
                 return ty_result(infer_for_codegen(g, &a0));
             }
             // Stdlib runtime fns.
-            if nm.eq("args_count") {
-                return ty_named("i32");
-            }
-            if nm.eq("args_at") {
-                return ty_named("string");
-            }
-            if nm.eq("read_file") {
-                return ty_named("string");
-            }
-            if nm.eq("write_file") {
-                return ty_named("bool");
-            }
-            if nm.eq("now_ns") {
-                return ty_named("i64");
-            }
-            if nm.eq("pending_count") {
-                return ty_named("i32");
-            }
-            if nm.eq("malloc") || nm.eq("calloc") {
-                return ty_pointer(ty_named("void"));
-            }
+            if nm.eq("args_count") { return ty_named("i32"); }
+            if nm.eq("args_at") { return ty_named("string"); }
+            if nm.eq("read_file") { return ty_named("string"); }
+            if nm.eq("write_file") { return ty_named("bool"); }
+            if nm.eq("now_ns") { return ty_named("i64"); }
+            if nm.eq("pending_count") { return ty_named("i32"); }
+            if nm.eq("malloc") || nm.eq("calloc") { return ty_pointer(ty_named("void")); }
             if g.fns.contains(nm) {
                 let s: Stmt = g.fns.get(nm);
                 return s.fn_ret_ty;
@@ -3138,26 +2506,20 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
                 // emitted C name, which for a libc-shadowing fn (fs::read) is
                 // mangled (__glide_uf_read) and so isn't a g.fns key — look up
                 // the leaf first, then fall back to the resolved name.
-                if g.fns.contains(e.lhs.field) {
-                    return g.fns.get(e.lhs.field).fn_ret_ty;
-                }
+                if g.fns.contains(e.lhs.field) { return g.fns.get(e.lhs.field).fn_ret_ty; }
                 if g.generic_fns.contains(e.lhs.field) {
                     let gnl: Stmt = g.generic_fns.get(e.lhs.field);
                     return _infer_generic_call_ret(g, e, &gnl);
                 }
                 let resolved: string = g.module_aliases.get(qual);
-                if g.fns.contains(resolved) {
-                    return g.fns.get(resolved).fn_ret_ty;
-                }
+                if g.fns.contains(resolved) { return g.fns.get(resolved).fn_ret_ty; }
                 if g.generic_fns.contains(resolved) {
                     let gn: Stmt = g.generic_fns.get(resolved);
                     return _infer_generic_call_ret(g, e, &gn);
                 }
             }
             let pname: string = resolve_type_prefix(g, e.lhs.str_val).concat("_").concat(e.lhs.field);
-            if g.fns.contains(pname) {
-                return g.fns.get(pname).fn_ret_ty;
-            }
+            if g.fns.contains(pname) { return g.fns.get(pname).fn_ret_ty; }
             if g.generic_fns.contains(pname) {
                 let gn: Stmt = g.generic_fns.get(pname);
                 return _infer_generic_call_ret(g, e, &gn);
@@ -3174,9 +2536,7 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
                 if td.impl_methods != null {
                     for let i: i32 = 0; i < td.impl_methods.len(); i++ {
                         let tm: Stmt = td.impl_methods.get(i);
-                        if tm.name != null && tm.name.eq(e.lhs.field) {
-                            return tm.fn_ret_ty;
-                        }
+                        if tm.name != null && tm.name.eq(e.lhs.field) { return tm.fn_ret_ty; }
                     }
                 }
             }
@@ -3195,9 +2555,7 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
                     }
                     return null;
                 }
-                if e.lhs.field.eq("send") || e.lhs.field.eq("close") {
-                    return ty_named("void");
-                }
+                if e.lhs.field.eq("send") || e.lhs.field.eq("close") { return ty_named("void"); }
             }
             // OptResult (`?!T`) intrinsic methods — mirrors the typer so a
             // `println!(.., r.unwrap())` arg formats as T, not `%p`.
@@ -3214,15 +2572,14 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
                     }
                     return ty_named("void");
                 }
-                if mm.eq("unwrap_err") {
-                    return ty_named("string");
-                }
+                if mm.eq("unwrap_err") { return ty_named("string"); }
             }
             // Option / Result intrinsic methods — return type for chaining.
             if stripped != null && (stripped.kind == TY_OPTION || stripped.kind == TY_RESULT) {
                 let mm: string = e.lhs.field;
                 let iso: bool = stripped.kind == TY_OPTION;
-                if iso && (mm.eq("is_some") || mm.eq("is_none")) || !iso && (mm.eq("is_ok") || mm.eq("is_err")) {
+                if iso && (mm.eq("is_some") || mm.eq("is_none"))
+                    || !iso && (mm.eq("is_ok") || mm.eq("is_err")) {
                     return ty_named("bool");
                 }
                 if mm.eq("unwrap") || mm.eq("expect") || mm.eq("unwrap_or") || mm.eq("unwrap_or_else") {
@@ -3233,15 +2590,9 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
                     }
                     return ty_named("void");
                 }
-                if !iso && mm.eq("unwrap_err") {
-                    return ty_named("string");
-                }
-                if iso && mm.eq("ok_or") {
-                    return ty_result(stripped.inner);
-                }
-                if !iso && mm.eq("ok") {
-                    return ty_option(stripped.inner);
-                }
+                if !iso && mm.eq("unwrap_err") { return ty_named("string"); }
+                if iso && mm.eq("ok_or") { return ty_result(stripped.inner); }
+                if !iso && mm.eq("ok") { return ty_option(stripped.inner); }
                 if iso && mm.eq("filter") || !iso && mm.eq("map_err") {
                     let p: *Type = __glide_palloc(sizeof(Type)) as *Type;
                     *p = *stripped;
@@ -3251,9 +2602,7 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
                     let cl: Expr = e.args.get(0);
                     let u: *Type = _closure_ret_ty(g, &cl);
                     if u != null {
-                        if iso {
-                            return ty_option(u);
-                        }
+                        if iso { return ty_option(u); }
                         return ty_result(u);
                     }
                     return null;
@@ -3276,24 +2625,16 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
                     let ns: string = e.lhs.field.substring(0, qpos);
                     let real: string = e.lhs.field.substring(qpos + 2, e.lhs.field.len());
                     let qmname: string = ns.concat("_").concat(stripped.name).concat("_").concat(real);
-                    if g.fns.contains(qmname) {
-                        return g.fns.get(qmname).fn_ret_ty;
-                    }
+                    if g.fns.contains(qmname) { return g.fns.get(qmname).fn_ret_ty; }
                 }
                 // Stdlib primitive methods.
                 if is_stdlib_primitive(stripped.name) {
                     let std_ret: *Type = stdlib_method_ret(stripped.name, e.lhs.field);
-                    if std_ret != null {
-                        return std_ret;
-                    }
+                    if std_ret != null { return std_ret; }
                 }
                 let mname: string = stripped.name.concat("_").concat(e.lhs.field);
-                if g.fns.contains(mname) {
-                    return g.fns.get(mname).fn_ret_ty;
-                }
-                if g.generic_fns.contains(mname) {
-                    return g.generic_fns.get(mname).fn_ret_ty;
-                }
+                if g.fns.contains(mname) { return g.fns.get(mname).fn_ret_ty; }
+                if g.generic_fns.contains(mname) { return g.generic_fns.get(mname).fn_ret_ty; }
                 // Namespaced impl (`impl T in NS`): O(1) lookup in the method
                 // index. Multi-match returns a `;`-joined list — typer just
                 // takes the first; codegen does the same and reports ambiguity.
@@ -3309,9 +2650,7 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
                         k = k + 1;
                     }
                     let first: string = entry.substring(0, semi);
-                    if g.fns.contains(first) {
-                        return g.fns.get(first).fn_ret_ty;
-                    }
+                    if g.fns.contains(first) { return g.fns.get(first).fn_ret_ty; }
                 }
             }
             if stripped != null && stripped.kind == TY_GENERIC {
@@ -3319,16 +2658,12 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
                 // its mangled fn already lives in g.fns with concrete ret_ty.
                 let spec_prefix: string = mangle_generic(stripped.name, stripped.args);
                 let spec_name: string = spec_prefix.concat("_").concat(e.lhs.field);
-                if g.fns.contains(spec_name) {
-                    return g.fns.get(spec_name).fn_ret_ty;
-                }
+                if g.fns.contains(spec_name) { return g.fns.get(spec_name).fn_ret_ty; }
                 let mname: string = stripped.name.concat("_").concat(e.lhs.field);
                 if g.generic_fns.contains(mname) {
                     let template: Stmt = g.generic_fns.get(mname);
                     let mut full_args: *Vector<Type> = resolve_method_call_args(g, e, &template, stripped.args);
-                    if full_args == null {
-                        full_args = stripped.args;
-                    }
+                    if full_args == null { full_args = stripped.args; }
                     return subst_type(template.fn_ret_ty, template.type_params, full_args);
                 }
             }
@@ -3344,12 +2679,8 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         let qual: string = e.str_val.concat("::").concat(e.field);
         if g.module_aliases.contains(qual) {
             let resolved: string = g.module_aliases.get(qual);
-            if g.fns.contains(resolved) {
-                return g.fns.get(resolved).fn_ret_ty;
-            }
-            if g.generic_fns.contains(resolved) {
-                return g.generic_fns.get(resolved).fn_ret_ty;
-            }
+            if g.fns.contains(resolved) { return g.fns.get(resolved).fn_ret_ty; }
+            if g.generic_fns.contains(resolved) { return g.generic_fns.get(resolved).fn_ret_ty; }
             // Module const referenced qualified (`lib::PMAGIC`): carry its
             // declared type so `${lib::PMAGIC}` formats as the value, not %p.
             if g.consts.contains(e.field) {
@@ -3360,12 +2691,8 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
             }
         }
         let pname: string = resolve_type_prefix(g, e.str_val).concat("_").concat(e.field);
-        if g.fns.contains(pname) {
-            return g.fns.get(pname).fn_ret_ty;
-        }
-        if g.generic_fns.contains(pname) {
-            return g.generic_fns.get(pname).fn_ret_ty;
-        }
+        if g.fns.contains(pname) { return g.fns.get(pname).fn_ret_ty; }
+        if g.generic_fns.contains(pname) { return g.generic_fns.get(pname).fn_ret_ty; }
         // Enum variant: `Signal::Hup` is a value of type Signal. Without this
         // case, method dispatch on bare variant values (`Signal::Hup.to_int()`)
         // falls through to plain field access.
@@ -3375,9 +2702,7 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
             if edef.enum_variants != null {
                 for let i: i32 = 0; i < edef.enum_variants.len(); i++ {
                     let v: EnumVariant = edef.enum_variants.get(i);
-                    if v.name.eq(e.field) {
-                        return ty_named(probe);
-                    }
+                    if v.name.eq(e.field) { return ty_named(probe); }
                 }
             }
         }
@@ -3401,18 +2726,14 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
 // dispatch on the returned value (`.into_response()` would emit
 // `Json_into_response__T` instead of the substituted mono).
 fn _infer_generic_call_ret(g: *CG, call: *Expr, template: *Stmt) -> *Type {
-    if template == null {
-        return null;
-    }
+    if template == null { return null; }
     if template.type_params == null || template.type_params.len() == 0 {
         return template.fn_ret_ty;
     }
     let bindings: *HashMap<Type> = HashMap::new();
     if call.args != null && template.fn_params != null {
         let mut n: i32 = template.fn_params.len();
-        if call.args.len() < n {
-            n = call.args.len();
-        }
+        if call.args.len() < n { n = call.args.len(); }
         for let i: i32 = 0; i < n; i++ {
             let p: Param = template.fn_params.get(i);
             let a: Expr = call.args.get(i);
@@ -3433,9 +2754,7 @@ fn _infer_generic_call_ret(g: *CG, call: *Expr, template: *Stmt) -> *Type {
         derived.push(bindings.get(tn));
     }
     bindings.free();
-    if !all {
-        return template.fn_ret_ty;
-    }
+    if !all { return template.fn_ret_ty; }
     return subst_type(template.fn_ret_ty, template.type_params, derived);
 }
 
@@ -3452,17 +2771,13 @@ fn arm_value_type(g: *CG, a: *MatchArm) -> *Type {
                 } else {
                     if b.let_value != null {
                         let bvt: *Type = infer_for_codegen(g, b.let_value);
-                        if bvt != null {
-                            g.declare(b.name, bvt);
-                        }
+                        if bvt != null { g.declare(b.name, bvt); }
                     }
                 }
             }
         }
     }
     let v: *Expr = arm_value_expr(a);
-    if v == null {
-        return ty_named("i32");
-    }
+    if v == null { return ty_named("i32"); }
     return infer_for_codegen(g, v);
 }

@@ -17,9 +17,7 @@ fn emit_mono_forward_decl(g: *CG, mangled: string, template: *Stmt, args: *Vecto
         print!("void");
     } else {
         for let j: i32 = 0; j < template.fn_params.len(); j++ {
-            if j > 0 {
-                print!(", ");
-            }
+            if j > 0 { print!(", "); }
             let pp: Param = template.fn_params.get(j);
             let pt: *Type = subst_type(pp.ty, template.type_params, args);
             let resolved_pt: *Type = resolve_assoc_recursive(g, pt);
@@ -33,31 +31,19 @@ fn emit_mono_forward_decl(g: *CG, mangled: string, template: *Stmt, args: *Vecto
 // rewrites EX_STRUCT_LIT for known generic structs (so `Box{}` inside a mono
 // body becomes `Box__int{}`).
 fn subst_expr(e: *Expr, params: *Vector<string>, args: *Vector<Type>, gs: *HashMap<Stmt>) -> *Expr {
-    if e == null {
-        return null;
-    }
+    if e == null { return null; }
     let n: *Expr = calloc(1, sizeof(Expr)) as *Expr;
     *n = *e;
-    if e.cast_to != null {
-        n.cast_to = subst_type(e.cast_to, params, args);
-    }
-    if e.lhs != null {
-        n.lhs = subst_expr(e.lhs, params, args, gs);
-    }
-    if e.rhs != null {
-        n.rhs = subst_expr(e.rhs, params, args, gs);
-    }
-    if e.operand != null {
-        n.operand = subst_expr(e.operand, params, args, gs);
-    }
+    if e.cast_to != null { n.cast_to = subst_type(e.cast_to, params, args); }
+    if e.lhs != null { n.lhs = subst_expr(e.lhs, params, args, gs); }
+    if e.rhs != null { n.rhs = subst_expr(e.rhs, params, args, gs); }
+    if e.operand != null { n.operand = subst_expr(e.operand, params, args, gs); }
     if e.args != null {
         let new_args: *Vector<Expr> = Vector::new();
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
             let nu: *Expr = subst_expr(&a, params, args, gs);
-            if nu != null {
-                new_args.push(*nu);
-            }
+            if nu != null { new_args.push(*nu); }
         }
         n.args = new_args;
     }
@@ -93,51 +79,31 @@ fn subst_expr(e: *Expr, params: *Vector<string>, args: *Vector<Type>, gs: *HashM
 }
 
 fn subst_stmt(s: *Stmt, params: *Vector<string>, args: *Vector<Type>, gs: *HashMap<Stmt>) -> *Stmt {
-    if s == null {
-        return null;
-    }
+    if s == null { return null; }
     let n: *Stmt = calloc(1, sizeof(Stmt)) as *Stmt;
     *n = *s;
-    if s.let_ty != null {
-        n.let_ty = subst_type(s.let_ty, params, args);
-    }
-    if s.let_value != null {
-        n.let_value = subst_expr(s.let_value, params, args, gs);
-    }
-    if s.expr_value != null {
-        n.expr_value = subst_expr(s.expr_value, params, args, gs);
-    }
-    if s.cond != null {
-        n.cond = subst_expr(s.cond, params, args, gs);
-    }
-    if s.for_init != null {
-        n.for_init = subst_stmt(s.for_init, params, args, gs);
-    }
-    if s.for_step != null {
-        n.for_step = subst_expr(s.for_step, params, args, gs);
-    }
+    if s.let_ty != null { n.let_ty = subst_type(s.let_ty, params, args); }
+    if s.let_value != null { n.let_value = subst_expr(s.let_value, params, args, gs); }
+    if s.expr_value != null { n.expr_value = subst_expr(s.expr_value, params, args, gs); }
+    if s.cond != null { n.cond = subst_expr(s.cond, params, args, gs); }
+    if s.for_init != null { n.for_init = subst_stmt(s.for_init, params, args, gs); }
+    if s.for_step != null { n.for_step = subst_expr(s.for_step, params, args, gs); }
     // match / select!: the scrutinee and every arm body are code like any
     // other — leaving them UNsubstituted kept the template's types alive in
     // the mono (`Self { .. }` in an arm emitted `LL__T` / poisoned nested
     // monos). Long-standing hole; arm bodies just rarely carried types.
-    if s.scrutinee != null {
-        n.scrutinee = subst_expr(s.scrutinee, params, args, gs);
-    }
+    if s.scrutinee != null { n.scrutinee = subst_expr(s.scrutinee, params, args, gs); }
     if s.arms != null {
         let na: *Vector<MatchArm> = Vector::new();
         for let i: i32 = 0; i < s.arms.len(); i++ {
             let mut ar: MatchArm = s.arms.get(i);
-            if ar.lit != null {
-                ar.lit = subst_expr(ar.lit, params, args, gs);
-            }
+            if ar.lit != null { ar.lit = subst_expr(ar.lit, params, args, gs); }
             if ar.body != null {
                 let ab: *Vector<Stmt> = Vector::new();
                 for let j: i32 = 0; j < ar.body.len(); j++ {
                     let bs: Stmt = ar.body.get(j);
                     let nb2: *Stmt = subst_stmt(&bs, params, args, gs);
-                    if nb2 != null {
-                        ab.push(*nb2);
-                    }
+                    if nb2 != null { ab.push(*nb2); }
                 }
                 ar.body = ab;
             }
@@ -149,9 +115,7 @@ fn subst_stmt(s: *Stmt, params: *Vector<string>, args: *Vector<Type>, gs: *HashM
         let nsa: *Vector<SelectArm> = Vector::new();
         for let i: i32 = 0; i < s.select_arms.len(); i++ {
             let mut sa: SelectArm = s.select_arms.get(i);
-            if sa.chan_expr != null {
-                sa.chan_expr = subst_expr(sa.chan_expr, params, args, gs);
-            }
+            if sa.chan_expr != null { sa.chan_expr = subst_expr(sa.chan_expr, params, args, gs); }
             if sa.send_value != null {
                 sa.send_value = subst_expr(sa.send_value, params, args, gs);
             }
@@ -160,9 +124,7 @@ fn subst_stmt(s: *Stmt, params: *Vector<string>, args: *Vector<Type>, gs: *HashM
                 for let j: i32 = 0; j < sa.body.len(); j++ {
                     let bs: Stmt = sa.body.get(j);
                     let nb3: *Stmt = subst_stmt(&bs, params, args, gs);
-                    if nb3 != null {
-                        sb.push(*nb3);
-                    }
+                    if nb3 != null { sb.push(*nb3); }
                 }
                 sa.body = sb;
             }
@@ -170,17 +132,13 @@ fn subst_stmt(s: *Stmt, params: *Vector<string>, args: *Vector<Type>, gs: *HashM
         }
         n.select_arms = nsa;
     }
-    if s.fn_ret_ty != null {
-        n.fn_ret_ty = subst_type(s.fn_ret_ty, params, args);
-    }
+    if s.fn_ret_ty != null { n.fn_ret_ty = subst_type(s.fn_ret_ty, params, args); }
     if s.then_body != null {
         let nb: *Vector<Stmt> = Vector::new();
         for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
             let nu: *Stmt = subst_stmt(&b, params, args, gs);
-            if nu != null {
-                nb.push(*nu);
-            }
+            if nu != null { nb.push(*nu); }
         }
         n.then_body = nb;
     }
@@ -189,9 +147,7 @@ fn subst_stmt(s: *Stmt, params: *Vector<string>, args: *Vector<Type>, gs: *HashM
         for let i: i32 = 0; i < s.else_body.len(); i++ {
             let b: Stmt = s.else_body.get(i);
             let nu: *Stmt = subst_stmt(&b, params, args, gs);
-            if nu != null {
-                nb.push(*nu);
-            }
+            if nu != null { nb.push(*nu); }
         }
         n.else_body = nb;
     }
@@ -200,9 +156,7 @@ fn subst_stmt(s: *Stmt, params: *Vector<string>, args: *Vector<Type>, gs: *HashM
         for let i: i32 = 0; i < s.fn_body.len(); i++ {
             let b: Stmt = s.fn_body.get(i);
             let nu: *Stmt = subst_stmt(&b, params, args, gs);
-            if nu != null {
-                nb.push(*nu);
-            }
+            if nu != null { nb.push(*nu); }
         }
         n.fn_body = nb;
     }
@@ -211,9 +165,7 @@ fn subst_stmt(s: *Stmt, params: *Vector<string>, args: *Vector<Type>, gs: *HashM
 
 // True when @cfg(cfg) actually emits an #ifdef guard (see emit_cfg_open).
 fn _cfg_guards(cfg: string) -> bool {
-    if cfg == null {
-        return false;
-    }
+    if cfg == null { return false; }
     return cfg.eq("windows") || cfg.eq("posix");
 }
 
@@ -246,16 +198,12 @@ fn emit_fn_signature(s: *Stmt) {
         print!("int main(int __glide_main_argc, char** __glide_main_argv)");
         return;
     }
-    if s.is_naked {
-        print!("__attribute__((naked)) ");
-    }
+    if s.is_naked { print!("__attribute__((naked)) "); }
     // Rename a body-bearing user fn whose name collides with a libc symbol
     // (e.g. `fn div`) out of C's way. Extern/bodyless decls keep their real
     // name so FFI still binds. References are renamed to match (see EX_IDENT).
     let mut _fn_cnm: string = c_safe_ident(s.name);
-    if s.fn_body != null && is_libc_symbol(s.name) {
-        _fn_cnm = userfn_mangle(s.name);
-    }
+    if s.fn_body != null && is_libc_symbol(s.name) { _fn_cnm = userfn_mangle(s.name); }
     print!(type_to_c(s.fn_ret_ty), " ", _fn_cnm, "(");
     if s.fn_params == null || s.fn_params.len() == 0 {
         if s.is_variadic {
@@ -265,15 +213,11 @@ fn emit_fn_signature(s: *Stmt) {
         }
     } else {
         for let i: i32 = 0; i < s.fn_params.len(); i++ {
-            if i > 0 {
-                print!(", ");
-            }
+            if i > 0 { print!(", "); }
             let p: Param = s.fn_params.get(i);
             print!(param_c_decl(p.ty, c_safe_ident(p.name)));
         }
-        if s.is_variadic {
-            print!(", ...");
-        }
+        if s.is_variadic { print!(", ..."); }
     }
     print!(")");
 }
@@ -282,10 +226,10 @@ fn emit_fn_signature(s: *Stmt) {
 // the impl-generic type params from the args. Returns the inferred
 // concrete generic type (e.g. *Vector<int>) on success.
 fn try_constrain_from_expr(g: *CG, e: *Expr, var: string, gen_name: string, tparams: *Vector<string>) -> *Type {
-    if e == null {
-        return null;
-    }
-    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT && e.lhs.lhs.str_val.eq(var) {
+    if e == null { return null; }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.lhs != null
+        && e.lhs.lhs.kind == EX_IDENT
+        && e.lhs.lhs.str_val.eq(var) {
         let method: string = e.lhs.field;
         let mname: string = gen_name.concat("_").concat(method);
         if g.generic_fns.contains(mname) {
@@ -320,9 +264,7 @@ fn try_constrain_from_expr(g: *CG, e: *Expr, var: string, gen_name: string, tpar
                     }
                     resolved.push(*found);
                 }
-                if all && resolved.len() > 0 {
-                    return ty_pointer(ty_generic(gen_name, resolved));
-                }
+                if all && resolved.len() > 0 { return ty_pointer(ty_generic(gen_name, resolved)); }
             }
         }
     }
@@ -340,14 +282,14 @@ fn try_constrain_from_expr(g: *CG, e: *Expr, var: string, gen_name: string, tpar
                 let nparams: i32 = fn_def.fn_params.len();
                 let nargs: i32 = e.args.len();
                 let mut limit: i32 = nargs;
-                if nparams < limit {
-                    limit = nparams;
-                }
+                if nparams < limit { limit = nparams; }
                 for let i: i32 = 0; i < limit; i++ {
                     let a: Expr = e.args.get(i);
                     let p: Param = fn_def.fn_params.get(i);
                     let resolved: *Type = constrain_walk(&a, p.ty, var);
-                    if resolved != null && resolved.kind == TY_POINTER && resolved.inner != null && resolved.inner.kind == TY_GENERIC && resolved.inner.name.eq(gen_name) {
+                    if resolved != null && resolved.kind == TY_POINTER && resolved.inner != null
+                        && resolved.inner.kind == TY_GENERIC
+                        && resolved.inner.name.eq(gen_name) {
                         return resolved;
                     }
                 }
@@ -357,29 +299,21 @@ fn try_constrain_from_expr(g: *CG, e: *Expr, var: string, gen_name: string, tpar
     // Recurse into children.
     if e.lhs != null {
         let r: *Type = try_constrain_from_expr(g, e.lhs, var, gen_name, tparams);
-        if r != null {
-            return r;
-        }
+        if r != null { return r; }
     }
     if e.rhs != null {
         let r: *Type = try_constrain_from_expr(g, e.rhs, var, gen_name, tparams);
-        if r != null {
-            return r;
-        }
+        if r != null { return r; }
     }
     if e.operand != null {
         let r: *Type = try_constrain_from_expr(g, e.operand, var, gen_name, tparams);
-        if r != null {
-            return r;
-        }
+        if r != null { return r; }
     }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
             let r: *Type = try_constrain_from_expr(g, &a, var, gen_name, tparams);
-            if r != null {
-                return r;
-            }
+            if r != null { return r; }
         }
     }
     return null;
@@ -391,26 +325,16 @@ fn try_constrain_from_expr(g: *CG, e: *Expr, var: string, gen_name: string, tpar
 // their corresponding type wrapper (or wrap, in the case of `*var` whose
 // type is `ty_pointer(current)`). Returns null if shape diverges.
 fn constrain_walk(arg: *Expr, ty: *Type, var: string) -> *Type {
-    if arg == null || ty == null {
-        return null;
-    }
-    if arg.kind == EX_IDENT && arg.str_val.eq(var) {
-        return ty;
-    }
+    if arg == null || ty == null { return null; }
+    if arg.kind == EX_IDENT && arg.str_val.eq(var) { return ty; }
     if arg.kind == EX_UNARY && arg.operand != null {
-        if arg.op_code == UN_DEREF {
-            return constrain_walk(arg.operand, ty_pointer(ty), var);
-        }
+        if arg.op_code == UN_DEREF { return constrain_walk(arg.operand, ty_pointer(ty), var); }
         if arg.op_code == UN_ADDR {
-            if ty.kind != TY_BORROW || ty.inner == null {
-                return null;
-            }
+            if ty.kind != TY_BORROW || ty.inner == null { return null; }
             return constrain_walk(arg.operand, ty.inner, var);
         }
         if arg.op_code == UN_ADDR_MUT {
-            if ty.kind != TY_BORROW_MUT || ty.inner == null {
-                return null;
-            }
+            if ty.kind != TY_BORROW_MUT || ty.inner == null { return null; }
             return constrain_walk(arg.operand, ty.inner, var);
         }
     }
@@ -418,49 +342,35 @@ fn constrain_walk(arg: *Expr, ty: *Type, var: string) -> *Type {
 }
 
 fn try_constrain_from_stmt(g: *CG, s: *Stmt, var: string, gen_name: string, tparams: *Vector<string>) -> *Type {
-    if s == null {
-        return null;
-    }
+    if s == null { return null; }
     if s.let_value != null {
         let r: *Type = try_constrain_from_expr(g, s.let_value, var, gen_name, tparams);
-        if r != null {
-            return r;
-        }
+        if r != null { return r; }
     }
     if s.expr_value != null {
         let r: *Type = try_constrain_from_expr(g, s.expr_value, var, gen_name, tparams);
-        if r != null {
-            return r;
-        }
+        if r != null { return r; }
     }
     if s.cond != null {
         let r: *Type = try_constrain_from_expr(g, s.cond, var, gen_name, tparams);
-        if r != null {
-            return r;
-        }
+        if r != null { return r; }
     }
     if s.for_step != null {
         let r: *Type = try_constrain_from_expr(g, s.for_step, var, gen_name, tparams);
-        if r != null {
-            return r;
-        }
+        if r != null { return r; }
     }
     if s.then_body != null {
         for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
             let r: *Type = try_constrain_from_stmt(g, &b, var, gen_name, tparams);
-            if r != null {
-                return r;
-            }
+            if r != null { return r; }
         }
     }
     if s.else_body != null {
         for let i: i32 = 0; i < s.else_body.len(); i++ {
             let b: Stmt = s.else_body.get(i);
             let r: *Type = try_constrain_from_stmt(g, &b, var, gen_name, tparams);
-            if r != null {
-                return r;
-            }
+            if r != null { return r; }
         }
     }
     return null;
@@ -470,24 +380,16 @@ fn try_constrain_from_stmt(g: *CG, s: *Stmt, var: string, gen_name: string, tpar
 // Used so the type-inference pre-pass can resolve identifier references in
 // nested blocks (e.g. `for let i: int = 0; ...; i++ { v.push(i * 10); }`).
 fn populate_scope_from_stmt(g: *CG, s: *Stmt) {
-    if s == null {
-        return;
-    }
+    if s == null { return; }
     if s.kind == ST_LET || s.kind == ST_CONST {
         let mut ty: *Type = s.let_ty;
         // No annotation? Infer from the initializer so plain `let i = 0`
         // (typical in for-loops) registers `i: int` in the codegen scope —
         // otherwise printf-style macros default to `%p` and emit hex.
-        if ty == null && s.let_value != null {
-            ty = infer_for_codegen(g, s.let_value);
-        }
-        if ty != null {
-            g.declare(s.name, ty);
-        }
+        if ty == null && s.let_value != null { ty = infer_for_codegen(g, s.let_value); }
+        if ty != null { g.declare(s.name, ty); }
     }
-    if s.for_init != null {
-        populate_scope_from_stmt(g, s.for_init);
-    }
+    if s.for_init != null { populate_scope_from_stmt(g, s.for_init); }
     if s.then_body != null {
         for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
@@ -503,20 +405,12 @@ fn populate_scope_from_stmt(g: *CG, s: *Stmt) {
 }
 
 fn try_resolve_open_let(g: *CG, s: *Stmt, body: *Vector<Stmt>, start: i32) -> *Type {
-    if s.let_ty != null {
-        return null;
-    }
-    if s.let_value == null || s.let_value.kind != EX_CALL {
-        return null;
-    }
+    if s.let_ty != null { return null; }
+    if s.let_value == null || s.let_value.kind != EX_CALL { return null; }
     let callee: *Expr = s.let_value.lhs;
-    if callee == null {
-        return null;
-    }
+    if callee == null { return null; }
     let mut gname: string = "";
-    if callee.kind == EX_IDENT {
-        gname = callee.str_val;
-    }
+    if callee.kind == EX_IDENT { gname = callee.str_val; }
     if callee.kind == EX_PATH {
         let qual: string = callee.str_val.concat("::").concat(callee.field);
         if g.module_aliases.contains(qual) {
@@ -525,26 +419,16 @@ fn try_resolve_open_let(g: *CG, s: *Stmt, body: *Vector<Stmt>, start: i32) -> *T
             gname = resolve_type_prefix(g, callee.str_val).concat("_").concat(callee.field);
         }
     }
-    if gname.len() == 0 {
-        return null;
-    }
-    if !g.generic_fns.contains(gname) {
-        return null;
-    }
+    if gname.len() == 0 { return null; }
+    if !g.generic_fns.contains(gname) { return null; }
     let template: Stmt = g.generic_fns.get(gname);
-    if template.type_params == null || template.type_params.len() == 0 {
-        return null;
-    }
-    if template.fn_ret_ty == null {
-        return null;
-    }
+    if template.type_params == null || template.type_params.len() == 0 { return null; }
+    if template.fn_ret_ty == null { return null; }
     let mut inner: *Type = template.fn_ret_ty;
     while inner != null && inner.kind == TY_POINTER {
         inner = inner.inner;
     }
-    if inner == null || inner.kind != TY_GENERIC {
-        return null;
-    }
+    if inner == null || inner.kind != TY_GENERIC { return null; }
     let gen_base: string = inner.name;
     let n: i32 = body.len();
     for let j: i32 = start + 1; j < n; j++ {
@@ -557,7 +441,8 @@ fn try_resolve_open_let(g: *CG, s: *Stmt, body: *Vector<Stmt>, start: i32) -> *T
             // VALUE (`let node = LinkedList::new(x)` declared *LinkedList
             // miscompiled — cc init of a pointer from a value). Reshape to
             // the template's return.
-            if template.fn_ret_ty.kind != TY_POINTER && r.kind == TY_POINTER && r.inner != null && r.inner.kind == TY_GENERIC {
+            if template.fn_ret_ty.kind != TY_POINTER && r.kind == TY_POINTER && r.inner != null
+                && r.inner.kind == TY_GENERIC {
                 return r.inner;
             }
             return r;
@@ -570,9 +455,7 @@ fn try_resolve_open_let(g: *CG, s: *Stmt, body: *Vector<Stmt>, start: i32) -> *T
 // resolve T from the first subsequent use of v in the same body and backfill
 // s.let_ty. Recurses into nested if/for/while bodies.
 fn infer_let_types(g: *CG, body: *Vector<Stmt>) {
-    if body == null {
-        return;
-    }
+    if body == null { return; }
     // Pre-populate scope with all annotated lets (recursing) so identifier
     // inference works inside nested blocks.
     for let k: i32 = 0; k < body.len(); k++ {
@@ -598,19 +481,23 @@ fn infer_let_types(g: *CG, body: *Vector<Stmt>) {
                     // pointer to a named struct (`let h = Holder::new()`), so the
                     // auto-drop / recursive-drop path (which keys off let_ty) sees
                     // the type without an explicit annotation.
-                    if vt != null && (vt.kind == TY_TUPLE || (vt.kind == TY_POINTER && vt.inner != null && vt.inner.kind == TY_NAMED)) {
+                    if vt != null
+                        && (vt.kind == TY_TUPLE || vt.kind == TY_POINTER && vt.inner != null && vt.inner.kind == TY_NAMED) {
                         s.let_ty = vt;
                         body.set(i, s);
                         g.declare(s.name, vt);
-                    } else if vt != null && vt.kind == TY_NAMED && s.let_value.kind == EX_STRUCT_LIT && _struct_has_own_fields_by_name(g, vt.name) {
-                        // `let p = Pool { .. }` where Pool owns heap fields: make it
-                        // a heap-owned *Pool so its own fields are dropped at scope,
-                        // matching the annotated `let p: *Pool = ...` form. Pure-data
-                        // structs (no own fields) stay stack values.
-                        let _pp: *Type = ty_pointer(vt);
-                        s.let_ty = _pp;
-                        body.set(i, s);
-                        g.declare(s.name, _pp);
+                    } else {
+                        if vt != null && vt.kind == TY_NAMED && s.let_value.kind == EX_STRUCT_LIT
+                            && _struct_has_own_fields_by_name(g, vt.name) {
+                            // `let p = Pool { .. }` where Pool owns heap fields: make it
+                            // a heap-owned *Pool so its own fields are dropped at scope,
+                            // matching the annotated `let p: *Pool = ...` form. Pure-data
+                            // structs (no own fields) stay stack values.
+                            let _pp: *Type = ty_pointer(vt);
+                            s.let_ty = _pp;
+                            body.set(i, s);
+                            g.declare(s.name, _pp);
+                        }
                     }
                 }
             }
@@ -632,12 +519,8 @@ fn infer_let_types(g: *CG, body: *Vector<Stmt>) {
             }
         }
         // Recurse into nested bodies for lets buried inside loops / branches.
-        if s.then_body != null {
-            infer_let_types(g, s.then_body);
-        }
-        if s.else_body != null {
-            infer_let_types(g, s.else_body);
-        }
+        if s.then_body != null { infer_let_types(g, s.then_body); }
+        if s.else_body != null { infer_let_types(g, s.else_body); }
     }
 }
 
@@ -679,12 +562,8 @@ fn infer_let_types_in_program(g: *CG, program: *Vector<Stmt>) {
 
 // True iff `t` is the literal `void` named type, or a missing return type.
 fn _main_ret_is_void(t: *Type) -> bool {
-    if t == null {
-        return true;
-    }
-    if t.kind == TY_NAMED && t.name.eq("void") {
-        return true;
-    }
+    if t == null { return true; }
+    if t.kind == TY_NAMED && t.name.eq("void") { return true; }
     return false;
 }
 
@@ -692,12 +571,8 @@ fn _main_ret_is_void(t: *Type) -> bool {
 // declared return — the C `main` wrapper below converts whatever shape
 // they picked into an exit code.
 fn _main_user_c_ret(t: *Type) -> string {
-    if _main_ret_is_void(t) {
-        return "void";
-    }
-    if t.kind == TY_NAMED && t.name.eq("int") {
-        return "int";
-    }
+    if _main_ret_is_void(t) { return "void"; }
+    if t.kind == TY_NAMED && t.name.eq("int") { return "int"; }
     if t.kind == TY_RESULT && t.inner != null {
         let m: string = mangle_type(t.inner);
         return "__glide_result_".concat(m).concat("_t");
@@ -707,12 +582,8 @@ fn _main_user_c_ret(t: *Type) -> string {
 
 // User picked `fn main(argc: int, argv: **char) -> ...` — backward compat.
 fn _main_takes_argv(s: *Stmt) -> bool {
-    if s.fn_params == null {
-        return false;
-    }
-    if s.fn_params.len() != 2 {
-        return false;
-    }
+    if s.fn_params == null { return false; }
+    if s.fn_params.len() != 2 { return false; }
     return true;
 }
 
@@ -723,26 +594,18 @@ fn _emit_main_wrapper(g: *CG, s: *Stmt) {
     let ret_ty: *Type = s.fn_ret_ty;
     let takes_argv: bool = _main_takes_argv(s);
     let mut call_args: string = "";
-    if takes_argv {
-        call_args = "argc, argv";
-    }
+    if takes_argv { call_args = "argc, argv"; }
     // --tiny without any spawn/chan: skip the scheduler boot so the M:N
     // runtime + reactor stay unreferenced and --gc-sections drops them.
     // A tiny program that does use concurrency keeps the scheduler.
     let skip_sched: bool = g.tiny && !g.needs_concurrency;
     println!("int main(int argc, char** argv) {");
-    if !skip_sched {
-        println!("    __glide_is_main_tls = 1;");
-    }
+    if !skip_sched { println!("    __glide_is_main_tls = 1;"); }
     println!("    __glide_args_init(argc, argv);");
-    if !skip_sched {
-        println!("    __glide_sched_init();");
-    }
+    if !skip_sched { println!("    __glide_sched_init();"); }
     if _main_ret_is_void(ret_ty) {
         println!("    __glide_user_main(".concat(call_args).concat(");"));
-        if !skip_sched {
-            println!("    __glide_sched_shutdown();");
-        }
+        if !skip_sched { println!("    __glide_sched_shutdown();"); }
         println!("    return 0;");
     } else {
         if ret_ty.kind == TY_NAMED && (ret_ty.name.eq("int") || _is_int_family(ret_ty.name)) {
@@ -750,24 +613,21 @@ fn _emit_main_wrapper(g: *CG, s: *Stmt) {
             // both carry a process exit code. Propagate it — previously only the
             // retired `int` name matched, so every `-> i32` main silently exited 0.
             println!("    int __glide_rc = __glide_user_main(".concat(call_args).concat(");"));
-            if !skip_sched {
-                println!("    __glide_sched_shutdown();");
-            }
+            if !skip_sched { println!("    __glide_sched_shutdown();"); }
             println!("    return __glide_rc;");
         } else {
             if ret_ty.kind == TY_RESULT && ret_ty.inner != null {
                 let m: string = mangle_type(ret_ty.inner);
                 let rt: string = "__glide_result_".concat(m).concat("_t");
                 println!("    ".concat(rt).concat(" __glide_rc = __glide_user_main(").concat(call_args).concat(");"));
-                if !skip_sched {
-                    println!("    __glide_sched_shutdown();");
-                }
+                if !skip_sched { println!("    __glide_sched_shutdown();"); }
                 println!("    if (!__glide_rc.ok) {");
                 println!("        fprintf(stderr, \"%s\\n\", __glide_rc.err ? __glide_rc.err : \"error\");");
                 println!("        return 1;");
                 println!("    }");
                 let inner: *Type = ret_ty.inner;
-                if inner != null && inner.kind == TY_NAMED && (inner.name.eq("int") || _is_int_family(inner.name)) {
+                if inner != null && inner.kind == TY_NAMED
+                    && (inner.name.eq("int") || _is_int_family(inner.name)) {
                     println!("    return __glide_rc.val;");
                 } else {
                     if inner != null && inner.kind == TY_NAMED && inner.name.eq("string") {
@@ -779,9 +639,7 @@ fn _emit_main_wrapper(g: *CG, s: *Stmt) {
                 }
             } else {
                 println!("    (void)__glide_user_main(".concat(call_args).concat(");"));
-                if !skip_sched {
-                    println!("    __glide_sched_shutdown();");
-                }
+                if !skip_sched { println!("    __glide_sched_shutdown();"); }
                 println!("    return 0;");
             }
         }
@@ -794,85 +652,49 @@ fn _emit_main_wrapper(g: *CG, s: *Stmt) {
 // nested `fn(...)` expression, which owns its own defer scope. Drives whether
 // the `char __gdefer[]` runtime-flag array is emitted for the fn.
 fn _body_has_defer(body: *Vector<Stmt>) -> bool {
-    if body == null {
-        return false;
-    }
+    if body == null { return false; }
     for let i: i32 = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
-        if _stmt_has_defer(&s) {
-            return true;
-        }
+        if _stmt_has_defer(&s) { return true; }
     }
     return false;
 }
 
 fn _stmt_has_defer(s: *Stmt) -> bool {
-    if s == null {
-        return false;
-    }
-    if s.kind == ST_DEFER {
-        return true;
-    }
-    if s.then_body != null && _body_has_defer(s.then_body) {
-        return true;
-    }
-    if s.else_body != null && _body_has_defer(s.else_body) {
-        return true;
-    }
-    if s.for_init != null && _stmt_has_defer(s.for_init) {
-        return true;
-    }
-    if _expr_has_defer(s.let_value) {
-        return true;
-    }
-    if _expr_has_defer(s.expr_value) {
-        return true;
-    }
-    if _expr_has_defer(s.cond) {
-        return true;
-    }
+    if s == null { return false; }
+    if s.kind == ST_DEFER { return true; }
+    if s.then_body != null && _body_has_defer(s.then_body) { return true; }
+    if s.else_body != null && _body_has_defer(s.else_body) { return true; }
+    if s.for_init != null && _stmt_has_defer(s.for_init) { return true; }
+    if _expr_has_defer(s.let_value) { return true; }
+    if _expr_has_defer(s.expr_value) { return true; }
+    if _expr_has_defer(s.cond) { return true; }
     return false;
 }
 
 fn _expr_has_defer(e: *Expr) -> bool {
-    if e == null {
-        return false;
-    }
-    if e.kind == EX_FNEXPR {
-        return false;
-    }
+    if e == null { return false; }
+    if e.kind == EX_FNEXPR { return false; }
     if e.kind == EX_BLOCK {
-        if e.block_stmts != null && _body_has_defer(e.block_stmts) {
-            return true;
-        }
+        if e.block_stmts != null && _body_has_defer(e.block_stmts) { return true; }
         return _expr_has_defer(e.operand);
     }
     if e.kind == EX_MATCH {
         if e.match_arms != null {
             for let i: i32 = 0; i < e.match_arms.len(); i++ {
                 let arm: MatchArm = e.match_arms.get(i);
-                if arm.body != null && _body_has_defer(arm.body) {
-                    return true;
-                }
+                if arm.body != null && _body_has_defer(arm.body) { return true; }
             }
         }
         return _expr_has_defer(e.lhs);
     }
-    if _expr_has_defer(e.lhs) {
-        return true;
-    }
-    if _expr_has_defer(e.rhs) {
-        return true;
-    }
-    if _expr_has_defer(e.operand) {
-        return true;
-    }
+    if _expr_has_defer(e.lhs) { return true; }
+    if _expr_has_defer(e.rhs) { return true; }
+    if _expr_has_defer(e.operand) { return true; }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
-            if _expr_has_defer(&a) {
-                return true;
-            }
+            if _expr_has_defer(&a) { return true; }
         }
     }
     return false;
@@ -888,9 +710,7 @@ fn emit_fn(g: *CG, s: *Stmt) {
     // is emitted first (no directive yet) so a stack frame pointing
     // at the fn-entry shows the fn's declared line, not its caller.
     let saved_origin: string = g.current_origin;
-    if s.origin != null && !s.origin.eq("") {
-        g.current_origin = s.origin;
-    }
+    if s.origin != null && !s.origin.eq("") { g.current_origin = s.origin; }
     g.emit_line_dir(s.line, g.current_origin);
     if is_main {
         // User's main is renamed to __glide_user_main so the C wrapper
@@ -899,9 +719,7 @@ fn emit_fn(g: *CG, s: *Stmt) {
         // the wrapper adapts it into a process exit code.
         let main_ret_c: string = _main_user_c_ret(s.fn_ret_ty);
         let mut main_params: string = "void";
-        if _main_takes_argv(s) {
-            main_params = "int __glide_main_argc, char** __glide_main_argv";
-        }
+        if _main_takes_argv(s) { main_params = "int __glide_main_argc, char** __glide_main_argv"; }
         println!(main_ret_c.concat(" __glide_user_main(").concat(main_params).concat(") {"));
     } else {
         emit_fn_signature(s);
@@ -955,7 +773,9 @@ fn emit_fn(g: *CG, s: *Stmt) {
     // Implicit `return __glide_ok_void();` at end of `fn -> !` so users can
     // write fns where success = falling off the end. Unreachable when every
     // path already returned, but harmless (no -Wreturn-type from gcc).
-    if s.fn_ret_ty != null && s.fn_ret_ty.kind == TY_RESULT && s.fn_ret_ty.inner != null && s.fn_ret_ty.inner.kind == TY_NAMED && s.fn_ret_ty.inner.name.eq("void") {
+    if s.fn_ret_ty != null && s.fn_ret_ty.kind == TY_RESULT && s.fn_ret_ty.inner != null
+        && s.fn_ret_ty.inner.kind == TY_NAMED
+        && s.fn_ret_ty.inner.name.eq("void") {
         ind(1);
         println!("return __glide_ok_void();");
     }
@@ -981,17 +801,11 @@ fn emit_fn(g: *CG, s: *Stmt) {
 }
 
 fn emit_impl(g: *CG, s: *Stmt) {
-    if s.impl_methods == null {
-        return;
-    }
+    if s.impl_methods == null { return; }
     let saved_origin: string = g.current_origin;
-    if s.origin != null && !s.origin.eq("") {
-        g.current_origin = s.origin;
-    }
+    if s.origin != null && !s.origin.eq("") { g.current_origin = s.origin; }
     let mut prefix: string = "X";
-    if s.impl_target != null && s.impl_target.kind == TY_NAMED {
-        prefix = s.impl_target.name;
-    }
+    if s.impl_target != null && s.impl_target.kind == TY_NAMED { prefix = s.impl_target.name; }
     if s.impl_target != null && s.impl_target.kind == TY_GENERIC {
         prefix = mangle_generic(s.impl_target.name, s.impl_target.args);
     }
@@ -1014,9 +828,7 @@ fn emit_impl(g: *CG, s: *Stmt) {
             print!("void");
         } else {
             for let j: i32 = 0; j < m.fn_params.len(); j++ {
-                if j > 0 {
-                    print!(", ");
-                }
+                if j > 0 { print!(", "); }
                 let p: Param = m.fn_params.get(j);
                 print!(param_c_decl(p.ty, c_safe_ident(p.name)));
             }
@@ -1081,13 +893,9 @@ fn emit_impl(g: *CG, s: *Stmt) {
 // mangling rule as emit_impl. Lets methods reference each other (and free
 // fns reference impl methods) regardless of source order.
 fn emit_impl_fwd_decls(_g: *CG, s: *Stmt) {
-    if s.impl_methods == null {
-        return;
-    }
+    if s.impl_methods == null { return; }
     let mut prefix: string = "X";
-    if s.impl_target != null && s.impl_target.kind == TY_NAMED {
-        prefix = s.impl_target.name;
-    }
+    if s.impl_target != null && s.impl_target.kind == TY_NAMED { prefix = s.impl_target.name; }
     if s.impl_target != null && s.impl_target.kind == TY_GENERIC {
         prefix = mangle_generic(s.impl_target.name, s.impl_target.args);
     }
@@ -1102,9 +910,7 @@ fn emit_impl_fwd_decls(_g: *CG, s: *Stmt) {
             print!("void");
         } else {
             for let j: i32 = 0; j < m.fn_params.len(); j++ {
-                if j > 0 {
-                    print!(", ");
-                }
+                if j > 0 { print!(", "); }
                 let p: Param = m.fn_params.get(j);
                 print!(param_c_decl(p.ty, c_safe_ident(p.name)));
             }
@@ -1141,9 +947,7 @@ pub fn emit_enum(s: *Stmt) {
     if s.enum_variants != null {
         for let i: i32 = 0; i < s.enum_variants.len(); i++ {
             let v: EnumVariant = s.enum_variants.get(i);
-            if v.fields != null && v.fields.len() > 0 {
-                has_payload = true;
-            }
+            if v.fields != null && v.fields.len() > 0 { has_payload = true; }
         }
     }
     let ename: string = c_safe_ident(s.name);
@@ -1154,9 +958,7 @@ pub fn emit_enum(s: *Stmt) {
         if s.enum_variants != null {
             for let i: i32 = 0; i < s.enum_variants.len(); i++ {
                 let v: EnumVariant = s.enum_variants.get(i);
-                if v.fields == null || v.fields.len() == 0 {
-                    continue;
-                }
+                if v.fields == null || v.fields.len() == 0 { continue; }
                 if v.fields.len() == 1 {
                     let t: Type = v.fields.get(0);
                     print!("        ");
@@ -1167,9 +969,7 @@ pub fn emit_enum(s: *Stmt) {
                 } else {
                     print!("        struct { ");
                     for let j: i32 = 0; j < v.fields.len(); j++ {
-                        if j > 0 {
-                            print!(" ");
-                        }
+                        if j > 0 { print!(" "); }
                         let t: Type = v.fields.get(j);
                         print!(type_to_c(&t));
                         print!(" f");
@@ -1208,12 +1008,8 @@ pub fn emit_enum(s: *Stmt) {
 // segment paths only register the full form. Last write wins on collisions
 // (Phase 2 territory).
 fn register_alias_suffixes(g: *CG, mod_path: string, name: string, cname: string) {
-    if mod_path == null || mod_path.eq("") {
-        return;
-    }
-    if name == null || name.eq("") {
-        return;
-    }
+    if mod_path == null || mod_path.eq("") { return; }
+    if name == null || name.eq("") { return; }
     let n: i32 = mod_path.len();
     let mut start: i32 = 0;
     while start < n {
@@ -1230,9 +1026,7 @@ fn register_alias_suffixes(g: *CG, mod_path: string, name: string, cname: string
             }
             i = i + 1;
         }
-        if next < 0 {
-            break;
-        }
+        if next < 0 { break; }
         start = next;
     }
 }
@@ -1242,16 +1036,12 @@ fn register_alias_suffixes(g: *CG, mod_path: string, name: string, cname: string
 // reach a pub item by `module::path::Item` instead of (or in addition to)
 // the bare short name.
 fn module_path_from_origin(origin: string) -> string {
-    if origin == null || origin.eq("") {
-        return "";
-    }
+    if origin == null || origin.eq("") { return ""; }
     let mut s: string = origin;
     let n: i32 = s.len();
     if n > 6 {
         let tail: string = s.substring(n - 6, n);
-        if tail.eq(".glide") {
-            s = s.substring(0, n - 6);
-        }
+        if tail.eq(".glide") { s = s.substring(0, n - 6); }
     }
     // Strip the leading `src/` segment so user-facing module paths don't
     // expose the source-root layout. Files under `src/stdlib/foo.glide`
@@ -1296,13 +1086,9 @@ fn _uniq_undo(ren: *HashMap<string>, undo: *Vector<string>) {
 }
 
 fn _uniq_expr(e: *Expr, ren: *HashMap<string>, ctr: *Vector<i32>) {
-    if e == null {
-        return;
-    }
+    if e == null { return; }
     if e.kind == EX_IDENT {
-        if e.str_val != null && ren.contains(e.str_val) {
-            e.str_val = ren.get(e.str_val);
-        }
+        if e.str_val != null && ren.contains(e.str_val) { e.str_val = ren.get(e.str_val); }
         return;
     }
     if e.kind == EX_FNEXPR {
@@ -1310,14 +1096,10 @@ fn _uniq_expr(e: *Expr, ren: *HashMap<string>, ctr: *Vector<i32>) {
         if e.fn_expr_params != null {
             for let i: i32 = 0; i < e.fn_expr_params.len(); i++ {
                 let p: Param = e.fn_expr_params.get(i);
-                if p.name != null {
-                    seed.push(p.name);
-                }
+                if p.name != null { seed.push(p.name); }
             }
         }
-        if e.fn_expr_body != null {
-            _uniq_scope(e.fn_expr_body, ren, ctr, seed);
-        }
+        if e.fn_expr_body != null { _uniq_scope(e.fn_expr_body, ren, ctr, seed); }
         return;
     }
     if e.kind == EX_BLOCK {
@@ -1350,9 +1132,7 @@ fn _uniq_expr(e: *Expr, ren: *HashMap<string>, ctr: *Vector<i32>) {
     _uniq_expr(e.lhs, ren, ctr);
     _uniq_expr(e.rhs, ren, ctr);
     _uniq_expr(e.operand, ren, ctr);
-    if e.macro_recv != null {
-        _uniq_expr(e.macro_recv, ren, ctr);
-    }
+    if e.macro_recv != null { _uniq_expr(e.macro_recv, ren, ctr); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
@@ -1369,18 +1149,14 @@ fn _uniq_arm(arm: *MatchArm, ren: *HashMap<string>, ctr: *Vector<i32>) {
             seed.push(arm.bindings.get(i));
         }
     }
-    if arm.body != null {
-        _uniq_scope(arm.body, ren, ctr, seed);
-    }
+    if arm.body != null { _uniq_scope(arm.body, ren, ctr, seed); }
 }
 
 // Mutates `*s` in place. The caller persists it: the scope loop writes the
 // (by-value) copy back into its vector; a `*Stmt` field (for-init) is mutated
 // through the pointer directly. Either way the rename lands.
 fn _uniq_stmt(s: *Stmt, ren: *HashMap<string>, seen: *HashMap<bool>, undo: *Vector<string>, ctr: *Vector<i32>) {
-    if s == null {
-        return;
-    }
+    if s == null { return; }
     if s.kind == ST_LET {
         // The value is evaluated in the CURRENT scope, so `let b = b.val`
         // reads the OLD `b` — substitute the value BEFORE rebinding the name.
@@ -1408,9 +1184,7 @@ fn _uniq_stmt(s: *Stmt, ren: *HashMap<string>, seen: *HashMap<bool>, undo: *Vect
                 undo.push(orig);
             }
             ren.insert(orig, cname);
-            if !cname.eq(orig) {
-                s.name = cname;
-            }
+            if !cname.eq(orig) { s.name = cname; }
         }
         return;
     }
@@ -1428,30 +1202,20 @@ fn _uniq_stmt(s: *Stmt, ren: *HashMap<string>, seen: *HashMap<bool>, undo: *Vect
     }
     if s.kind == ST_IF {
         _uniq_expr(s.cond, ren, ctr);
-        if s.then_body != null {
-            _uniq_scope(s.then_body, ren, ctr, null);
-        }
-        if s.else_body != null {
-            _uniq_scope(s.else_body, ren, ctr, null);
-        }
+        if s.then_body != null { _uniq_scope(s.then_body, ren, ctr, null); }
+        if s.else_body != null { _uniq_scope(s.else_body, ren, ctr, null); }
         return;
     }
     if s.kind == ST_WHILE {
         _uniq_expr(s.cond, ren, ctr);
-        if s.then_body != null {
-            _uniq_scope(s.then_body, ren, ctr, null);
-        }
+        if s.then_body != null { _uniq_scope(s.then_body, ren, ctr, null); }
         return;
     }
     if s.kind == ST_WHILE_RECV {
         _uniq_expr(s.let_value, ren, ctr);
         let seed: *Vector<string> = Vector::new();
-        if s.name != null && !s.name.eq("") {
-            seed.push(s.name);
-        }
-        if s.then_body != null {
-            _uniq_scope(s.then_body, ren, ctr, seed);
-        }
+        if s.name != null && !s.name.eq("") { seed.push(s.name); }
+        if s.then_body != null { _uniq_scope(s.then_body, ren, ctr, seed); }
         return;
     }
     if s.kind == ST_FOR {
@@ -1459,9 +1223,7 @@ fn _uniq_stmt(s: *Stmt, ren: *HashMap<string>, seen: *HashMap<bool>, undo: *Vect
         // share one scope.
         let seen2: *HashMap<bool> = HashMap::new();
         let undo2: *Vector<string> = Vector::new();
-        if s.for_init != null {
-            _uniq_stmt(s.for_init, ren, seen2, undo2, ctr);
-        }
+        if s.for_init != null { _uniq_stmt(s.for_init, ren, seen2, undo2, ctr); }
         _uniq_expr(s.cond, ren, ctr);
         _uniq_expr(s.for_step, ren, ctr);
         if s.then_body != null {
@@ -1475,9 +1237,7 @@ fn _uniq_stmt(s: *Stmt, ren: *HashMap<string>, seen: *HashMap<bool>, undo: *Vect
         return;
     }
     if s.kind == ST_BLOCK {
-        if s.then_body != null {
-            _uniq_scope(s.then_body, ren, ctr, null);
-        }
+        if s.then_body != null { _uniq_scope(s.then_body, ren, ctr, null); }
         return;
     }
     if s.kind == ST_MATCH {
@@ -1522,16 +1282,12 @@ fn _uniq_scope(body: *Vector<Stmt>, ren: *HashMap<string>, ctr: *Vector<i32>, se
 }
 
 fn _uniq_fn(fnstmt: *Stmt) {
-    if fnstmt.fn_body == null {
-        return;
-    }
+    if fnstmt.fn_body == null { return; }
     let seed: *Vector<string> = Vector::new();
     if fnstmt.fn_params != null {
         for let i: i32 = 0; i < fnstmt.fn_params.len(); i++ {
             let p: Param = fnstmt.fn_params.get(i);
-            if p.name != null {
-                seed.push(p.name);
-            }
+            if p.name != null { seed.push(p.name); }
         }
     }
     let ren: *HashMap<string> = HashMap::new();
@@ -1543,15 +1299,11 @@ fn _uniq_fn(fnstmt: *Stmt) {
 fn _uniq_program(program: *Vector<Stmt>) {
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind == ST_FN {
-            _uniq_fn(&s);
-        }
+        if s.kind == ST_FN { _uniq_fn(&s); }
         if s.kind == ST_IMPL && s.impl_methods != null {
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                if m.kind == ST_FN {
-                    _uniq_fn(&m);
-                }
+                if m.kind == ST_FN { _uniq_fn(&m); }
             }
         }
     }
@@ -1565,18 +1317,12 @@ pub fn emit_program(program: *Vector<Stmt>) {
 // `field_monos` forward-declares the struct's field monos first (needed for the
 // Option/Result wrappers, not for chan inners).
 fn emit_named_type_def(g: *CG, program: *Vector<Stmt>, name: string, field_monos: bool) {
-    if g.emitted_named.contains(name) {
-        return;
-    }
+    if g.emitted_named.contains(name) { return; }
     for let j: i32 = 0; j < program.len(); j++ {
         let s: Stmt = program.get(j);
-        if s.name == null || !s.name.eq(name) {
-            continue;
-        }
+        if s.name == null || !s.name.eq(name) { continue; }
         if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
-            if field_monos {
-                _forward_decl_field_monos(g, &s);
-            }
+            if field_monos { _forward_decl_field_monos(g, &s); }
             println!("typedef struct ", s.name, " ", s.name, ";");
             emit_struct(&s);
             g.emitted_named.insert(name, true);
@@ -1596,35 +1342,28 @@ fn emit_named_type_def(g: *CG, program: *Vector<Stmt>, name: string, field_monos
 // the `main` wrapper. The user program supplies its own entry + primitives.
 // True when struct stmt `s` declares any `own *T` field.
 fn _stmt_has_own_field(s: *Stmt) -> bool {
-    if s == null || s.struct_fields == null {
-        return false;
-    }
+    if s == null || s.struct_fields == null { return false; }
     for let i: i32 = 0; i < s.struct_fields.len(); i = i + 1 {
         let f: Field = s.struct_fields.get(i);
-        if f.is_own {
-            return true;
-        }
+        if f.is_own { return true; }
     }
     return false;
 }
 
 // True when struct `name` has any `own *T` field (so it gets a recursive drop fn).
 fn _struct_has_own_fields_by_name(g: *CG, name: string) -> bool {
-    if name == null || name.eq("") || !g.structs.contains(name) {
-        return false;
-    }
+    if name == null || name.eq("") || !g.structs.contains(name) { return false; }
     let sd: Stmt = g.structs.get(name);
     return _stmt_has_own_field(&sd);
 }
 
 // True when generic-struct template `name` (in generic_structs) has any own field.
 fn _generic_has_own_field(g: *CG, name: string) -> bool {
-    if name == null || !g.generic_structs.contains(name) {
-        return false;
-    }
+    if name == null || !g.generic_structs.contains(name) { return false; }
     let tpl: Stmt = g.generic_structs.get(name);
     return _stmt_has_own_field(&tpl);
 }
+
 // Emit the drop of ONE owned field `p->fname` whose CONCRETE (post-subst) type is
 // `fty`: a matching `_free` method wins (custom cleanup), else the type's
 // recursive drop (own fields), else a plain free. Handles both a concrete
@@ -1640,10 +1379,12 @@ fn _emit_drop_field(g: *CG, fname: string, fty: *Type) {
         let nm: string = inner.name;
         if g.fns.contains(nm.concat("_free")) {
             println!("  ".concat(nm).concat("_free(p->").concat(c_safe_ident(fname)).concat(");"));
-        } else if _struct_has_own_fields_by_name(g, nm) {
-            println!("  __glide_drop_".concat(nm).concat("(p->").concat(c_safe_ident(fname)).concat(");"));
         } else {
-            println!("  free((void*)(p->".concat(c_safe_ident(fname)).concat("));"));
+            if _struct_has_own_fields_by_name(g, nm) {
+                println!("  __glide_drop_".concat(nm).concat("(p->").concat(c_safe_ident(fname)).concat(");"));
+            } else {
+                println!("  free((void*)(p->".concat(c_safe_ident(fname)).concat("));"));
+            }
         }
         return;
     }
@@ -1658,6 +1399,7 @@ fn _emit_drop_field(g: *CG, fname: string, fty: *Type) {
     }
     println!("  free((void*)(p->".concat(c_safe_ident(fname)).concat("));"));
 }
+
 // Emit `void __glide_drop_<cname>(<cname>* p) { … }`. `params`/`args` non-null
 // substitute the template's type params (for a mono); null = a concrete struct.
 fn _emit_one_drop_body(g: *CG, cname: string, fields: *Vector<Field>, params: *Vector<string>, args: *Vector<Type>) {
@@ -1666,19 +1408,16 @@ fn _emit_one_drop_body(g: *CG, cname: string, fields: *Vector<Field>, params: *V
     if fields != null {
         for let j: i32 = 0; j < fields.len(); j = j + 1 {
             let f: Field = fields.get(j);
-            if !f.is_own {
-                continue;
-            }
+            if !f.is_own { continue; }
             let mut fty: *Type = f.ty;
-            if params != null && args != null {
-                fty = subst_type(f.ty, params, args);
-            }
+            if params != null && args != null { fty = subst_type(f.ty, params, args); }
             _emit_drop_field(g, f.name, fty);
         }
     }
     println!("  free((void*)p);");
     println!("}");
 }
+
 // Emit `void __glide_drop_T(T* p) { ...; free(p); }` for each struct with `own`
 // fields — CONCRETE structs by their name, and each MONOMORPHIZED instance of a
 // generic struct (skipping the un-instantiable template, whose name is not a C
@@ -1687,9 +1426,7 @@ fn emit_struct_drop_bodies(g: *CG, program: *Vector<Stmt>) {
     // Concrete (non-generic) structs.
     for let i: i32 = 0; i < program.len(); i = i + 1 {
         let s: Stmt = program.get(i);
-        if s.kind != ST_STRUCT || !_stmt_has_own_field(&s) {
-            continue;
-        }
+        if s.kind != ST_STRUCT || !_stmt_has_own_field(&s) { continue; }
         if s.type_params != null && s.type_params.len() > 0 {
             continue; // generic template — handled per-mono below
         }
@@ -1787,15 +1524,12 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
                 g.structs.insert(s.name, s);
             }
         }
-        if s.kind == ST_ENUM {
-            g.enums.insert(s.name, s);
-        }
-        if s.kind == ST_TRAIT && s.name != null && !s.name.eq("") {
-            g.traits.insert(s.name, s);
-        }
+        if s.kind == ST_ENUM { g.enums.insert(s.name, s); }
+        if s.kind == ST_TRAIT && s.name != null && !s.name.eq("") { g.traits.insert(s.name, s); }
         // Record which named types define a user `eq` method, so `==` uses it
         // instead of the automatic field-by-field comparison.
-        if s.kind == ST_IMPL && s.impl_target != null && s.impl_target.kind == TY_NAMED && s.impl_methods != null {
+        if s.kind == ST_IMPL && s.impl_target != null && s.impl_target.kind == TY_NAMED
+            && s.impl_methods != null {
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
                 if m.kind == ST_FN && m.name.eq("eq") {
@@ -1836,9 +1570,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
     // later body-emit passes that re-issue the forward are harmless.
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.name == null || s.name.eq("") {
-            continue;
-        }
+        if s.name == null || s.name.eq("") { continue; }
         if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
             println!("typedef struct ", c_safe_ident(s.name), " ", c_safe_ident(s.name), ";");
         }
@@ -1853,7 +1585,8 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         let sd: Stmt = program.get(i);
         // Generic templates are skipped — their name is not a C type; each mono's
         // drop is forward-declared next to its body in emit_struct_drop_bodies.
-        if sd.kind == ST_STRUCT && _stmt_has_own_field(&sd) && (sd.type_params == null || sd.type_params.len() == 0) {
+        if sd.kind == ST_STRUCT && _stmt_has_own_field(&sd)
+            && (sd.type_params == null || sd.type_params.len() == 0) {
             println!("void __glide_drop_".concat(sd.name).concat("(").concat(c_safe_ident(sd.name)).concat("* p);"));
         }
     }
@@ -1865,15 +1598,9 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
     // a later pass picks up tuples inferred from literals + backfilled lets.
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind == ST_FN && s.type_params != null && s.type_params.len() > 0 {
-            continue;
-        }
-        if s.kind == ST_STRUCT && s.type_params != null && s.type_params.len() > 0 {
-            continue;
-        }
-        if s.kind == ST_IMPL && s.type_params != null && s.type_params.len() > 0 {
-            continue;
-        }
+        if s.kind == ST_FN && s.type_params != null && s.type_params.len() > 0 { continue; }
+        if s.kind == ST_STRUCT && s.type_params != null && s.type_params.len() > 0 { continue; }
+        if s.kind == ST_IMPL && s.type_params != null && s.type_params.len() > 0 { continue; }
         collect_tuple_in_stmt(g, &s);
     }
     emit_tuple_runtime(g);
@@ -1883,12 +1610,8 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
     // because the registration pass is later in emit_program.
     for let i: i32 = 0; i < g.chan_types.len(); i++ {
         let t: Type = g.chan_types.get(i);
-        if t.kind != TY_NAMED {
-            continue;
-        }
-        if t.name == null || t.name.eq("") {
-            continue;
-        }
+        if t.kind != TY_NAMED { continue; }
+        if t.name == null || t.name.eq("") { continue; }
         emit_named_type_def(g, program, t.name, false);
     }
     emit_chan_runtime(g);
@@ -1928,30 +1651,16 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
     // the struct body so the field types are in scope.
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind != ST_IMPL {
-            continue;
-        }
-        if s.impl_trait_name == null || s.impl_trait_name.eq("") {
-            continue;
-        }
-        if !g.dyn_traits.contains(s.impl_trait_name) {
-            continue;
-        }
-        if s.impl_target == null || s.impl_target.kind != TY_NAMED {
-            continue;
-        }
+        if s.kind != ST_IMPL { continue; }
+        if s.impl_trait_name == null || s.impl_trait_name.eq("") { continue; }
+        if !g.dyn_traits.contains(s.impl_trait_name) { continue; }
+        if s.impl_target == null || s.impl_target.kind != TY_NAMED { continue; }
         let tn: string = s.impl_target.name;
-        if g.emitted_named.contains(tn) {
-            continue;
-        }
+        if g.emitted_named.contains(tn) { continue; }
         for let j: i32 = 0; j < program.len(); j++ {
             let ts: Stmt = program.get(j);
-            if ts.name == null || ts.name.eq("") {
-                continue;
-            }
-            if !ts.name.eq(tn) {
-                continue;
-            }
+            if ts.name == null || ts.name.eq("") { continue; }
+            if !ts.name.eq(tn) { continue; }
             if ts.kind == ST_STRUCT && (ts.type_params == null || ts.type_params.len() == 0) {
                 _forward_decl_field_monos(g, &ts);
                 println!("typedef struct ".concat(ts.name).concat(" ").concat(ts.name).concat(";"));
@@ -1981,20 +1690,12 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         // Skip generic templates — their bodies reference type params and
         // assoc projections that will be resolved per-instantiation. Mono
         // entries are added to the queue and collected when emitted.
-        if s.kind == ST_FN && s.type_params != null && s.type_params.len() > 0 {
-            continue;
-        }
-        if s.kind == ST_STRUCT && s.type_params != null && s.type_params.len() > 0 {
-            continue;
-        }
-        if s.kind == ST_IMPL && s.type_params != null && s.type_params.len() > 0 {
-            continue;
-        }
+        if s.kind == ST_FN && s.type_params != null && s.type_params.len() > 0 { continue; }
+        if s.kind == ST_STRUCT && s.type_params != null && s.type_params.len() > 0 { continue; }
+        if s.kind == ST_IMPL && s.type_params != null && s.type_params.len() > 0 { continue; }
         // Trait body sigs reference `Self::Item` placeholders; never collect.
         // Concrete impls of the trait collect their own substituted types.
-        if s.kind == ST_TRAIT {
-            continue;
-        }
+        if s.kind == ST_TRAIT { continue; }
         collect_result_in_stmt(g, &s);
     }
     // Same chan-userType story: result_<T> wraps T by value, so user
@@ -2006,12 +1707,8 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         // where TY_POINTER -> TY_GENERIC). Without this, the result
         // struct typedef references a yet-undeclared mangled tag.
         forward_decl_generic_monos(g, &t);
-        if t.kind != TY_NAMED {
-            continue;
-        }
-        if t.name == null || t.name.eq("") {
-            continue;
-        }
+        if t.kind != TY_NAMED { continue; }
+        if t.name == null || t.name.eq("") { continue; }
         emit_named_type_def(g, program, t.name, true);
     }
     emit_result_runtime(g);
@@ -2019,24 +1716,16 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
     for let i: i32 = 0; i < g.option_types.len(); i++ {
         let t: Type = g.option_types.get(i);
         forward_decl_generic_monos(g, &t);
-        if t.kind != TY_NAMED {
-            continue;
-        }
-        if t.name == null || t.name.eq("") {
-            continue;
-        }
+        if t.kind != TY_NAMED { continue; }
+        if t.name == null || t.name.eq("") { continue; }
         emit_named_type_def(g, program, t.name, true);
     }
     emit_option_runtime(g);
     for let i: i32 = 0; i < g.optres_types.len(); i++ {
         let t: Type = g.optres_types.get(i);
         forward_decl_generic_monos(g, &t);
-        if t.kind != TY_NAMED {
-            continue;
-        }
-        if t.name == null || t.name.eq("") {
-            continue;
-        }
+        if t.kind != TY_NAMED { continue; }
+        if t.name == null || t.name.eq("") { continue; }
         emit_named_type_def(g, program, t.name, true);
     }
     emit_optres_runtime(g);
@@ -2048,33 +1737,17 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
     // concrete after monomorphization.
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind != ST_IMPL {
-            continue;
-        }
-        if s.impl_trait_name == null || s.impl_trait_name.eq("") {
-            continue;
-        }
-        if s.assoc_decls == null {
-            continue;
-        }
-        if s.impl_target == null {
-            continue;
-        }
+        if s.kind != ST_IMPL { continue; }
+        if s.impl_trait_name == null || s.impl_trait_name.eq("") { continue; }
+        if s.assoc_decls == null { continue; }
+        if s.impl_target == null { continue; }
         let mut tname: string = "";
-        if s.impl_target.kind == TY_NAMED {
-            tname = s.impl_target.name;
-        }
-        if s.impl_target.kind == TY_GENERIC {
-            tname = s.impl_target.name;
-        }
-        if tname.eq("") {
-            continue;
-        }
+        if s.impl_target.kind == TY_NAMED { tname = s.impl_target.name; }
+        if s.impl_target.kind == TY_GENERIC { tname = s.impl_target.name; }
+        if tname.eq("") { continue; }
         for let j: i32 = 0; j < s.assoc_decls.len(); j++ {
             let a: Param = s.assoc_decls.get(j);
-            if a.ty == null {
-                continue;
-            }
+            if a.ty == null { continue; }
             let key: string = s.impl_trait_name.concat("::").concat(tname).concat("::").concat(a.name);
             g.assoc_table.insert(key, *a.ty);
         }
@@ -2102,18 +1775,14 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
             // qualified alias must point at that same mangled name, or a
             // `mod::read` call would emit a bare `read(...)` and clash.
             let mut fn_cname: string = s.name;
-            if s.fn_body != null && is_libc_symbol(s.name) {
-                fn_cname = userfn_mangle(s.name);
-            }
+            if s.fn_body != null && is_libc_symbol(s.name) { fn_cname = userfn_mangle(s.name); }
             register_alias_suffixes(g, mod_path, s.name, fn_cname);
         }
         if s.kind == ST_ENUM {
             g.enums.insert(s.name, s);
             register_alias_suffixes(g, mod_path, s.name, s.name);
         }
-        if s.kind == ST_CONST && s.let_ty != null {
-            g.consts.insert(s.name, *s.let_ty);
-        }
+        if s.kind == ST_CONST && s.let_ty != null { g.consts.insert(s.name, *s.let_ty); }
         if s.kind == ST_CONST {
             // Top-level consts are emitted under their BARE name (`#define
             // PMAGIC …`), but a qualified reference (`lib::PMAGIC`) lowered
@@ -2121,11 +1790,11 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
             // so EX_PATH resolves to the name emit_top_const declares.
             register_alias_suffixes(g, mod_path, s.name, c_safe_ident(s.name));
         }
-        if s.kind == ST_IMPL && (s.type_params == null || s.type_params.len() == 0) && s.impl_target != null && s.impl_methods != null {
+        if s.kind == ST_IMPL && (s.type_params == null || s.type_params.len() == 0)
+            && s.impl_target != null
+            && s.impl_methods != null {
             let mut prefix: string = "X";
-            if s.impl_target.kind == TY_NAMED {
-                prefix = s.impl_target.name;
-            }
+            if s.impl_target.kind == TY_NAMED { prefix = s.impl_target.name; }
             // `impl Vector<int> { ... }` — concrete specialization on a
             // generic type. Mangled prefix is `Vector__int` so it doesn't
             // collide with the generic `impl<T> Vector<T>` family.
@@ -2161,15 +1830,13 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
                 }
             }
         }
-        if s.kind == ST_IMPL && s.type_params != null && s.type_params.len() > 0 && s.impl_target != null && s.impl_methods != null {
+        if s.kind == ST_IMPL && s.type_params != null && s.type_params.len() > 0
+            && s.impl_target != null
+            && s.impl_methods != null {
             // Build mangled prefix from target's name.
             let mut prefix: string = "X";
-            if s.impl_target.kind == TY_NAMED {
-                prefix = s.impl_target.name;
-            }
-            if s.impl_target.kind == TY_GENERIC {
-                prefix = s.impl_target.name;
-            }
+            if s.impl_target.kind == TY_NAMED { prefix = s.impl_target.name; }
+            if s.impl_target.kind == TY_GENERIC { prefix = s.impl_target.name; }
             // Register each method as a generic fn under `Type_method` name.
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
@@ -2224,9 +1891,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
-            if s.name != null && !s.name.eq("") && g.emitted_named.contains(s.name) {
-                continue;
-            }
+            if s.name != null && !s.name.eq("") && g.emitted_named.contains(s.name) { continue; }
             println!("typedef struct ", s.name, " ", s.name, ";");
         }
     }
@@ -2243,20 +1908,14 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
     // a C redefinition error.
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.name != null && !s.name.eq("") && g.emitted_named.contains(s.name) {
-            continue;
-        }
+        if s.name != null && !s.name.eq("") && g.emitted_named.contains(s.name) { continue; }
         if s.kind == ST_STRUCT && (s.type_params == null || s.type_params.len() == 0) {
             emit_struct(&s);
-            if s.name != null && !s.name.eq("") {
-                g.emitted_named.insert(s.name, true);
-            }
+            if s.name != null && !s.name.eq("") { g.emitted_named.insert(s.name, true); }
         }
         if s.kind == ST_ENUM {
             emit_enum(&s);
-            if s.name != null && !s.name.eq("") {
-                g.emitted_named.insert(s.name, true);
-            }
+            if s.name != null && !s.name.eq("") { g.emitted_named.insert(s.name, true); }
         }
     }
     // Anonymous tuple structs. Collected program-wide now that let types are
@@ -2266,24 +1925,16 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
     // this re-emission a no-op for those.
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind == ST_FN && s.type_params != null && s.type_params.len() > 0 {
-            continue;
-        }
-        if s.kind == ST_STRUCT && s.type_params != null && s.type_params.len() > 0 {
-            continue;
-        }
-        if s.kind == ST_IMPL && s.type_params != null && s.type_params.len() > 0 {
-            continue;
-        }
+        if s.kind == ST_FN && s.type_params != null && s.type_params.len() > 0 { continue; }
+        if s.kind == ST_STRUCT && s.type_params != null && s.type_params.len() > 0 { continue; }
+        if s.kind == ST_IMPL && s.type_params != null && s.type_params.len() > 0 { continue; }
         collect_tuple_in_stmt(g, &s);
     }
     emit_tuple_runtime(g);
     // Top-level const definitions (#define for ints, static const for others).
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind == ST_CONST {
-            emit_top_const(g, &s);
-        }
+        if s.kind == ST_CONST { emit_top_const(g, &s); }
     }
     println!("");
     // Top-level `let` globals (freestanding only). Real C globals with storage
@@ -2294,9 +1945,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
     if g.freestanding {
         for let i: i32 = 0; i < program.len(); i++ {
             let s: Stmt = program.get(i);
-            if s.kind == ST_LET {
-                emit_top_global(g, &s);
-            }
+            if s.kind == ST_LET { emit_top_global(g, &s); }
         }
         println!("");
     }
@@ -2360,9 +2009,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
                 for let j: i32 = 0; j < template.fn_body.len(); j++ {
                     let b: Stmt = template.fn_body.get(j);
                     let nb: *Stmt = subst_stmt(&b, template.type_params, entry.args, g.generic_structs);
-                    if nb != null {
-                        prescan_stmt(g, nb);
-                    }
+                    if nb != null { prescan_stmt(g, nb); }
                 }
             }
         }
@@ -2389,9 +2036,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
     // concrete tuples so the typedef precedes the mono's forward decl + body.
     for let i: i32 = 0; i < g.fn_mono_queue.len(); i++ {
         let entry: FnMonoEntry = g.fn_mono_queue.get(i);
-        if !g.generic_fns.contains(entry.name) {
-            continue;
-        }
+        if !g.generic_fns.contains(entry.name) { continue; }
         let template: Stmt = g.generic_fns.get(entry.name);
         let rt: *Type = subst_type(template.fn_ret_ty, template.type_params, entry.args);
         collect_tuple_in_type(g, rt);
@@ -2414,9 +2059,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
             for let j: i32 = 0; j < template.fn_body.len(); j++ {
                 let b: Stmt = template.fn_body.get(j);
                 let nb: *Stmt = subst_stmt(&b, template.type_params, entry.args, g.generic_structs);
-                if nb != null {
-                    collect_tuple_in_stmt(g, nb);
-                }
+                if nb != null { collect_tuple_in_stmt(g, nb); }
             }
         }
     }
@@ -2451,9 +2094,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
             print!("void");
         } else {
             for let j: i32 = 0; j < af.params.len(); j++ {
-                if j > 0 {
-                    print!(", ");
-                }
+                if j > 0 { print!(", "); }
                 let p: Param = af.params.get(j);
                 print!(param_c_decl(p.ty, c_safe_ident(p.name)));
             }
@@ -2472,9 +2113,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
     // Whether the program touches the M:N scheduler at all — any `spawn` site
     // or any `chan<T>`. Captured before the count is reset for stub IDs below.
     // `--tiny` keeps the scheduler only when this is true.
-    if g.spawn_count > 0 || g.chan_types.len() > 0 {
-        g.needs_concurrency = true;
-    }
+    if g.spawn_count > 0 || g.chan_types.len() > 0 { g.needs_concurrency = true; }
     g.spawn_count = 0;
     // Count bodied top-level fns per name. A cfg-guarded fn only gets a
     // panicking #else stub when it is the SOLE definition of that name: the
@@ -2486,11 +2125,10 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
     let fn_name_count: *HashMap<i32> = HashMap::new();
     for let i: i32 = 0; i < program.len(); i++ {
         let cs: Stmt = program.get(i);
-        if cs.kind == ST_FN && (cs.type_params == null || cs.type_params.len() == 0) && cs.fn_body != null {
+        if cs.kind == ST_FN && (cs.type_params == null || cs.type_params.len() == 0)
+            && cs.fn_body != null {
             let mut prev: i32 = 0;
-            if fn_name_count.contains(cs.name) {
-                prev = fn_name_count.get(cs.name);
-            }
+            if fn_name_count.contains(cs.name) { prev = fn_name_count.get(cs.name); }
             fn_name_count.insert(cs.name, prev + 1);
         }
     }
@@ -2502,9 +2140,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
             emit_fn(g, &s);
             println!("");
             let mut lone: bool = true;
-            if fn_name_count.contains(s.name) && fn_name_count.get(s.name) > 1 {
-                lone = false;
-            }
+            if fn_name_count.contains(s.name) && fn_name_count.get(s.name) > 1 { lone = false; }
             if lone && _cfg_stubbed(g, &s) {
                 println!("#else");
                 emit_cfg_stub(&s);
@@ -2520,9 +2156,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
     // Drain generic fn mono queue. New monos may queue more; loop until empty.
     while g.fn_mono_queue.len() > 0 {
         let e: FnMonoEntry = g.fn_mono_queue.pop();
-        if !g.generic_fns.contains(e.name) {
-            continue;
-        }
+        if !g.generic_fns.contains(e.name) { continue; }
         let template: Stmt = g.generic_fns.get(e.name);
         let mangled: string = mangle_generic(e.name, e.args);
         // Substitute type params throughout the body / params / ret. After
@@ -2545,9 +2179,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
             for let i: i32 = 0; i < template.fn_body.len(); i++ {
                 let b: Stmt = template.fn_body.get(i);
                 let nb: *Stmt = subst_stmt(&b, template.type_params, e.args, g.generic_structs);
-                if nb != null {
-                    new_body.push(*nb);
-                }
+                if nb != null { new_body.push(*nb); }
             }
         }
         // Source mapping for the mono: inherits the template's origin
@@ -2563,9 +2195,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
             print!("void");
         } else {
             for let j: i32 = 0; j < new_params_v.len(); j++ {
-                if j > 0 {
-                    print!(", ");
-                }
+                if j > 0 { print!(", "); }
                 let p: Param = new_params_v.get(j);
                 print!(param_c_decl(p.ty, c_safe_ident(p.name)));
             }
@@ -2622,9 +2252,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
             print!("void");
         } else {
             for let j: i32 = 0; j < af.params.len(); j++ {
-                if j > 0 {
-                    print!(", ");
-                }
+                if j > 0 { print!(", "); }
                 let p: Param = af.params.get(j);
                 print!(param_c_decl(p.ty, c_safe_ident(p.name)));
             }
@@ -2688,11 +2316,10 @@ fn emit_top_const(g: *CG, s: *Stmt) {
     // value carries its width through expressions - otherwise C macro
     // expansion treats `1000000000` as plain `int` and arithmetic like
     // `(SECS_PER_HOUR * NANOS_PER_SEC)` overflows int32 silently.
-    if s.let_value == null {
-        return;
-    }
+    if s.let_value == null { return; }
     let cname: string = c_safe_ident(s.name);
-    if s.let_ty != null && s.let_ty.kind == TY_NAMED && (s.let_ty.name.eq("int") || s.let_ty.name.eq("uint") || s.let_ty.name.eq("i32")) {
+    if s.let_ty != null && s.let_ty.kind == TY_NAMED
+        && (s.let_ty.name.eq("int") || s.let_ty.name.eq("uint") || s.let_ty.name.eq("i32")) {
         print!("#define ", cname, " ");
         emit_expr(g, s.let_value);
         println!("");
@@ -2729,9 +2356,7 @@ fn emit_global_init(g: *CG, e: *Expr) {
         print!("{");
         if e.field_names != null && e.args != null {
             for let i: i32 = 0; i < e.args.len(); i++ {
-                if i > 0 {
-                    print!(", ");
-                }
+                if i > 0 { print!(", "); }
                 // concat, not comma-args: print!(a, b) space-joins.
                 print!(".".concat(c_safe_ident(e.field_names.get(i))).concat(" = "));
                 let v: Expr = e.args.get(i);
@@ -2753,14 +2378,10 @@ fn emit_top_global(g: *CG, s: *Stmt) {
     if s.attrs != null {
         for let i: i32 = 0; i < s.attrs.len(); i++ {
             let a: Attr = s.attrs.get(i);
-            if a.name.eq("used") {
-                is_used = true;
-            }
+            if a.name.eq("used") { is_used = true; }
             if a.name.eq("section") && a.args != null && a.args.len() > 0 {
                 let av: Expr = a.args.get(0);
-                if av.kind == EX_STRING {
-                    section = av.str_val;
-                }
+                if av.kind == EX_STRING { section = av.str_val; }
             }
         }
     }
@@ -2775,13 +2396,9 @@ fn emit_top_global(g: *CG, s: *Stmt) {
     head = head.concat(" ").concat(c_safe_ident(s.name));
     if is_used || !section.eq("") {
         head = head.concat(" __attribute__((");
-        if is_used {
-            head = head.concat("used");
-        }
+        if is_used { head = head.concat("used"); }
         if !section.eq("") {
-            if is_used {
-                head = head.concat(", ");
-            }
+            if is_used { head = head.concat(", "); }
             head = head.concat("section(\"").concat(section).concat("\")");
         }
         head = head.concat("))");
@@ -2803,9 +2420,7 @@ fn emit_top_global(g: *CG, s: *Stmt) {
 // the typer rejects; this just refuses to loop on it). Primitives, extern
 // opaque types, and unknown names fall through untouched.
 fn _emit_concrete_payload_def(g: *CG, name: string) {
-    if name == null || name.eq("") || g.emitted_named.contains(name) {
-        return;
-    }
+    if name == null || name.eq("") || g.emitted_named.contains(name) { return; }
     if g.structs.contains(name) {
         let sd: Stmt = g.structs.get(name);
         if sd.is_extern {
@@ -2818,9 +2433,7 @@ fn _emit_concrete_payload_def(g: *CG, name: string) {
                 if f.ty != null && f.ty.kind == TY_NAMED {
                     _emit_concrete_payload_def(g, f.ty.name);
                 }
-                if f.ty != null && f.ty.kind == TY_GENERIC {
-                    emit_struct_mono(g, f.ty);
-                }
+                if f.ty != null && f.ty.kind == TY_GENERIC { emit_struct_mono(g, f.ty); }
             }
         }
         _forward_decl_field_monos(g, &sd);
@@ -2837,21 +2450,15 @@ fn _emit_concrete_payload_def(g: *CG, name: string) {
 }
 
 pub fn emit_struct_mono(g: *CG, t: *Type) {
-    if t == null || t.kind != TY_GENERIC {
-        return;
-    }
-    if !g.generic_structs.contains(t.name) {
-        return;
-    }
+    if t == null || t.kind != TY_GENERIC { return; }
+    if !g.generic_structs.contains(t.name) { return; }
     let template: Stmt = g.generic_structs.get(t.name);
     let mangled: string = mangle_generic(t.name, t.args);
     // Dedup: the same mono can appear many times in the collected uses; the
     // earlier typedef pass already inserted into emitted_monos, but here we
     // need our own marker for "body emitted".
     let body_key: string = mangled.concat("__body");
-    if g.emitted_monos.contains(body_key) {
-        return;
-    }
+    if g.emitted_monos.contains(body_key) { return; }
     g.emitted_monos.insert(body_key, true);
     // A substituted field may reference another generic-struct mono — e.g.
     // HashMap<V>'s `*_HmSlot<V>` field becomes `*_HmSlot<Stmt>`. That nested
@@ -2896,9 +2503,7 @@ pub fn emit_struct_mono(g: *CG, t: *Type) {
             // `Plain v;` against a forward typedef — invalid C ("incomplete
             // type") regardless of source order. Emit the payload's full
             // body now; emitted_named makes the later pass a no-op.
-            if fsub != null && fsub.kind == TY_NAMED {
-                _emit_concrete_payload_def(g, fsub.name);
-            }
+            if fsub != null && fsub.kind == TY_NAMED { _emit_concrete_payload_def(g, fsub.name); }
             // A wrapper field (`?Inner` / `!Inner` / `?!Inner`) embeds Inner
             // BY VALUE inside `__glide_option_<m>_t`: the program-wide wrapper
             // pre-pass skips generic templates, so a mono's wrapper fields are
@@ -2906,12 +2511,14 @@ pub fn emit_struct_mono(g: *CG, t: *Type) {
             // (generic mono body / concrete payload), then emit the guarded
             // wrapper template so this body's field type resolves. The #ifndef
             // guards make any later re-emission harmless.
-            if fsub != null && (fsub.kind == TY_OPTION || fsub.kind == TY_RESULT || fsub.kind == TY_OPT_RESULT) {
+            if fsub != null
+                && (fsub.kind == TY_OPTION || fsub.kind == TY_RESULT || fsub.kind == TY_OPT_RESULT) {
                 // emit_struct_mono directly (not forward_decl_generic_monos):
                 // the uses-loop above already printed Inner's typedef and
                 // marked emitted_monos, which would make forward_decl skip the
                 // BODY — and the template embeds Inner by value.
-                if fsub.inner != null && fsub.inner.kind == TY_GENERIC && g.generic_structs.contains(fsub.inner.name) {
+                if fsub.inner != null && fsub.inner.kind == TY_GENERIC
+                    && g.generic_structs.contains(fsub.inner.name) {
                     emit_struct_mono(g, fsub.inner);
                 }
                 if fsub.inner != null && fsub.inner.kind == TY_NAMED {
@@ -2935,9 +2542,7 @@ pub fn emit_struct_mono(g: *CG, t: *Type) {
 }
 
 fn collect_generic_uses_in_type(t: *Type, out: *Vector<Type>) {
-    if t == null {
-        return;
-    }
+    if t == null { return; }
     if t.kind == TY_GENERIC {
         if t.args != null {
             for let i: i32 = 0; i < t.args.len(); i++ {
@@ -2965,30 +2570,20 @@ fn collect_generic_uses_in_type(t: *Type, out: *Vector<Type>) {
 }
 
 fn collect_generic_uses_in_stmt(s: *Stmt, out: *Vector<Type>) {
-    if s == null {
-        return;
-    }
+    if s == null { return; }
     // Skip generic fn signatures and bodies entirely — type vars (T, etc.) are
     // not concrete uses, and the substituted versions will be collected later.
     let is_generic: bool = s.type_params != null && s.type_params.len() > 0;
-    if is_generic {
-        return;
-    }
+    if is_generic { return; }
     // Trait sigs are templates referencing Self / Self::Item; impls of the
     // trait walk normally and contribute their substituted uses there.
-    if s.kind == ST_TRAIT {
-        return;
-    }
+    if s.kind == ST_TRAIT { return; }
     // Skip impl method walks for generic impls (`impl<T> X for Foo<T>`) — the
     // method bodies reference T placeholders. Their substituted versions land
     // when each mono of Foo<Concrete> is processed. Concrete impls (no
     // type_params) walk normally below.
-    if s.let_ty != null {
-        collect_generic_uses_in_type(s.let_ty, out);
-    }
-    if s.fn_ret_ty != null {
-        collect_generic_uses_in_type(s.fn_ret_ty, out);
-    }
+    if s.let_ty != null { collect_generic_uses_in_type(s.let_ty, out); }
+    if s.fn_ret_ty != null { collect_generic_uses_in_type(s.fn_ret_ty, out); }
     if s.fn_params != null {
         for let i: i32 = 0; i < s.fn_params.len(); i++ {
             let p: Param = s.fn_params.get(i);

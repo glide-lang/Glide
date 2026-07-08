@@ -91,17 +91,11 @@ pub fn _lsp_log(msg: string) {
 // Falls back to TMP if the home dir lookup fails.
 fn _lsp_log_path() -> string {
     let up: string = __glide_getenv("USERPROFILE");
-    if !up.eq("") {
-        return up.concat("/.glide/lsp.log");
-    }
+    if !up.eq("") { return up.concat("/.glide/lsp.log"); }
     let h: string = __glide_getenv("HOME");
-    if !h.eq("") {
-        return h.concat("/.glide/lsp.log");
-    }
+    if !h.eq("") { return h.concat("/.glide/lsp.log"); }
     let tmp: string = __glide_getenv("TMP");
-    if !tmp.eq("") {
-        return tmp.concat("/glide-lsp.log");
-    }
+    if !tmp.eq("") { return tmp.concat("/glide-lsp.log"); }
     return "glide-lsp.log";
 }
 
@@ -288,9 +282,7 @@ fn lsp_read_message() -> string {
     let mut content_length: i32 = 0;
     while true {
         let line: string = __glide_read_line();
-        if line.eq("") {
-            return "";
-        }
+        if line.eq("") { return ""; }
         let n: i32 = line.len();
         // Strip trailing \r\n / \n
         let mut end: i32 = n;
@@ -302,9 +294,7 @@ fn lsp_read_message() -> string {
                 break;
             }
         }
-        if end == 0 {
-            break;
-        } // blank line ends header
+        if end == 0 { break; } // blank line ends header
         // Look for "Content-Length: N"
         let trimmed: string = line.substring(0, end);
         if trimmed.len() > 16 {
@@ -314,9 +304,7 @@ fn lsp_read_message() -> string {
             }
         }
     }
-    if content_length <= 0 {
-        return "";
-    }
+    if content_length <= 0 { return ""; }
     return __glide_read_bytes(content_length);
 }
 
@@ -325,9 +313,7 @@ fn parse_int_str(s: string) -> i32 {
     let len: i32 = s.len();
     for let i: i32 = 0; i < len; i++ {
         let c: i32 = s.at(i).to_int();
-        if c < 48 || c > 57 {
-            break;
-        }
+        if c < 48 || c > 57 { break; }
         n = n * 10 + (c - 48);
     }
     return n;
@@ -343,9 +329,7 @@ fn lsp_send(payload: string) {
 pub fn lsp_send_response(id: *JsonValue, result: *JsonValue) {
     let resp: *JsonValue = json_object();
     json_obj_set(resp, "jsonrpc", json_string("2.0"));
-    if id != null {
-        json_obj_set(resp, "id", id);
-    }
+    if id != null { json_obj_set(resp, "id", id); }
     json_obj_set(resp, "result", result);
     lsp_send(json_emit(resp));
     json_free(resp);
@@ -368,9 +352,7 @@ fn _line_byte_start(text: string, line0: i32) -> i32 {
     let mut ln: i32 = 0;
     let mut i: i32 = 0;
     while i < n && ln < line0 {
-        if text.at(i).to_int() == 10 {
-            ln = ln + 1;
-        }
+        if text.at(i).to_int() == 10 { ln = ln + 1; }
         i = i + 1;
     }
     return i;
@@ -379,38 +361,24 @@ fn _line_byte_start(text: string, line0: i32) -> i32 {
 // UTF-8 lead-byte -> (byte length, UTF-16 unit count).
 fn _utf8_len(c0: i32) -> i32 {
     let mut c: i32 = c0;
-    if c < 0 {
-        c = c + 256;
-    }
-    if c >= 240 {
-        return 4;
-    }
-    if c >= 224 {
-        return 3;
-    }
-    if c >= 192 {
-        return 2;
-    }
+    if c < 0 { c = c + 256; }
+    if c >= 240 { return 4; }
+    if c >= 224 { return 3; }
+    if c >= 192 { return 2; }
     return 1;
 }
 
 fn _utf8_units(c0: i32) -> i32 {
     let mut c: i32 = c0;
-    if c < 0 {
-        c = c + 256;
-    }
-    if c >= 240 {
-        return 2;
-    }
+    if c < 0 { c = c + 256; }
+    if c >= 240 { return 2; }
     return 1;
 }
 
 // Convert a byte column (Glide's internal, from the byte-counting lexer) to a
 // UTF-16 unit column for the editor. Identity on an all-ASCII line.
 pub fn byte_to_u16_col(text: string, line0: i32, byte_col: i32) -> i32 {
-    if text == null || byte_col <= 0 {
-        return byte_col;
-    }
+    if text == null || byte_col <= 0 { return byte_col; }
     let start: i32 = _line_byte_start(text, line0);
     let n: i32 = text.len();
     let mut b: i32 = 0;
@@ -418,9 +386,7 @@ pub fn byte_to_u16_col(text: string, line0: i32, byte_col: i32) -> i32 {
     let mut i: i32 = start;
     while i < n && b < byte_col {
         let cc: i32 = text.at(i).to_int();
-        if cc == 10 {
-            break;
-        }
+        if cc == 10 { break; }
         let l: i32 = _utf8_len(cc);
         b = b + l;
         u = u + _utf8_units(cc);
@@ -431,9 +397,7 @@ pub fn byte_to_u16_col(text: string, line0: i32, byte_col: i32) -> i32 {
 
 // Convert a UTF-16 unit column from the editor to Glide's byte column.
 pub fn u16_to_byte_col(text: string, line0: i32, u16_col: i32) -> i32 {
-    if text == null || u16_col <= 0 {
-        return u16_col;
-    }
+    if text == null || u16_col <= 0 { return u16_col; }
     let start: i32 = _line_byte_start(text, line0);
     let n: i32 = text.len();
     let mut b: i32 = 0;
@@ -441,9 +405,7 @@ pub fn u16_to_byte_col(text: string, line0: i32, u16_col: i32) -> i32 {
     let mut i: i32 = start;
     while i < n && u < u16_col {
         let cc: i32 = text.at(i).to_int();
-        if cc == 10 {
-            break;
-        }
+        if cc == 10 { break; }
         let l: i32 = _utf8_len(cc);
         b = b + l;
         u = u + _utf8_units(cc);
@@ -464,9 +426,7 @@ pub fn read_pos_params(req: *JsonValue) -> (*JsonValue, string, i32, i32) {
 // position-taking handler runs its col0 through this so word_at / AST columns
 // line up on multi-byte lines.
 pub fn lsp_in_col(state: *LspState, uri: string, line0: i32, u16_col: i32) -> i32 {
-    if state.pos_utf8 || !state.docs.contains(uri) {
-        return u16_col;
-    }
+    if state.pos_utf8 || !state.docs.contains(uri) { return u16_col; }
     let doc: LspDoc = state.docs.get(uri);
     return u16_to_byte_col(doc.text, line0, u16_col);
 }
@@ -582,21 +542,13 @@ fn diag_to_json(d: *DiagEntry) -> *JsonValue {
     let endp: *JsonValue = json_object();
     // LSP positions are 0-indexed; the typer reports 1-indexed lines/cols.
     let mut line0: i32 = d.line - 1;
-    if line0 < 0 {
-        line0 = 0;
-    }
+    if line0 < 0 { line0 = 0; }
     let mut col0: i32 = d.col - 1;
-    if col0 < 0 {
-        col0 = 0;
-    }
+    if col0 < 0 { col0 = 0; }
     let mut endl: i32 = d.end_line - 1;
-    if endl < 0 {
-        endl = 0;
-    }
+    if endl < 0 { endl = 0; }
     let mut endc: i32 = d.end_col - 1;
-    if endc < 0 {
-        endc = 0;
-    }
+    if endc < 0 { endc = 0; }
     json_obj_set(start, "line", json_int(line0));
     json_obj_set(start, "character", json_int(col0));
     json_obj_set(endp, "line", json_int(endl));
@@ -605,9 +557,7 @@ fn diag_to_json(d: *DiagEntry) -> *JsonValue {
     json_obj_set(range, "end", endp);
     json_obj_set(dj, "range", range);
     json_obj_set(dj, "severity", json_int(d.severity));
-    if !d.code.eq("") {
-        json_obj_set(dj, "code", json_string(d.code));
-    }
+    if !d.code.eq("") { json_obj_set(dj, "code", json_string(d.code)); }
     json_obj_set(dj, "source", json_string("glide"));
     json_obj_set(dj, "message", json_string(d.message));
     if d.tag != 0 {
@@ -637,21 +587,13 @@ fn diag_to_json(d: *DiagEntry) -> *JsonValue {
     if !d.fix_replacement.eq("") || d.fix_line > 0 {
         has_fix = true;
         fr_sl = d.fix_line - 1;
-        if fr_sl < 0 {
-            fr_sl = 0;
-        }
+        if fr_sl < 0 { fr_sl = 0; }
         fr_sc = d.fix_col - 1;
-        if fr_sc < 0 {
-            fr_sc = 0;
-        }
+        if fr_sc < 0 { fr_sc = 0; }
         fr_el = d.fix_end_line - 1;
-        if fr_el < 0 {
-            fr_el = 0;
-        }
+        if fr_el < 0 { fr_el = 0; }
         fr_ec = d.fix_end_col - 1;
-        if fr_ec < 0 {
-            fr_ec = 0;
-        }
+        if fr_ec < 0 { fr_ec = 0; }
         new_text = d.fix_replacement;
     } else {
         if d.code.eq("unused-var") || d.code.eq("unused-param") {
@@ -688,25 +630,17 @@ fn diag_to_json(d: *DiagEntry) -> *JsonValue {
 // Surfaces the cause — e.g. the trait method declaration a failing impl is
 // measured against — as clickable secondary locations.
 fn _attach_related(dj: *JsonValue, t: *Typer, idx: i32) {
-    if t.related == null || t.related.len() == 0 {
-        return;
-    }
+    if t.related == null || t.related.len() == 0 { return; }
     let de: DiagEntry = t.diagnostics.get(idx);
     let ri: *JsonValue = json_array();
     let mut any: bool = false;
     for let k: i32 = 0; k < t.related.len(); k++ {
         let r: DiagRelated = t.related.get(k);
-        if r.diag_index != idx {
-            continue;
-        }
+        if r.diag_index != idx { continue; }
         let mut origin: string = r.origin;
-        if origin == null || origin.eq("") {
-            origin = de.origin;
-        }
+        if origin == null || origin.eq("") { origin = de.origin; }
         let uri: string = path_to_uri(origin);
-        if uri.eq("") {
-            continue;
-        }
+        if uri.eq("") { continue; }
         let entry: *JsonValue = json_object();
         let loc: *JsonValue = json_object();
         json_obj_set(loc, "uri", json_string(uri));
@@ -719,9 +653,7 @@ fn _attach_related(dj: *JsonValue, t: *Typer, idx: i32) {
         json_arr_push(ri, entry);
         any = true;
     }
-    if any {
-        json_obj_set(dj, "relatedInformation", ri);
-    }
+    if any { json_obj_set(dj, "relatedInformation", ri); }
 }
 
 // Convert `file:///C:/path` (Windows) or `file:///path` (POSIX) into a plain
@@ -729,12 +661,8 @@ fn _attach_related(dj: *JsonValue, t: *Typer, idx: i32) {
 // not done — Glide identifiers and most paths are ASCII.
 pub fn uri_to_path(uri: string) -> string {
     let n: i32 = uri.len();
-    if n < 7 {
-        return uri;
-    }
-    if !uri.substring(0, 7).eq("file://") {
-        return uri;
-    }
+    if n < 7 { return uri; }
+    if !uri.substring(0, 7).eq("file://") { return uri; }
     // Percent-decode the path. Editors (Zed, VSCode) send the standard
     // URL-encoded form `file:///c%3A/Users/...` — %3A for ':', %20 for a
     // space, %5C for '\'. Without decoding, the Windows drive-letter check
@@ -762,13 +690,9 @@ fn find_builtins_dir() -> string {
     let exe_dir: string = __glide_exe_dir();
     if !exe_dir.eq("") {
         let probe: string = exe_dir.concat("/src/builtins/builtins.glide");
-        if !read_file(probe).eq("") {
-            return exe_dir.concat("/src/builtins");
-        }
+        if !read_file(probe).eq("") { return exe_dir.concat("/src/builtins"); }
     }
-    if !read_file("src/builtins/builtins.glide").eq("") {
-        return "src/builtins";
-    }
+    if !read_file("src/builtins/builtins.glide").eq("") { return "src/builtins"; }
     return "";
 }
 
@@ -778,22 +702,16 @@ fn find_stdlib_dir() -> string {
     let exe_dir: string = __glide_exe_dir();
     if !exe_dir.eq("") {
         let probe: string = exe_dir.concat("/src/stdlib/hashmap.glide");
-        if !read_file(probe).eq("") {
-            return exe_dir.concat("/src/stdlib");
-        }
+        if !read_file(probe).eq("") { return exe_dir.concat("/src/stdlib"); }
     }
-    if !read_file("src/stdlib/hashmap.glide").eq("") {
-        return "src/stdlib";
-    }
+    if !read_file("src/stdlib/hashmap.glide").eq("") { return "src/stdlib"; }
     return "";
 }
 
 // Strip a trailing ".glide" so "math.glide" -> "math".
 pub fn drop_glide_ext(name: string) -> string {
     let n: i32 = name.len();
-    if n > 6 && name.substring(n - 6, n).eq(".glide") {
-        return name.substring(0, n - 6);
-    }
+    if n > 6 && name.substring(n - 6, n).eq(".glide") { return name.substring(0, n - 6); }
     return name;
 }
 
@@ -807,9 +725,7 @@ pub fn drop_glide_ext(name: string) -> string {
 // `hashmap` module, just like gopls lists packages alongside symbols.
 fn populate_stdlib_index(state: *LspState) {
     let dir: string = find_stdlib_dir();
-    if dir.eq("") {
-        return;
-    }
+    if dir.eq("") { return; }
     _index_stdlib_subtree(state, dir, "stdlib", state.stdlib_index, "");
 }
 
@@ -835,42 +751,30 @@ fn _index_stdlib_subtree(state: *LspState, dir: string, module_prefix: string, t
     if files != null {
         for let i: i32 = 0; i < files.len(); i++ {
             let fname: string = files.get(i);
-            if fname.eq("") {
-                continue;
-            }
+            if fname.eq("") { continue; }
             let path: string = dir.concat("/").concat(fname);
             let mod_name: string = drop_glide_ext(fname);
             // An empty prefix (project src) means the canonical import path
             // is the bare file name (`al`), not `<project>::al` — which does
             // NOT resolve. Deps/stdlib always pass a non-empty prefix.
             let mut module: string = mod_name;
-            if !module_prefix.eq("") {
-                module = module_prefix.concat("::").concat(mod_name);
-            }
+            if !module_prefix.eq("") { module = module_prefix.concat("::").concat(mod_name); }
             // Package entry-file collapse: at the pkg root, the file named
             // after the package IS the lib entry — surface its symbols
             // under the bare package alias rather than `pkg::pkg`.
-            if !pkg_leaf.eq("") && mod_name.eq(pkg_leaf) {
-                module = module_prefix;
-            }
+            if !pkg_leaf.eq("") && mod_name.eq(pkg_leaf) { module = module_prefix; }
             _index_one_module(state, path, mod_name, module, target);
         }
     }
     let subs_raw: string = __glide_fs_list_dirs(dir);
-    if subs_raw.eq("") {
-        return;
-    }
+    if subs_raw.eq("") { return; }
     let subs: *Vector<string> = subs_raw.split("\n");
     for let i: i32 = 0; i < subs.len(); i++ {
         let sub: string = subs.get(i);
-        if sub.eq("") {
-            continue;
-        }
+        if sub.eq("") { continue; }
         let child_dir: string = dir.concat("/").concat(sub);
         let mut child_pref: string = sub;
-        if !module_prefix.eq("") {
-            child_pref = module_prefix.concat("::").concat(sub);
-        }
+        if !module_prefix.eq("") { child_pref = module_prefix.concat("::").concat(sub); }
         // Index the FOLDER itself as a module, so typing the folder name
         // (`sop`) autocompletes it for path navigation (`sop::al::...`) — not
         // just the files inside it. The file entries are added by the
@@ -898,23 +802,15 @@ fn _index_stdlib_subtree(state: *LspState, dir: string, module_prefix: string, t
 // keeps it to a single one-shot per project. Path deps never need a fetch; we
 // still (re)create their `build/deps/` links so they're browsable + indexable.
 fn _lsp_autofetch_deps(state: *LspState, root: string) {
-    if root.eq("") {
-        return;
-    }
-    if state.fetch_attempted.contains(root) {
-        return;
-    }
+    if root.eq("") { return; }
+    if state.fetch_attempted.contains(root) { return; }
     let m: *Manifest = read_manifest(root);
-    if m == null || m.deps.len() == 0 {
-        return;
-    }
+    if m == null || m.deps.len() == 0 { return; }
     state.fetch_attempted.insert(root, true); // mark before fetching: no re-entry
     let mut need: bool = false;
     for let i: i32 = 0; i < m.deps.len(); i++ {
         let d: ManifestDep = m.deps.get(i);
-        if d.kind != DEP_GIT {
-            continue;
-        }
+        if d.kind != DEP_GIT { continue; }
         let cdir: string = dep_cache_dir(m, d);
         if cdir.eq("") || !__glide_fs_is_dir(cdir) {
             need = true;
@@ -943,14 +839,10 @@ fn _lsp_autofetch_deps(state: *LspState, root: string) {
 // qualifiable (`import alelo;`, `alelo::Penis`). Skips the manifest.
 fn _index_flat_glide_dir(state: *LspState, dir: string, target: *Vector<ImportableSym>) {
     let files: *Vector<string> = fs_list_dir(dir, ".glide");
-    if files == null {
-        return;
-    }
+    if files == null { return; }
     for let i: i32 = 0; i < files.len(); i++ {
         let fname: string = files.get(i);
-        if fname.eq("") || fname.eq("glide.glide") {
-            continue;
-        }
+        if fname.eq("") || fname.eq("glide.glide") { continue; }
         let path: string = dir.concat("/").concat(fname);
         let mod_name: string = drop_glide_ext(fname);
         _index_one_module(state, path, mod_name, mod_name, target);
@@ -963,9 +855,7 @@ fn _index_flat_glide_dir(state: *LspState, dir: string, target: *Vector<Importab
 // index stale while a sibling file was being edited (a deleted fn kept being
 // offered). In-place: survivors compact down, then the fresh symbols append.
 fn _lsp_reindex_project_doc(state: *LspState, path: string, text: string) {
-    if state.project_index == null || path.eq("") || text.eq("") {
-        return;
-    }
+    if state.project_index == null || path.eq("") || text.eq("") { return; }
     let idx: *Vector<ImportableSym> = state.project_index;
     // The module string comes from the entries being replaced (keeps dep
     // prefixes intact). A file not yet indexed falls back to its bare name,
@@ -983,35 +873,23 @@ fn _lsp_reindex_project_doc(state: *LspState, path: string, text: string) {
         }
     }
     if !had {
-        if state.project_root.eq("") {
-            return;
-        }
+        if state.project_root.eq("") { return; }
         let dir: string = parent_dir(path);
-        if !dir.eq(state.project_root) && !dir.eq(state.project_root.concat("/src")) {
-            return;
-        }
+        if !dir.eq(state.project_root) && !dir.eq(state.project_root.concat("/src")) { return; }
         module = drop_glide_ext(last_path_segment(path));
     }
     mod_name = module;
     let mut mcc: i32 = -1;
     for let k: i32 = 0; k + 1 < module.len(); k++ {
-        if module.at(k).to_int() == 58 && module.at(k + 1).to_int() == 58 {
-            mcc = k;
-        }
+        if module.at(k).to_int() == 58 && module.at(k + 1).to_int() == 58 { mcc = k; }
     }
-    if mcc >= 0 {
-        mod_name = module.substring(mcc + 2, module.len());
-    }
+    if mcc >= 0 { mod_name = module.substring(mcc + 2, module.len()); }
     // Compact out the old entries in place (no fresh vector per keystroke).
     let mut w: i32 = 0;
     for let i: i32 = 0; i < idx.len(); i++ {
         let sym: ImportableSym = idx.get(i);
-        if sym.def_path != null && sym.def_path.eq(path) {
-            continue;
-        }
-        if w != i {
-            idx.set(w, sym);
-        }
+        if sym.def_path != null && sym.def_path.eq(path) { continue; }
+        if w != i { idx.set(w, sym); }
         w = w + 1;
     }
     idx.truncate(w);
@@ -1024,9 +902,7 @@ fn _lsp_reindex_project_doc(state: *LspState, path: string, text: string) {
     __glide_palloc_set(saved);
     if state.reindex_arenas.contains(heap_key) {
         let old: *void = state.reindex_arenas.get(heap_key);
-        if old != null {
-            __glide_palloc_free(old);
-        }
+        if old != null { __glide_palloc_free(old); }
     }
     __glide_palloc_set(__glide_palloc_make());
     let heap_src: string = text.concat("");
@@ -1038,9 +914,7 @@ fn _lsp_reindex_project_doc(state: *LspState, path: string, text: string) {
 
 fn _refresh_project_index(state: *LspState, uri: string) {
     let path: string = uri_to_path(uri);
-    if path.eq("") {
-        return;
-    }
+    if path.eq("") { return; }
     let dir: string = parent_dir(path);
     let mut root: string = find_manifest_root(dir);
     let mut has_manifest: bool = true;
@@ -1056,9 +930,7 @@ fn _refresh_project_index(state: *LspState, uri: string) {
     // resolve without the user running `glide fetch` first. Guarded to run
     // once per project per session; creates the `build/deps/` links the
     // fingerprint below then picks up.
-    if has_manifest {
-        _lsp_autofetch_deps(state, root);
-    }
+    if has_manifest { _lsp_autofetch_deps(state, root); }
     // Re-trigger the rebuild whenever the dep set could have changed:
     // a different project root, a manifest edit, a new `build/deps/`
     // entry from `glide fetch`, or a file added/removed within an
@@ -1067,9 +939,7 @@ fn _refresh_project_index(state: *LspState, uri: string) {
     // `build/deps/`. Cheap (no file-content reads) and catches the
     // common cases without forcing the user to restart the LSP.
     let fp: string = _project_dep_fingerprint(root);
-    if state.project_root.eq(root) && state.project_dep_fp.eq(fp) {
-        return;
-    }
+    if state.project_root.eq(root) && state.project_dep_fp.eq(fp) { return; }
     _lsp_log("project index: rebuilding for ".concat(root));
     let prev_arena: *void = __glide_palloc_get();
     __glide_palloc_set(null);
@@ -1131,18 +1001,14 @@ fn _refresh_project_index(state: *LspState, uri: string) {
 fn _project_dep_fingerprint(root: string) -> string {
     let mut out: string = "";
     let manifest_path: string = root.concat("/glide.glide");
-    if __glide_file_exists(manifest_path) {
-        out = out.concat(read_file(manifest_path));
-    }
+    if __glide_file_exists(manifest_path) { out = out.concat(read_file(manifest_path)); }
     // Track project src too: adding or removing a file or folder under src/
     // (e.g. a new `src/te/al.glide`) must rebuild the project index so its
     // symbols become importable without an LSP restart. Path list only, no
     // content read — cheap, and file add/remove is the case that matters here.
     out = out.concat("\0src:");
     let srcd: string = root.concat("/src");
-    if __glide_fs_is_dir(srcd) {
-        _fp_walk_glide_files_content(srcd, &out);
-    }
+    if __glide_fs_is_dir(srcd) { _fp_walk_glide_files_content(srcd, &out); }
     // Loose root-level modules: hash their names+content so editing a sibling
     // (adding a pub decl to alelo.glide) rebuilds the index without a restart.
     out = out.concat("\0root:");
@@ -1150,17 +1016,13 @@ fn _project_dep_fingerprint(root: string) -> string {
     if rootfiles != null {
         for let i: i32 = 0; i < rootfiles.len(); i++ {
             let rf: string = rootfiles.get(i);
-            if rf.eq("") || rf.eq("glide.glide") {
-                continue;
-            }
+            if rf.eq("") || rf.eq("glide.glide") { continue; }
             out = out.concat(rf).concat("=").concat(read_file(root.concat("/").concat(rf))).concat(";");
         }
     }
     out = out.concat("\0gm:");
     let gm: string = root.concat("/build/deps");
-    if !__glide_fs_is_dir(gm) {
-        return out;
-    }
+    if !__glide_fs_is_dir(gm) { return out; }
     _fp_walk_glide_files(gm, &out);
     return out;
 }
@@ -1173,22 +1035,16 @@ fn _fp_walk_glide_files(dir: string, out: *string) {
     if files != null {
         for let i: i32 = 0; i < files.len(); i++ {
             let fname: string = files.get(i);
-            if fname.eq("") {
-                continue;
-            }
+            if fname.eq("") { continue; }
             *out = (*out).concat(dir).concat("/").concat(fname).concat("\n");
         }
     }
     let subs_raw: string = __glide_fs_list_dirs(dir);
-    if subs_raw.eq("") {
-        return;
-    }
+    if subs_raw.eq("") { return; }
     let subs: *Vector<string> = subs_raw.split("\n");
     for let i: i32 = 0; i < subs.len(); i++ {
         let sub: string = subs.get(i);
-        if sub.eq("") {
-            continue;
-        }
+        if sub.eq("") { continue; }
         _fp_walk_glide_files(dir.concat("/").concat(sub), out);
     }
 }
@@ -1202,23 +1058,17 @@ fn _fp_walk_glide_files_content(dir: string, out: *string) {
     if files != null {
         for let i: i32 = 0; i < files.len(); i++ {
             let fname: string = files.get(i);
-            if fname.eq("") {
-                continue;
-            }
+            if fname.eq("") { continue; }
             let fp: string = dir.concat("/").concat(fname);
             *out = (*out).concat(fp).concat("\n").concat(read_file(fp)).concat("\0");
         }
     }
     let subs_raw: string = __glide_fs_list_dirs(dir);
-    if subs_raw.eq("") {
-        return;
-    }
+    if subs_raw.eq("") { return; }
     let subs: *Vector<string> = subs_raw.split("\n");
     for let i: i32 = 0; i < subs.len(); i++ {
         let sub: string = subs.get(i);
-        if sub.eq("") {
-            continue;
-        }
+        if sub.eq("") { continue; }
         _fp_walk_glide_files_content(dir.concat("/").concat(sub), out);
     }
 }
@@ -1227,9 +1077,7 @@ fn _fp_walk_glide_files_content(dir: string, out: *string) {
 // a SYMKIND_MODULE entry for the module itself.
 fn _index_one_module(_state: *LspState, path: string, mod_name: string, module: string, target: *Vector<ImportableSym>) {
     let src: string = read_file(path);
-    if src.eq("") {
-        return;
-    }
+    if src.eq("") { return; }
     _index_module_src(_state, src, path, mod_name, module, target);
 }
 
@@ -1239,9 +1087,7 @@ fn _index_module_src(_state: *LspState, src: string, path: string, mod_name: str
     let lex: *Lexer = Lexer::new(src);
     let par: *Parser = Parser::new(lex);
     let stmts: *Vector<Stmt> = parse_program(par);
-    if stmts == null {
-        return;
-    }
+    if stmts == null { return; }
     // Track exported symbol names so the module entry can list them
     // in its hover-doc summary.
     let mut summary: string = "";
@@ -1262,19 +1108,18 @@ fn _index_module_src(_state: *LspState, src: string, path: string, mod_name: str
         if s.kind == ST_FN && s.attrs != null {
             for let kk: i32 = 0; kk < s.attrs.len(); kk++ {
                 let aa: Attr = s.attrs.get(kk);
-                if aa.name == null {
-                    continue;
-                }
-                if aa.name.eq("proc_attr") || aa.name.eq("proc_derive") || aa.name.eq("proc_macro") || aa.name.eq("proc_macro_str") {
+                if aa.name == null { continue; }
+                if aa.name.eq("proc_attr") || aa.name.eq("proc_derive") || aa.name.eq("proc_macro")
+                    || aa.name.eq("proc_macro_str") {
                     is_proc_fn = true;
                     break;
                 }
             }
         }
-        if !s.is_pub && !is_proc_fn {
-            continue;
-        }
-        if s.kind != ST_FN && s.kind != ST_STRUCT && s.kind != ST_ENUM && s.kind != ST_CONST && s.kind != ST_TRAIT && s.kind != ST_MACRO_DEF {
+        if !s.is_pub && !is_proc_fn { continue; }
+        if s.kind != ST_FN && s.kind != ST_STRUCT && s.kind != ST_ENUM && s.kind != ST_CONST
+            && s.kind != ST_TRAIT
+            && s.kind != ST_MACRO_DEF {
             continue;
         }
         let mut sig: string = "";
@@ -1297,16 +1142,10 @@ fn _index_module_src(_state: *LspState, src: string, path: string, mod_name: str
             if s.attrs != null {
                 for let k: i32 = 0; k < s.attrs.len(); k++ {
                     let a: Attr = s.attrs.get(k);
-                    if a.name == null {
-                        continue;
-                    }
-                    if a.args == null || a.args.len() == 0 {
-                        continue;
-                    }
+                    if a.name == null { continue; }
+                    if a.args == null || a.args.len() == 0 { continue; }
                     let ne: Expr = a.args.get(0);
-                    if ne.kind != EX_IDENT {
-                        continue;
-                    }
+                    if ne.kind != EX_IDENT { continue; }
                     if a.name.eq("proc_attr") {
                         sym_kind = SYMKIND_PROC_ATTR;
                         sym_name = ne.str_val;
@@ -1361,23 +1200,17 @@ fn _index_module_src(_state: *LspState, src: string, path: string, mod_name: str
         let sym: ImportableSym = ImportableSym { name: sym_name, kind: sym_kind, module: module, signature: sig, label_extra: label_extra, doc: doc_clean(s.doc_comment), snippet: snip, has_snippet: has_snip, def_path: path, def_line: s.name_line, def_col: s.name_col, recv_type: "", trait_name: "" };
         target.push(sym);
         if count < 12 {
-            if !summary.eq("") {
-                summary = summary.concat(", ");
-            }
+            if !summary.eq("") { summary = summary.concat(", "); }
             summary = summary.concat("`").concat(s.name).concat("`");
         } else {
-            if count == 12 {
-                summary = summary.concat(", …");
-            }
+            if count == 12 { summary = summary.concat(", …"); }
         }
         count = count + 1;
     }
     // Module entry — the header reads "Glide stdlib module" and the
     // exported names follow on the next line.
     let mut mdoc: string = "Glide stdlib module.";
-    if !summary.eq("") {
-        mdoc = mdoc.concat("\n\nExports: ").concat(summary).concat(".");
-    }
+    if !summary.eq("") { mdoc = mdoc.concat("\n\nExports: ").concat(summary).concat("."); }
     let mod_sym: ImportableSym = ImportableSym { name: mod_name, kind: SYMKIND_MODULE, module: module, signature: "module ".concat(mod_name), label_extra: "", doc: mdoc, snippet: mod_name.concat("::"), has_snippet: true, def_path: path, def_line: 1, def_col: 1, recv_type: "", trait_name: "" };
     target.push(mod_sym);
 }
@@ -1390,43 +1223,25 @@ fn _index_module_src(_state: *LspState, src: string, path: string, mod_name: str
 // impl_trait_name can all be null (the null doc_comment is what crashed a
 // prior attempt on the many-impl stdlib walk).
 fn _index_impl_methods(im: *Stmt, module: string, path: string, target: *Vector<ImportableSym>) {
-    if im == null {
-        return;
-    }
-    if im.impl_trait_name == null || im.impl_trait_name.eq("") {
-        return;
-    }
-    if im.impl_target == null {
-        return;
-    }
+    if im == null { return; }
+    if im.impl_trait_name == null || im.impl_trait_name.eq("") { return; }
+    if im.impl_target == null { return; }
     let mut rn: string = "";
     if im.impl_target.kind == TY_NAMED || im.impl_target.kind == TY_GENERIC {
         rn = im.impl_target.name;
     }
-    if rn == null || rn.eq("") {
-        return;
-    }
-    if im.impl_methods == null {
-        return;
-    }
+    if rn == null || rn.eq("") { return; }
+    if im.impl_methods == null { return; }
     for let i: i32 = 0; i < im.impl_methods.len(); i++ {
         let m: Stmt = im.impl_methods.get(i);
-        if m.kind != ST_FN || m.name == null || m.name.eq("") {
-            continue;
-        }
+        if m.kind != ST_FN || m.name == null || m.name.eq("") { continue; }
         // Instance methods only (first param named `self`) — that's what `x.`
         // completion can call.
-        if m.fn_params == null || m.fn_params.len() == 0 {
-            continue;
-        }
+        if m.fn_params == null || m.fn_params.len() == 0 { continue; }
         let p0n: string = m.fn_params.get(0).name;
-        if p0n == null || !p0n.eq("self") {
-            continue;
-        }
+        if p0n == null || !p0n.eq("self") { continue; }
         let mut mdoc: string = "";
-        if m.doc_comment != null {
-            mdoc = doc_clean(m.doc_comment);
-        }
+        if m.doc_comment != null { mdoc = doc_clean(m.doc_comment); }
         let msym: ImportableSym = ImportableSym { name: m.name, kind: SYMKIND_METHOD, module: module, signature: fn_signature(&m), label_extra: fn_label_extra(&m), doc: mdoc, snippet: fn_snippet(&m), has_snippet: true, def_path: path, def_line: m.name_line, def_col: m.name_col, recv_type: rn, trait_name: im.impl_trait_name };
         target.push(msym);
     }
@@ -1438,17 +1253,13 @@ pub fn fn_label_extra(s: *Stmt) -> string {
     let mut out: string = "(";
     if s.fn_params != null {
         for let i: i32 = 0; i < s.fn_params.len(); i++ {
-            if i > 0 {
-                out = out.concat(", ");
-            }
+            if i > 0 { out = out.concat(", "); }
             let p: Param = s.fn_params.get(i);
             out = out.concat(p.name).concat(": ").concat(type_to_string_pretty(p.ty));
         }
     }
     out = out.concat(")");
-    if s.fn_ret_ty != null {
-        out = out.concat(" -> ").concat(type_to_string_pretty(s.fn_ret_ty));
-    }
+    if s.fn_ret_ty != null { out = out.concat(" -> ").concat(type_to_string_pretty(s.fn_ret_ty)); }
     return out;
 }
 
@@ -1458,9 +1269,7 @@ pub fn fn_snippet(s: *Stmt) -> string {
     let mut out: string = s.name.concat("(");
     if s.fn_params != null {
         for let i: i32 = 0; i < s.fn_params.len(); i++ {
-            if i > 0 {
-                out = out.concat(", ");
-            }
+            if i > 0 { out = out.concat(", "); }
             let p: Param = s.fn_params.get(i);
             out = out.concat("$").concat("{").concat(int_to_str((i + 1) as i64)).concat(":").concat(p.name).concat("}");
         }
@@ -1484,9 +1293,7 @@ extern fn __glide_fs_is_dir(path: string) -> bool;
 
 fn fs_list_dir(dir: string, suffix: string) -> *Vector<string> {
     let raw: string = __glide_list_dir(dir, suffix);
-    if raw.eq("") {
-        return Vector::new();
-    }
+    if raw.eq("") { return Vector::new(); }
     return raw.split("\n");
 }
 
@@ -1503,9 +1310,7 @@ fn fs_list_dir(dir: string, suffix: string) -> *Vector<string> {
 // Expr / Type leaks are paid for once per keystroke and dwarfed by
 // the Vector-of-Stmt accumulation this walker plugs.
 fn stmt_vec_lower_free(v: *Vector<Stmt>) {
-    if v == null {
-        return;
-    }
+    if v == null { return; }
     for let i: i32 = 0; i < v.len(); i++ {
         let s: Stmt = v.get(i);
         stmt_lower_free_children(&s);
@@ -1514,21 +1319,11 @@ fn stmt_vec_lower_free(v: *Vector<Stmt>) {
 }
 
 fn stmt_lower_free_children(s: *Stmt) {
-    if s == null {
-        return;
-    }
-    if s.fn_body != null {
-        stmt_vec_lower_free(s.fn_body);
-    }
-    if s.then_body != null {
-        stmt_vec_lower_free(s.then_body);
-    }
-    if s.else_body != null {
-        stmt_vec_lower_free(s.else_body);
-    }
-    if s.impl_methods != null {
-        stmt_vec_lower_free(s.impl_methods);
-    }
+    if s == null { return; }
+    if s.fn_body != null { stmt_vec_lower_free(s.fn_body); }
+    if s.then_body != null { stmt_vec_lower_free(s.then_body); }
+    if s.else_body != null { stmt_vec_lower_free(s.else_body); }
+    if s.impl_methods != null { stmt_vec_lower_free(s.impl_methods); }
 }
 
 // True if the source uses a proc-macro: a `@`-attribute that isn't one of the
@@ -1552,7 +1347,9 @@ fn _uses_proc_macro(text: string) -> bool {
             }
             if j > s {
                 let name: string = text.substring(s, j);
-                if !name.eq("cfg") && !name.eq("allow") && !name.eq("lint") && !name.eq("expect") && !name.eq("deprecated") && !name.eq("doc") {
+                if !name.eq("cfg") && !name.eq("allow") && !name.eq("lint") && !name.eq("expect")
+                    && !name.eq("deprecated")
+                    && !name.eq("doc") {
                     return true;
                 }
             }
@@ -1579,9 +1376,7 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     // (a stdlib file) as a second document — previously the single shared
     // arena was freed on every analysis, nulling every doc's AST.
     let mut old_arena: *void = null;
-    if state.docs.contains(uri) {
-        old_arena = state.docs.get(uri).arena;
-    }
+    if state.docs.contains(uri) { old_arena = state.docs.get(uri).arena; }
     if old_arena != null {
         // Null this doc's stmts before the free (it's rebuilt below); other
         // docs are untouched because their AST lives in their own arenas.
@@ -1791,9 +1586,7 @@ fn handle_did_open(req: *JsonValue, state: *LspState) {
 // Mirrors load_into_with_cache's miss path (arena disabled so the cached AST
 // is libc-heap and survives the per-keystroke arena reset).
 fn _lsp_cache_doc(state: *LspState, path: string, text: string) {
-    if state.parse_cache == null || path.eq("") || text.eq("") {
-        return;
-    }
+    if state.parse_cache == null || path.eq("") || text.eq("") { return; }
     let saved_arena: *void = __glide_palloc_get();
     // The map KEY stays on the libc heap: it must outlive both the per-keystroke
     // analysis arena and this path's own overlay-arena rotations.
@@ -1807,9 +1600,7 @@ fn _lsp_cache_doc(state: *LspState, path: string, text: string) {
     // keystroke leaked a full parsed+lowered AST — GBs over a long session.
     if state.parse_cache_arenas != null && state.parse_cache_arenas.contains(heap_key) {
         let old: *void = state.parse_cache_arenas.get(heap_key);
-        if old != null {
-            __glide_palloc_free(old);
-        }
+        if old != null { __glide_palloc_free(old); }
     }
     // Source text + AST go into the rotatable arena (the AST references the
     // source's bytes, so they must share a lifetime and be freed together).
@@ -1832,9 +1623,7 @@ fn _lsp_cache_doc(state: *LspState, path: string, text: string) {
     let final_arena: *void = __glide_palloc_get();
     __glide_palloc_set(saved_arena);
     state.parse_cache.insert(heap_key, lowered);
-    if state.parse_cache_arenas != null {
-        state.parse_cache_arenas.insert(heap_key, final_arena);
-    }
+    if state.parse_cache_arenas != null { state.parse_cache_arenas.insert(heap_key, final_arena); }
 }
 
 // Re-publish diagnostics for the changed doc AND every other open doc, so a
@@ -1842,18 +1631,12 @@ fn _lsp_cache_doc(state: *LspState, path: string, text: string) {
 // edited (e.g. making a field private in `al.glide` updates `main.glide`).
 fn _reanalyze_open_docs(state: *LspState, changed_uri: string, changed_text: string) {
     run_analysis_and_publish(changed_uri, changed_text, state);
-    if state.docs == null {
-        return;
-    }
+    if state.docs == null { return; }
     let uris: *Vector<string> = state.docs.keys();
     for let i: i32 = 0; i < uris.len(); i++ {
         let u: string = uris.get(i);
-        if u.eq(changed_uri) {
-            continue;
-        }
-        if path_is_manifest(uri_to_path(u)) {
-            continue;
-        }
+        if u.eq(changed_uri) { continue; }
+        if path_is_manifest(uri_to_path(u)) { continue; }
         let d: LspDoc = state.docs.get(u);
         run_analysis_and_publish(u, d.text, state);
     }
@@ -1873,9 +1656,7 @@ fn handle_did_change(req: *JsonValue, state: *LspState) {
     // LSP restart.
     let changes: *JsonValue = json_get(params, "contentChanges");
     let nchanges: i32 = _json_arr_len(changes);
-    if nchanges == 0 {
-        return;
-    }
+    if nchanges == 0 { return; }
     let mut text: string = "";
     let mut have_base: bool = false;
     if state.docs.contains(uri) {
@@ -1903,9 +1684,7 @@ fn handle_did_change(req: *JsonValue, state: *LspState) {
             }
         }
     }
-    if !applied {
-        return;
-    }
+    if !applied { return; }
     let mut prev_stmts: *Vector<Stmt> = null;
     let mut prev_text: string = "";
     let mut prev_arena2: *void = null;
@@ -1945,9 +1724,7 @@ fn handle_did_close(req: *JsonValue, state: *LspState) {
         prev_arena3 = prev.arena;
     }
     state.docs.remove(uri);
-    if prev_arena3 != null {
-        __glide_palloc_free(prev_arena3);
-    }
+    if prev_arena3 != null { __glide_palloc_free(prev_arena3); }
     if !prev_text.eq("") {
         c_raw! { free(((char*)(prev_text )) - 4); }
     }
@@ -2005,22 +1782,17 @@ pub fn run_extra_analyses(t: *Typer, stmts: *Vector<Stmt>, text: string) {
 // Best-effort source width of an expression's leading token, so a diagnostic
 // anchored at the expr spans a meaningful word instead of one character.
 pub fn _expr_span(e: *Expr) -> i32 {
-    if e == null {
-        return 1;
-    }
-    if e.kind == EX_INT || e.kind == EX_STRING || e.kind == EX_BOOL || e.kind == EX_FLOAT || e.kind == EX_CHAR {
+    if e == null { return 1; }
+    if e.kind == EX_INT || e.kind == EX_STRING || e.kind == EX_BOOL || e.kind == EX_FLOAT
+        || e.kind == EX_CHAR {
         return _lit_span(e);
     }
     if e.kind == EX_IDENT {
-        if e.str_val != null && e.str_val.len() > 0 {
-            return e.str_val.len();
-        }
+        if e.str_val != null && e.str_val.len() > 0 { return e.str_val.len(); }
         return 1;
     }
     if e.kind == EX_STRUCT_LIT {
-        if e.str_val != null && e.str_val.len() > 0 {
-            return e.str_val.len();
-        }
+        if e.str_val != null && e.str_val.len() > 0 { return e.str_val.len(); }
         return 1;
     }
     if e.kind == EX_MEMBER {
@@ -2028,34 +1800,20 @@ pub fn _expr_span(e: *Expr) -> i32 {
         if e.lhs != null && e.lhs.kind == EX_IDENT && e.lhs.str_val != null {
             w = e.lhs.str_val.len() + 1;
         }
-        if e.field != null {
-            w = w + e.field.len();
-        }
-        if w < 1 {
-            w = 1;
-        }
+        if e.field != null { w = w + e.field.len(); }
+        if w < 1 { w = 1; }
         return w;
     }
     if e.kind == EX_PATH {
         let mut w: i32 = 0;
-        if e.str_val != null {
-            w = e.str_val.len();
-        }
-        if e.field != null {
-            w = w + 2 + e.field.len();
-        }
-        if w < 1 {
-            w = 1;
-        }
+        if e.str_val != null { w = e.str_val.len(); }
+        if e.field != null { w = w + 2 + e.field.len(); }
+        if w < 1 { w = 1; }
         return w;
     }
-    if e.kind == EX_CALL {
-        return _expr_span(e.lhs);
-    }
+    if e.kind == EX_CALL { return _expr_span(e.lhs); }
     if e.kind == EX_UNARY {
-        if e.operand != null {
-            return 1 + _expr_span(e.operand);
-        }
+        if e.operand != null { return 1 + _expr_span(e.operand); }
         return 1;
     }
     return 1;
@@ -2064,30 +1822,18 @@ pub fn _expr_span(e: *Expr) -> i32 {
 // Source width of a literal expression, so the diagnostic squiggle spans the
 // whole token (e.g. `42`, `"hi"`) rather than a single character.
 pub fn _lit_span(e: *Expr) -> i32 {
-    if e == null {
-        return 1;
-    }
-    if e.kind == EX_INT {
-        return int_to_str(e.int_val).len();
-    }
-    if e.kind == EX_STRING {
-        return e.str_val.len() + 2;
-    } // include the quotes
+    if e == null { return 1; }
+    if e.kind == EX_INT { return int_to_str(e.int_val).len(); }
+    if e.kind == EX_STRING { return e.str_val.len() + 2; } // include the quotes
     if e.kind == EX_BOOL {
-        if e.bool_val {
-            return 4;
-        }
+        if e.bool_val { return 4; }
         return 5;
     }
     if e.kind == EX_FLOAT {
-        if e.float_val != null {
-            return e.float_val.len();
-        }
+        if e.float_val != null { return e.float_val.len(); }
         return 3;
     }
-    if e.kind == EX_CHAR {
-        return 3;
-    }
+    if e.kind == EX_CHAR { return 3; }
     return 1;
 }
 
@@ -2200,9 +1946,7 @@ fn _raw_ident_ch(c: i32) -> bool {
 fn _name_in_raw(raw: string, name: string) -> bool {
     let rn: i32 = raw.len();
     let nn: i32 = name.len();
-    if nn == 0 {
-        return false;
-    }
+    if nn == 0 { return false; }
     let mut i: i32 = 0;
     while i + nn <= rn {
         let mut hit: bool = true;
@@ -2215,9 +1959,7 @@ fn _name_in_raw(raw: string, name: string) -> bool {
         if hit {
             let before_ok: bool = i == 0 || !_raw_ident_ch(raw.at(i - 1).to_int());
             let after_ok: bool = i + nn >= rn || !_raw_ident_ch(raw.at(i + nn).to_int());
-            if before_ok && after_ok {
-                return true;
-            }
+            if before_ok && after_ok { return true; }
         }
         i = i + 1;
     }
@@ -2225,80 +1967,52 @@ fn _name_in_raw(raw: string, name: string) -> bool {
 }
 
 pub fn stmt_uses_name(s: *Stmt, name: string) -> bool {
-    if s == null {
-        return false;
-    }
+    if s == null { return false; }
     // A c_raw! body is opaque raw C text (stored in `name`); scan it for the
     // identifier so a local used only inside c_raw isn't flagged unused.
     if s.kind == ST_CRAW {
-        if s.name != null && _name_in_raw(s.name, name) {
-            return true;
-        }
+        if s.name != null && _name_in_raw(s.name, name) { return true; }
     }
-    if s.let_value != null && expr_uses_name(s.let_value, name) {
-        return true;
-    }
-    if s.expr_value != null && expr_uses_name(s.expr_value, name) {
-        return true;
-    }
-    if s.cond != null && expr_uses_name(s.cond, name) {
-        return true;
-    }
-    if s.for_step != null && expr_uses_name(s.for_step, name) {
-        return true;
-    }
-    if s.for_init != null && stmt_uses_name(s.for_init, name) {
-        return true;
-    }
+    if s.let_value != null && expr_uses_name(s.let_value, name) { return true; }
+    if s.expr_value != null && expr_uses_name(s.expr_value, name) { return true; }
+    if s.cond != null && expr_uses_name(s.cond, name) { return true; }
+    if s.for_step != null && expr_uses_name(s.for_step, name) { return true; }
+    if s.for_init != null && stmt_uses_name(s.for_init, name) { return true; }
     if s.then_body != null {
         for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
-            if stmt_uses_name(&b, name) {
-                return true;
-            }
+            if stmt_uses_name(&b, name) { return true; }
         }
     }
     if s.else_body != null {
         for let i: i32 = 0; i < s.else_body.len(); i++ {
             let b: Stmt = s.else_body.get(i);
-            if stmt_uses_name(&b, name) {
-                return true;
-            }
+            if stmt_uses_name(&b, name) { return true; }
         }
     }
     if s.kind == ST_ASM {
         if s.asm_out_exprs != null {
             for let i: i32 = 0; i < s.asm_out_exprs.len(); i++ {
                 let e: Expr = s.asm_out_exprs.get(i);
-                if expr_uses_name(&e, name) {
-                    return true;
-                }
+                if expr_uses_name(&e, name) { return true; }
             }
         }
         if s.asm_in_exprs != null {
             for let i: i32 = 0; i < s.asm_in_exprs.len(); i++ {
                 let e: Expr = s.asm_in_exprs.get(i);
-                if expr_uses_name(&e, name) {
-                    return true;
-                }
+                if expr_uses_name(&e, name) { return true; }
             }
         }
     }
     if s.kind == ST_SELECT && s.select_arms != null {
         for let i: i32 = 0; i < s.select_arms.len(); i++ {
             let arm: SelectArm = s.select_arms.get(i);
-            if arm.chan_expr != null && expr_uses_name(arm.chan_expr, name) {
-                return true;
-            }
-            if arm.send_value != null && expr_uses_name(arm.send_value, name) {
-                return true;
-            }
+            if arm.chan_expr != null && expr_uses_name(arm.chan_expr, name) { return true; }
+            if arm.send_value != null && expr_uses_name(arm.send_value, name) { return true; }
             if arm.body != null {
                 for let j: i32 = 0; j < arm.body.len(); j++ {
                     let b: Stmt = arm.body.get(j);
-                    if stmt_uses_name(&b, name) {
-                        return true;
-                    }
+                    if stmt_uses_name(&b, name) { return true; }
                 }
             }
         }
@@ -2307,18 +2021,14 @@ pub fn stmt_uses_name(s: *Stmt, name: string) -> bool {
     // body. Without this the scrutinee of `match x { ... }` wasn't counted as a
     // use, so `x` was wrongly flagged `unused-var`.
     if s.kind == ST_MATCH {
-        if s.scrutinee != null && expr_uses_name(s.scrutinee, name) {
-            return true;
-        }
+        if s.scrutinee != null && expr_uses_name(s.scrutinee, name) { return true; }
         if s.arms != null {
             for let i: i32 = 0; i < s.arms.len(); i++ {
                 let a: MatchArm = s.arms.get(i);
                 if a.body != null {
                     for let j: i32 = 0; j < a.body.len(); j++ {
                         let b: Stmt = a.body.get(j);
-                        if stmt_uses_name(&b, name) {
-                            return true;
-                        }
+                        if stmt_uses_name(&b, name) { return true; }
                     }
                 }
             }
@@ -2328,27 +2038,15 @@ pub fn stmt_uses_name(s: *Stmt, name: string) -> bool {
 }
 
 fn expr_uses_name(e: *Expr, name: string) -> bool {
-    if e == null {
-        return false;
-    }
-    if e.kind == EX_IDENT && e.str_val.eq(name) {
-        return true;
-    }
-    if e.lhs != null && expr_uses_name(e.lhs, name) {
-        return true;
-    }
-    if e.rhs != null && expr_uses_name(e.rhs, name) {
-        return true;
-    }
-    if e.operand != null && expr_uses_name(e.operand, name) {
-        return true;
-    }
+    if e == null { return false; }
+    if e.kind == EX_IDENT && e.str_val.eq(name) { return true; }
+    if e.lhs != null && expr_uses_name(e.lhs, name) { return true; }
+    if e.rhs != null && expr_uses_name(e.rhs, name) { return true; }
+    if e.operand != null && expr_uses_name(e.operand, name) { return true; }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
-            if expr_uses_name(&a, name) {
-                return true;
-            }
+            if expr_uses_name(&a, name) { return true; }
         }
     }
     if e.match_arms != null {
@@ -2357,9 +2055,7 @@ fn expr_uses_name(e: *Expr, name: string) -> bool {
             if a.body != null {
                 for let k: i32 = 0; k < a.body.len(); k++ {
                     let b: Stmt = a.body.get(k);
-                    if stmt_uses_name(&b, name) {
-                        return true;
-                    }
+                    if stmt_uses_name(&b, name) { return true; }
                 }
             }
         }
@@ -2367,9 +2063,7 @@ fn expr_uses_name(e: *Expr, name: string) -> bool {
     if e.block_stmts != null {
         for let i: i32 = 0; i < e.block_stmts.len(); i++ {
             let b: Stmt = e.block_stmts.get(i);
-            if stmt_uses_name(&b, name) {
-                return true;
-            }
+            if stmt_uses_name(&b, name) { return true; }
         }
     }
     // Closure (`fn(...) {...}` / `move fn(...) {...}`) bodies capture
@@ -2378,9 +2072,7 @@ fn expr_uses_name(e: *Expr, name: string) -> bool {
     if e.fn_expr_body != null {
         for let i: i32 = 0; i < e.fn_expr_body.len(); i++ {
             let b: Stmt = e.fn_expr_body.get(i);
-            if stmt_uses_name(&b, name) {
-                return true;
-            }
+            if stmt_uses_name(&b, name) { return true; }
         }
     }
     return false;
@@ -2393,31 +2085,22 @@ fn expr_uses_name(e: *Expr, name: string) -> bool {
 // every user-defined `lint:<category>` warning. Anything starting
 // with `lint:` matches the corresponding custom-lint code verbatim.
 fn _code_in_group(allow_token: string, code: string) -> bool {
-    if allow_token.eq(code) {
-        return true;
-    }
-    if allow_token.eq("all") || allow_token.eq("*") {
-        return true;
-    }
+    if allow_token.eq(code) { return true; }
+    if allow_token.eq("all") || allow_token.eq("*") { return true; }
     if allow_token.eq("alloc") {
-        if code.eq("unfreed-alloc") || code.eq("arena-not-freed") {
-            return true;
-        }
+        if code.eq("unfreed-alloc") || code.eq("arena-not-freed") { return true; }
     }
     if allow_token.eq("unused") {
-        if code.eq("unused-var") || code.eq("unused-param") || code.eq("unused-fn") || code.eq("unnecessary-mut") {
+        if code.eq("unused-var") || code.eq("unused-param") || code.eq("unused-fn")
+            || code.eq("unnecessary-mut") {
             return true;
         }
     }
     if allow_token.eq("experimental") {
-        if code.eq("unstable-fn") || code.eq("deprecated-fn") {
-            return true;
-        }
+        if code.eq("unstable-fn") || code.eq("deprecated-fn") { return true; }
     }
     if allow_token.eq("lint") || allow_token.eq("lint:*") {
-        if code.starts_with("lint:") {
-            return true;
-        }
+        if code.starts_with("lint:") { return true; }
     }
     // Glob-style prefix: `@allow("lint:io_*")` matches every custom
     // category that begins with `io_`. Plain trailing `*` only.
@@ -2425,9 +2108,7 @@ fn _code_in_group(allow_token: string, code: string) -> bool {
         let last: i32 = allow_token.at(allow_token.len() - 1).to_int();
         if last == 42 {
             let prefix: string = allow_token.substring(0, allow_token.len() - 1);
-            if code.starts_with(prefix) {
-                return true;
-            }
+            if code.starts_with(prefix) { return true; }
         }
     }
     return false;
@@ -2451,13 +2132,9 @@ pub fn _lsp_parent_dir(path: string) -> string {
     let mut last: i32 = -1;
     for let i: i32 = 0; i < n; i++ {
         let c: i32 = path.at(i).to_int();
-        if c == 47 || c == 92 {
-            last = i;
-        }
+        if c == 47 || c == 92 { last = i; }
     }
-    if last < 0 {
-        return "";
-    }
+    if last < 0 { return ""; }
     return path.substring(0, last);
 }
 
@@ -2474,13 +2151,9 @@ pub fn _lsp_parent_dir(path: string) -> string {
 // manifest parse still land in the doc arena and are freed cleanly.
 fn _lsp_apply_manifest_lint(start_dir: string) {
     let root: string = find_manifest_root(start_dir);
-    if root.eq("") {
-        return;
-    }
+    if root.eq("") { return; }
     let m: *Manifest = read_manifest(root);
-    if m == null {
-        return;
-    }
+    if m == null { return; }
     let prev_arena: *void = __glide_palloc_get();
     __glide_palloc_set(null);
     if m.lint_deny != null && m.lint_deny.len() > 0 {
@@ -2531,14 +2204,10 @@ fn _dup_to_libc(s: string) -> string {
 
 fn _project_allow_matches(code: string) -> bool {
     let p: *void = __glide_proj_allow_get();
-    if p == null {
-        return false;
-    }
+    if p == null { return false; }
     let v: *Vector<string> = p as *Vector<string>;
     for let i: i32 = 0; i < v.len(); i++ {
-        if _code_in_group(v.get(i), code) {
-            return true;
-        }
+        if _code_in_group(v.get(i), code) { return true; }
     }
     return false;
 }
@@ -2547,25 +2216,15 @@ fn _project_allow_matches(code: string) -> bool {
 // `@allow("<code>")`, or the project's `lint.allow = [...]` covers it.
 // Matched either verbatim or via the group / prefix logic above.
 pub fn _has_allow(s: *Stmt, code: string) -> bool {
-    if _project_allow_matches(code) {
-        return true;
-    }
-    if s == null || s.attrs == null {
-        return false;
-    }
+    if _project_allow_matches(code) { return true; }
+    if s == null || s.attrs == null { return false; }
     for let i: i32 = 0; i < s.attrs.len(); i++ {
         let a: Attr = s.attrs.get(i);
-        if !a.name.eq("allow") {
-            continue;
-        }
-        if a.args == null {
-            continue;
-        }
+        if !a.name.eq("allow") { continue; }
+        if a.args == null { continue; }
         for let j: i32 = 0; j < a.args.len(); j++ {
             let v: Expr = a.args.get(j);
-            if v.kind == EX_STRING && _code_in_group(v.str_val, code) {
-                return true;
-            }
+            if v.kind == EX_STRING && _code_in_group(v.str_val, code) { return true; }
         }
     }
     return false;
@@ -2573,27 +2232,17 @@ pub fn _has_allow(s: *Stmt, code: string) -> bool {
 
 pub fn body_always_returns(body: *Vector<Stmt>) -> bool {
     let n: i32 = body.len();
-    if n == 0 {
-        return false;
-    }
+    if n == 0 { return false; }
     let last: Stmt = body.get(n - 1);
     return stmt_terminates(&last);
 }
 
 fn stmt_terminates(s: *Stmt) -> bool {
-    if s == null {
-        return false;
-    }
-    if s.kind == ST_RETURN {
-        return true;
-    }
-    if s.kind == ST_BREAK || s.kind == ST_CONTINUE {
-        return true;
-    }
+    if s == null { return false; }
+    if s.kind == ST_RETURN { return true; }
+    if s.kind == ST_BREAK || s.kind == ST_CONTINUE { return true; }
     if s.kind == ST_BLOCK {
-        if s.then_body != null {
-            return body_always_returns(s.then_body);
-        }
+        if s.then_body != null { return body_always_returns(s.then_body); }
         return false;
     }
     if s.kind == ST_IF {
@@ -2603,18 +2252,14 @@ fn stmt_terminates(s: *Stmt) -> bool {
         return false;
     }
     if s.kind == ST_MATCH {
-        if s.arms == null || s.arms.len() == 0 {
-            return false;
-        }
+        if s.arms == null || s.arms.len() == 0 { return false; }
         // Every arm terminates -> the match terminates. We don't require a `_`
         // arm: a non-exhaustive enum match (missing variants, no `_`) is already
         // a hard `match-not-exhaustive` error, so an exhaustive match without
         // `_` still counts as terminating here.
         for let i: i32 = 0; i < s.arms.len(); i++ {
             let a: MatchArm = s.arms.get(i);
-            if a.body == null || !body_always_returns(a.body) {
-                return false;
-            }
+            if a.body == null || !body_always_returns(a.body) { return false; }
         }
         return true;
     }
@@ -2633,41 +2278,25 @@ fn stmt_terminates(s: *Stmt) -> bool {
 // Breaks inside nested while/for loops bind to THOSE loops, so they don't
 // count — that's why we stop descending at a nested loop.
 fn _has_loop_break(body: *Vector<Stmt>) -> bool {
-    if body == null {
-        return false;
-    }
+    if body == null { return false; }
     for let i: i32 = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
-        if _stmt_has_loop_break(&s) {
-            return true;
-        }
+        if _stmt_has_loop_break(&s) { return true; }
     }
     return false;
 }
 
 fn _stmt_has_loop_break(s: *Stmt) -> bool {
-    if s == null {
-        return false;
-    }
-    if s.kind == ST_BREAK {
-        return true;
-    }
-    if s.kind == ST_WHILE || s.kind == ST_FOR || s.kind == ST_WHILE_RECV {
-        return false;
-    }
-    if s.kind == ST_IF {
-        return _has_loop_break(s.then_body) || _has_loop_break(s.else_body);
-    }
-    if s.kind == ST_BLOCK {
-        return _has_loop_break(s.then_body);
-    }
+    if s == null { return false; }
+    if s.kind == ST_BREAK { return true; }
+    if s.kind == ST_WHILE || s.kind == ST_FOR || s.kind == ST_WHILE_RECV { return false; }
+    if s.kind == ST_IF { return _has_loop_break(s.then_body) || _has_loop_break(s.else_body); }
+    if s.kind == ST_BLOCK { return _has_loop_break(s.then_body); }
     if s.kind == ST_MATCH {
         if s.arms != null {
             for let i: i32 = 0; i < s.arms.len(); i++ {
                 let a: MatchArm = s.arms.get(i);
-                if _has_loop_break(a.body) {
-                    return true;
-                }
+                if _has_loop_break(a.body) { return true; }
             }
         }
         return false;
@@ -2689,18 +2318,12 @@ pub struct ExpectPending {
 // generics, function pointers, etc. fall through and the receiver
 // lookup uses the bare-name fallback at the call site.
 pub fn _type_root_name(ty: *Type) -> string {
-    if ty == null {
-        return "";
-    }
-    if ty.kind == TY_NAMED {
-        return ty.name;
-    }
+    if ty == null { return ""; }
+    if ty.kind == TY_NAMED { return ty.name; }
     if ty.kind == TY_POINTER || ty.kind == TY_BORROW || ty.kind == TY_BORROW_MUT {
         return _type_root_name(ty.inner);
     }
-    if ty.kind == TY_GENERIC {
-        return ty.name;
-    } // e.g. `Vector<int>` → "Vector"
+    if ty.kind == TY_GENERIC { return ty.name; } // e.g. `Vector<int>` → "Vector"
     return "";
 }
 
@@ -2712,28 +2335,16 @@ pub fn _scan_calls_in_body(t: *Typer, body: *Vector<Stmt>, dep: *HashMap<string>
 }
 
 fn _scan_calls_in_stmt(t: *Typer, s: *Stmt, dep: *HashMap<string>, lint_code: string, what: string, scope: *HashMap<string>) {
-    if s == null {
-        return;
-    }
+    if s == null { return; }
     // Stmt / block-level opt-out — `@allow("deprecated-fn")` on the
     // let, defer, block, if, while, etc. mutes the warning for every
     // call inside this stmt's subtree. Bubbling stops here so a
     // narrower scope below won't accidentally re-enable.
-    if _has_allow(s, lint_code) {
-        return;
-    }
-    if s.let_value != null {
-        _scan_calls_in_expr(t, s.let_value, dep, lint_code, what, scope);
-    }
-    if s.expr_value != null {
-        _scan_calls_in_expr(t, s.expr_value, dep, lint_code, what, scope);
-    }
-    if s.cond != null {
-        _scan_calls_in_expr(t, s.cond, dep, lint_code, what, scope);
-    }
-    if s.for_step != null {
-        _scan_calls_in_expr(t, s.for_step, dep, lint_code, what, scope);
-    }
+    if _has_allow(s, lint_code) { return; }
+    if s.let_value != null { _scan_calls_in_expr(t, s.let_value, dep, lint_code, what, scope); }
+    if s.expr_value != null { _scan_calls_in_expr(t, s.expr_value, dep, lint_code, what, scope); }
+    if s.cond != null { _scan_calls_in_expr(t, s.cond, dep, lint_code, what, scope); }
+    if s.for_step != null { _scan_calls_in_expr(t, s.for_step, dep, lint_code, what, scope); }
     // Record `let name: Type = ...` into the receiver-resolution
     // scope so `name.method()` farther down resolves to
     // `Type::method` instead of falling back to the bare name. Only
@@ -2741,22 +2352,14 @@ fn _scan_calls_in_stmt(t: *Typer, s: *Stmt, dep: *HashMap<string>, lint_code: st
     // the heuristic.
     if s.kind == ST_LET && s.let_ty != null {
         let n: string = _type_root_name(s.let_ty);
-        if !n.eq("") {
-            scope.insert(s.name, n);
-        }
+        if !n.eq("") { scope.insert(s.name, n); }
     }
-    if s.then_body != null {
-        _scan_calls_in_body(t, s.then_body, dep, lint_code, what, scope);
-    }
-    if s.else_body != null {
-        _scan_calls_in_body(t, s.else_body, dep, lint_code, what, scope);
-    }
+    if s.then_body != null { _scan_calls_in_body(t, s.then_body, dep, lint_code, what, scope); }
+    if s.else_body != null { _scan_calls_in_body(t, s.else_body, dep, lint_code, what, scope); }
 }
 
 fn _scan_calls_in_expr(t: *Typer, e: *Expr, dep: *HashMap<string>, lint_code: string, what: string, scope: *HashMap<string>) {
-    if e == null {
-        return;
-    }
+    if e == null { return; }
     if e.kind == EX_CALL && e.lhs != null {
         let head: *Expr = e.lhs;
         let mut key: string = "";
@@ -2803,21 +2406,13 @@ fn _scan_calls_in_expr(t: *Typer, e: *Expr, dep: *HashMap<string>, lint_code: st
         if !key.eq("") && dep.contains(key) {
             let reason: string = dep.get(key);
             let mut msg: string = "function `".concat(display).concat("` is ").concat(what);
-            if !reason.eq("") {
-                msg = msg.concat(": ").concat(reason);
-            }
+            if !reason.eq("") { msg = msg.concat(": ").concat(reason); }
             t.warn_range(e.line, e.column, _expr_span(e), lint_code, msg);
         }
     }
-    if e.lhs != null {
-        _scan_calls_in_expr(t, e.lhs, dep, lint_code, what, scope);
-    }
-    if e.rhs != null {
-        _scan_calls_in_expr(t, e.rhs, dep, lint_code, what, scope);
-    }
-    if e.operand != null {
-        _scan_calls_in_expr(t, e.operand, dep, lint_code, what, scope);
-    }
+    if e.lhs != null { _scan_calls_in_expr(t, e.lhs, dep, lint_code, what, scope); }
+    if e.rhs != null { _scan_calls_in_expr(t, e.rhs, dep, lint_code, what, scope); }
+    if e.operand != null { _scan_calls_in_expr(t, e.operand, dep, lint_code, what, scope); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
@@ -2827,9 +2422,7 @@ fn _scan_calls_in_expr(t: *Typer, e: *Expr, dep: *HashMap<string>, lint_code: st
 }
 
 fn _ndp_derefs_in_expr(e: *Expr, derefed: *HashMap<bool>) {
-    if e == null {
-        return;
-    }
+    if e == null { return; }
     // `*p`
     if e.kind == EX_UNARY && e.op_code == UN_DEREF && e.operand != null && e.operand.kind == EX_IDENT {
         derefed.insert(e.operand.str_val, true);
@@ -2842,15 +2435,9 @@ fn _ndp_derefs_in_expr(e: *Expr, derefed: *HashMap<bool>) {
     if e.kind == EX_INDEX && e.lhs != null && e.lhs.kind == EX_IDENT {
         derefed.insert(e.lhs.str_val, true);
     }
-    if e.lhs != null {
-        _ndp_derefs_in_expr(e.lhs, derefed);
-    }
-    if e.rhs != null {
-        _ndp_derefs_in_expr(e.rhs, derefed);
-    }
-    if e.operand != null {
-        _ndp_derefs_in_expr(e.operand, derefed);
-    }
+    if e.lhs != null { _ndp_derefs_in_expr(e.lhs, derefed); }
+    if e.rhs != null { _ndp_derefs_in_expr(e.rhs, derefed); }
+    if e.operand != null { _ndp_derefs_in_expr(e.operand, derefed); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
@@ -2867,42 +2454,30 @@ pub fn _scan_null_body(t: *Typer, body: *Vector<Stmt>, nulls: *HashMap<bool>) {
 }
 
 fn _scan_null_stmt(t: *Typer, s: *Stmt, nulls: *HashMap<bool>) {
-    if s == null {
-        return;
-    }
+    if s == null { return; }
     // Walk RHS exprs first so derefs inside them get checked before
     // the let-binding decides anything.
-    if s.let_value != null {
-        _scan_null_expr(t, s.let_value, nulls);
-    }
-    if s.expr_value != null {
-        _scan_null_expr(t, s.expr_value, nulls);
-    }
-    if s.cond != null {
-        _scan_null_expr(t, s.cond, nulls);
-    }
-    if s.for_step != null {
-        _scan_null_expr(t, s.for_step, nulls);
-    }
+    if s.let_value != null { _scan_null_expr(t, s.let_value, nulls); }
+    if s.expr_value != null { _scan_null_expr(t, s.expr_value, nulls); }
+    if s.cond != null { _scan_null_expr(t, s.cond, nulls); }
+    if s.for_step != null { _scan_null_expr(t, s.for_step, nulls); }
     // Track the binding.
     if s.kind == ST_LET && s.name != null && !s.name.eq("") {
         if s.let_value != null && s.let_value.kind == EX_NULL {
             nulls.insert(s.name, true);
         } else {
             // Defined to something concrete — definitely not null.
-            if nulls.contains(s.name) {
-                nulls.insert(s.name, false);
-            }
+            if nulls.contains(s.name) { nulls.insert(s.name, false); }
         }
     }
-    if s.expr_value != null && s.expr_value.kind == EX_ASSIGN && s.expr_value.lhs != null && s.expr_value.lhs.kind == EX_IDENT && s.expr_value.rhs != null {
+    if s.expr_value != null && s.expr_value.kind == EX_ASSIGN && s.expr_value.lhs != null
+        && s.expr_value.lhs.kind == EX_IDENT
+        && s.expr_value.rhs != null {
         let nm: string = s.expr_value.lhs.str_val;
         if s.expr_value.rhs.kind == EX_NULL {
             nulls.insert(nm, true);
         } else {
-            if nulls.contains(nm) {
-                nulls.insert(nm, false);
-            }
+            if nulls.contains(nm) { nulls.insert(nm, false); }
         }
     }
     // Conditional + loop bodies invalidate our knowledge — we don't
@@ -2924,27 +2499,20 @@ fn _scan_null_stmt(t: *Typer, s: *Stmt, nulls: *HashMap<bool>) {
 fn _invalidate_assigned(body: *Vector<Stmt>, nulls: *HashMap<bool>) {
     for let i: i32 = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
-        if s.expr_value != null && s.expr_value.kind == EX_ASSIGN && s.expr_value.lhs != null && s.expr_value.lhs.kind == EX_IDENT {
+        if s.expr_value != null && s.expr_value.kind == EX_ASSIGN && s.expr_value.lhs != null
+            && s.expr_value.lhs.kind == EX_IDENT {
             let nm: string = s.expr_value.lhs.str_val;
-            if nulls.contains(nm) {
-                nulls.insert(nm, false);
-            }
+            if nulls.contains(nm) { nulls.insert(nm, false); }
         }
-        if s.then_body != null {
-            _invalidate_assigned(s.then_body, nulls);
-        }
-        if s.else_body != null {
-            _invalidate_assigned(s.else_body, nulls);
-        }
+        if s.then_body != null { _invalidate_assigned(s.then_body, nulls); }
+        if s.else_body != null { _invalidate_assigned(s.else_body, nulls); }
     }
 }
 
 // Walk an expr, emitting `null-deref` at every deref / member /
 // method call against an identifier that's currently known-null.
 fn _scan_null_expr(t: *Typer, e: *Expr, nulls: *HashMap<bool>) {
-    if e == null {
-        return;
-    }
+    if e == null { return; }
     // *p — direct deref
     if e.kind == EX_UNARY && e.op_code == UN_DEREF && e.operand != null {
         _check_null_target(t, e.operand, nulls, e.line, e.column);
@@ -2961,15 +2529,9 @@ fn _scan_null_expr(t: *Typer, e: *Expr, nulls: *HashMap<bool>) {
     if e.kind == EX_INDEX && e.lhs != null {
         _check_null_target(t, e.lhs, nulls, e.line, e.column);
     }
-    if e.lhs != null {
-        _scan_null_expr(t, e.lhs, nulls);
-    }
-    if e.rhs != null {
-        _scan_null_expr(t, e.rhs, nulls);
-    }
-    if e.operand != null {
-        _scan_null_expr(t, e.operand, nulls);
-    }
+    if e.lhs != null { _scan_null_expr(t, e.lhs, nulls); }
+    if e.rhs != null { _scan_null_expr(t, e.rhs, nulls); }
+    if e.operand != null { _scan_null_expr(t, e.operand, nulls); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
@@ -2979,9 +2541,7 @@ fn _scan_null_expr(t: *Typer, e: *Expr, nulls: *HashMap<bool>) {
 }
 
 fn _check_null_target(t: *Typer, target: *Expr, nulls: *HashMap<bool>, line: i32, col: i32) {
-    if target == null {
-        return;
-    }
+    if target == null { return; }
     // Direct `*null` / `null.foo()` — definite bug.
     if target.kind == EX_NULL {
         t.warn_range(line, col, 4, "null-deref", "dereferencing the `null` literal — this will segfault at runtime");
@@ -3000,37 +2560,25 @@ pub fn _bf_scan_body(t: *Typer, body: *Vector<Stmt>, tys: *HashMap<string>, self
 }
 
 fn _bf_scan_stmt(t: *Typer, s: *Stmt, tys: *HashMap<string>, self_destructor_of: string) {
-    if s == null {
-        return;
-    }
+    if s == null { return; }
     if s.kind == ST_LET && s.name != null && !s.name.eq("") && s.let_ty != null {
         // Use bad-free-specific tag to distinguish managed value types
         // (`string` = arena string, must not free) from raw pointer
         // buffers (`*string` = char-array allocation, free is fine).
         tys.insert(s.name, _bf_ty_tag_for_free(s.let_ty));
     }
-    if s.expr_value != null {
-        _bf_check_expr(t, s.expr_value, tys, self_destructor_of);
-    }
-    if s.let_value != null {
-        _bf_check_expr(t, s.let_value, tys, self_destructor_of);
-    }
-    if s.cond != null {
-        _bf_check_expr(t, s.cond, tys, self_destructor_of);
-    }
-    if s.then_body != null {
-        _bf_scan_body(t, s.then_body, tys, self_destructor_of);
-    }
-    if s.else_body != null {
-        _bf_scan_body(t, s.else_body, tys, self_destructor_of);
-    }
+    if s.expr_value != null { _bf_check_expr(t, s.expr_value, tys, self_destructor_of); }
+    if s.let_value != null { _bf_check_expr(t, s.let_value, tys, self_destructor_of); }
+    if s.cond != null { _bf_check_expr(t, s.cond, tys, self_destructor_of); }
+    if s.then_body != null { _bf_scan_body(t, s.then_body, tys, self_destructor_of); }
+    if s.else_body != null { _bf_scan_body(t, s.else_body, tys, self_destructor_of); }
 }
 
 fn _bf_check_expr(t: *Typer, e: *Expr, tys: *HashMap<string>, self_destructor_of: string) {
-    if e == null {
-        return;
-    }
-    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT && e.lhs.str_val.eq("free") && e.args != null && e.args.len() == 1 {
+    if e == null { return; }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT && e.lhs.str_val.eq("free")
+        && e.args != null
+        && e.args.len() == 1 {
         let arg: Expr = e.args.get(0);
         // Peel `as *void` / `as *u8` / any cast.
         let mut probe: *Expr = &arg;
@@ -3061,15 +2609,9 @@ fn _bf_check_expr(t: *Typer, e: *Expr, tys: *HashMap<string>, self_destructor_of
             }
         }
     }
-    if e.lhs != null {
-        _bf_check_expr(t, e.lhs, tys, self_destructor_of);
-    }
-    if e.rhs != null {
-        _bf_check_expr(t, e.rhs, tys, self_destructor_of);
-    }
-    if e.operand != null {
-        _bf_check_expr(t, e.operand, tys, self_destructor_of);
-    }
+    if e.lhs != null { _bf_check_expr(t, e.lhs, tys, self_destructor_of); }
+    if e.rhs != null { _bf_check_expr(t, e.rhs, tys, self_destructor_of); }
+    if e.operand != null { _bf_check_expr(t, e.operand, tys, self_destructor_of); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
@@ -3083,15 +2625,12 @@ fn _bf_check_expr(t: *Typer, e: *Expr, tys: *HashMap<string>, self_destructor_of
 // `*Vector<T>` / `*HashMap<V>` still resolve to their collection
 // name since those are always passed as pointers.
 fn _bf_ty_tag_for_free(ty: *Type) -> string {
-    if ty == null {
-        return "";
-    }
+    if ty == null { return ""; }
     // `string` value — arena-managed, must not be freed.
-    if ty.kind == TY_NAMED && ty.name.eq("string") {
-        return "string";
-    }
+    if ty.kind == TY_NAMED && ty.name.eq("string") { return "string"; }
     // `*string` is a raw char-array — `free()` is fine, skip.
-    if ty.kind == TY_POINTER && ty.inner != null && ty.inner.kind == TY_NAMED && ty.inner.name.eq("string") {
+    if ty.kind == TY_POINTER && ty.inner != null && ty.inner.kind == TY_NAMED
+        && ty.inner.name.eq("string") {
         return "";
     }
     // Pointer to the stdlib Vector / HashMap. These collections are ALWAYS
@@ -3110,19 +2649,13 @@ fn _bf_ty_tag_for_free(ty: *Type) -> string {
         // the bad-free collection branch (which matches on the name) would
         // still fire on `free(v as *void)` for correct POD code.
         if ty.inner.kind == TY_NAMED {
-            if ty.inner.name.eq("Vector") || ty.inner.name.eq("HashMap") {
-                return "";
-            }
+            if ty.inner.name.eq("Vector") || ty.inner.name.eq("HashMap") { return ""; }
             return ty.inner.name;
         }
-        if ty.inner.kind == TY_GENERIC {
-            return ty.inner.name;
-        }
+        if ty.inner.kind == TY_GENERIC { return ty.inner.name; }
         return "";
     }
-    if ty.kind == TY_GENERIC {
-        return ty.name;
-    }
+    if ty.kind == TY_GENERIC { return ty.name; }
     return "";
 }
 
@@ -3144,36 +2677,20 @@ fn _bf_ty_tag_for_free(ty: *Type) -> string {
 // `alelo::x` still flags the brace member (the qualifier alone would be
 // served by `import alelo;`).
 pub fn _uib_collect_stmt(s: *Stmt, used: *HashMap<bool>) {
-    if s == null {
-        return;
-    }
-    if s.let_value != null {
-        _uib_collect_expr(s.let_value, used);
-    }
-    if s.expr_value != null {
-        _uib_collect_expr(s.expr_value, used);
-    }
-    if s.cond != null {
-        _uib_collect_expr(s.cond, used);
-    }
-    if s.for_step != null {
-        _uib_collect_expr(s.for_step, used);
-    }
-    if s.for_init != null {
-        _uib_collect_stmt(s.for_init, used);
-    }
-    if s.scrutinee != null {
-        _uib_collect_expr(s.scrutinee, used);
-    }
+    if s == null { return; }
+    if s.let_value != null { _uib_collect_expr(s.let_value, used); }
+    if s.expr_value != null { _uib_collect_expr(s.expr_value, used); }
+    if s.cond != null { _uib_collect_expr(s.cond, used); }
+    if s.for_step != null { _uib_collect_expr(s.for_step, used); }
+    if s.for_init != null { _uib_collect_stmt(s.for_init, used); }
+    if s.scrutinee != null { _uib_collect_expr(s.scrutinee, used); }
     // Attribute args: `@derive(JsonBind)`, `@expect("code")`, `@allow("x")`,
     // procedural macro use sites. Each arg expression's idents count as
     // uses of the corresponding import.
     if s.attrs != null {
         for let i: i32 = 0; i < s.attrs.len(); i++ {
             let a: Attr = s.attrs.get(i);
-            if a.args == null {
-                continue;
-            }
+            if a.args == null { continue; }
             for let j: i32 = 0; j < a.args.len(); j++ {
                 let ae: Expr = a.args.get(j);
                 _uib_collect_expr(&ae, used);
@@ -3236,15 +2753,9 @@ pub fn _uib_collect_stmt(s: *Stmt, used: *HashMap<bool>) {
 }
 
 fn _uib_collect_expr(e: *Expr, used: *HashMap<bool>) {
-    if e == null {
-        return;
-    }
-    if e.kind == EX_IDENT {
-        used.insert(e.str_val, true);
-    }
-    if e.kind == EX_MEMBER && e.field != null {
-        used.insert(e.field, true);
-    }
+    if e == null { return; }
+    if e.kind == EX_IDENT { used.insert(e.str_val, true); }
+    if e.kind == EX_MEMBER && e.field != null { used.insert(e.field, true); }
     if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT {
         used.insert(e.lhs.str_val, true);
     }
@@ -3253,9 +2764,7 @@ fn _uib_collect_expr(e: *Expr, used: *HashMap<bool>) {
     // looks like Router was imported and abandoned.
     if e.kind == EX_PATH {
         // BARE-only: the field of `mod::name` is a QUALIFIED use — skip it.
-        if e.str_val != null {
-            used.insert(e.str_val, true);
-        }
+        if e.str_val != null { used.insert(e.str_val, true); }
     }
     // Anonymous fns can hold params + return-type annotations that name
     // imported types. Walk those before descending into the body.
@@ -3275,25 +2784,15 @@ fn _uib_collect_expr(e: *Expr, used: *HashMap<bool>) {
         }
     }
     // Cast targets (`expr as *Foo`) and sizeof(Type) usages.
-    if e.kind == EX_CAST || e.kind == EX_SIZEOF {
-        _uib_collect_type(e.cast_to, used);
-    }
+    if e.kind == EX_CAST || e.kind == EX_SIZEOF { _uib_collect_type(e.cast_to, used); }
     // Struct literal names the type explicitly.
     if e.kind == EX_STRUCT_LIT && e.str_val != null {
         // Qualified literal (`mod::Type {}`) is not a BARE use of Type.
-        if e.field == null || e.field.eq("") {
-            used.insert(e.str_val, true);
-        }
+        if e.field == null || e.field.eq("") { used.insert(e.str_val, true); }
     }
-    if e.lhs != null {
-        _uib_collect_expr(e.lhs, used);
-    }
-    if e.rhs != null {
-        _uib_collect_expr(e.rhs, used);
-    }
-    if e.operand != null {
-        _uib_collect_expr(e.operand, used);
-    }
+    if e.lhs != null { _uib_collect_expr(e.lhs, used); }
+    if e.rhs != null { _uib_collect_expr(e.rhs, used); }
+    if e.operand != null { _uib_collect_expr(e.operand, used); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
@@ -3303,18 +2802,10 @@ fn _uib_collect_expr(e: *Expr, used: *HashMap<bool>) {
 }
 
 fn _uib_collect_type(t: *Type, used: *HashMap<bool>) {
-    if t == null {
-        return;
-    }
-    if t.kind == TY_NAMED && t.name != null {
-        used.insert(t.name, true);
-    }
-    if t.kind == TY_GENERIC && t.name != null {
-        used.insert(t.name, true);
-    }
-    if t.inner != null {
-        _uib_collect_type(t.inner, used);
-    }
+    if t == null { return; }
+    if t.kind == TY_NAMED && t.name != null { used.insert(t.name, true); }
+    if t.kind == TY_GENERIC && t.name != null { used.insert(t.name, true); }
+    if t.inner != null { _uib_collect_type(t.inner, used); }
     if t.args != null {
         for let i: i32 = 0; i < t.args.len(); i++ {
             let a: Type = t.args.get(i);
@@ -3322,42 +2813,24 @@ fn _uib_collect_type(t: *Type, used: *HashMap<bool>) {
         }
     }
     // For TY_FNPTR `args` carries the param types and `fnptr_ret` the ret.
-    if t.fnptr_ret != null {
-        _uib_collect_type(t.fnptr_ret, used);
-    }
+    if t.fnptr_ret != null { _uib_collect_type(t.fnptr_ret, used); }
 }
 
 pub fn _ui_collect_stmt(s: *Stmt, used: *HashMap<bool>) {
-    if s == null {
-        return;
-    }
-    if s.let_value != null {
-        _ui_collect_expr(s.let_value, used);
-    }
-    if s.expr_value != null {
-        _ui_collect_expr(s.expr_value, used);
-    }
-    if s.cond != null {
-        _ui_collect_expr(s.cond, used);
-    }
-    if s.for_step != null {
-        _ui_collect_expr(s.for_step, used);
-    }
-    if s.for_init != null {
-        _ui_collect_stmt(s.for_init, used);
-    }
-    if s.scrutinee != null {
-        _ui_collect_expr(s.scrutinee, used);
-    }
+    if s == null { return; }
+    if s.let_value != null { _ui_collect_expr(s.let_value, used); }
+    if s.expr_value != null { _ui_collect_expr(s.expr_value, used); }
+    if s.cond != null { _ui_collect_expr(s.cond, used); }
+    if s.for_step != null { _ui_collect_expr(s.for_step, used); }
+    if s.for_init != null { _ui_collect_stmt(s.for_init, used); }
+    if s.scrutinee != null { _ui_collect_expr(s.scrutinee, used); }
     // Attribute args: `@derive(JsonBind)`, `@expect("code")`, `@allow("x")`,
     // procedural macro use sites. Each arg expression's idents count as
     // uses of the corresponding import.
     if s.attrs != null {
         for let i: i32 = 0; i < s.attrs.len(); i++ {
             let a: Attr = s.attrs.get(i);
-            if a.args == null {
-                continue;
-            }
+            if a.args == null { continue; }
             for let j: i32 = 0; j < a.args.len(); j++ {
                 let ae: Expr = a.args.get(j);
                 _ui_collect_expr(&ae, used);
@@ -3420,15 +2893,9 @@ pub fn _ui_collect_stmt(s: *Stmt, used: *HashMap<bool>) {
 }
 
 fn _ui_collect_expr(e: *Expr, used: *HashMap<bool>) {
-    if e == null {
-        return;
-    }
-    if e.kind == EX_IDENT {
-        used.insert(e.str_val, true);
-    }
-    if e.kind == EX_MEMBER && e.field != null {
-        used.insert(e.field, true);
-    }
+    if e == null { return; }
+    if e.kind == EX_IDENT { used.insert(e.str_val, true); }
+    if e.kind == EX_MEMBER && e.field != null { used.insert(e.field, true); }
     if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT {
         used.insert(e.lhs.str_val, true);
     }
@@ -3436,12 +2903,8 @@ fn _ui_collect_expr(e: *Expr, used: *HashMap<bool>) {
     // the imported `Type` / `method` name. Without this `Router::new()`
     // looks like Router was imported and abandoned.
     if e.kind == EX_PATH {
-        if e.str_val != null {
-            used.insert(e.str_val, true);
-        }
-        if e.field != null {
-            used.insert(e.field, true);
-        }
+        if e.str_val != null { used.insert(e.str_val, true); }
+        if e.field != null { used.insert(e.field, true); }
     }
     // Anonymous fns can hold params + return-type annotations that name
     // imported types. Walk those before descending into the body.
@@ -3461,28 +2924,18 @@ fn _ui_collect_expr(e: *Expr, used: *HashMap<bool>) {
         }
     }
     // Cast targets (`expr as *Foo`) and sizeof(Type) usages.
-    if e.kind == EX_CAST || e.kind == EX_SIZEOF {
-        _ui_collect_type(e.cast_to, used);
-    }
+    if e.kind == EX_CAST || e.kind == EX_SIZEOF { _ui_collect_type(e.cast_to, used); }
     // Struct literal names the type explicitly. A qualified literal
     // (`mod::Type { … }`) keeps the module in `field` — that's a use of the
     // module import, so record it too or the lint tells the user to delete
     // a load-bearing `import mod;`.
     if e.kind == EX_STRUCT_LIT && e.str_val != null {
         used.insert(e.str_val, true);
-        if e.field != null && !e.field.eq("") {
-            used.insert(e.field, true);
-        }
+        if e.field != null && !e.field.eq("") { used.insert(e.field, true); }
     }
-    if e.lhs != null {
-        _ui_collect_expr(e.lhs, used);
-    }
-    if e.rhs != null {
-        _ui_collect_expr(e.rhs, used);
-    }
-    if e.operand != null {
-        _ui_collect_expr(e.operand, used);
-    }
+    if e.lhs != null { _ui_collect_expr(e.lhs, used); }
+    if e.rhs != null { _ui_collect_expr(e.rhs, used); }
+    if e.operand != null { _ui_collect_expr(e.operand, used); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
@@ -3494,18 +2947,10 @@ fn _ui_collect_expr(e: *Expr, used: *HashMap<bool>) {
 // Walk a type tree, marking every named carrier as a use. Catches
 // `*HttpRequest`, `Vector<Router>`, `?HttpResponse`, etc.
 fn _ui_collect_type(t: *Type, used: *HashMap<bool>) {
-    if t == null {
-        return;
-    }
-    if t.kind == TY_NAMED && t.name != null {
-        used.insert(t.name, true);
-    }
-    if t.kind == TY_GENERIC && t.name != null {
-        used.insert(t.name, true);
-    }
-    if t.inner != null {
-        _ui_collect_type(t.inner, used);
-    }
+    if t == null { return; }
+    if t.kind == TY_NAMED && t.name != null { used.insert(t.name, true); }
+    if t.kind == TY_GENERIC && t.name != null { used.insert(t.name, true); }
+    if t.inner != null { _ui_collect_type(t.inner, used); }
     if t.args != null {
         for let i: i32 = 0; i < t.args.len(); i++ {
             let a: Type = t.args.get(i);
@@ -3513,9 +2958,7 @@ fn _ui_collect_type(t: *Type, used: *HashMap<bool>) {
         }
     }
     // For TY_FNPTR `args` carries the param types and `fnptr_ret` the ret.
-    if t.fnptr_ret != null {
-        _ui_collect_type(t.fnptr_ret, used);
-    }
+    if t.fnptr_ret != null { _ui_collect_type(t.fnptr_ret, used); }
 }
 
 // ---- Main loop ---------------------------------------------------------
@@ -3533,16 +2976,12 @@ fn lsp_dispatch(req: *JsonValue, state: *LspState) -> bool {
         handle_initialize(req);
         return false;
     }
-    if method.eq("initialized") {
-        return false;
-    }
+    if method.eq("initialized") { return false; }
     if method.eq("shutdown") {
         handle_shutdown(req, state);
         return false;
     }
-    if method.eq("exit") {
-        return true;
-    }
+    if method.eq("exit") { return true; }
     if method.eq("textDocument/didOpen") {
         handle_did_open(req, state);
         return false;
@@ -3653,9 +3092,7 @@ fn lsp_dispatch(req: *JsonValue, state: *LspState) -> bool {
     }
     // Any unhandled request gets an empty-result reply so clients don't hang.
     let id: *JsonValue = json_get(req, "id");
-    if id != null {
-        lsp_send_response(id, json_null());
-    }
+    if id != null { lsp_send_response(id, json_null()); }
     return false;
 }
 
@@ -3700,9 +3137,7 @@ pub fn lsp_main() -> i32 {
         __glide_palloc_set(null);
         __glide_palloc_free(req_arena_head);
         c_raw! { if (raw  !=  NULL) free(((char*)(raw )) - 4); }
-        if should_exit {
-            break;
-        }
+        if should_exit { break; }
     }
     _lsp_log("--- lsp shutdown ---");
     return 0;

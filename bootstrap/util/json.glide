@@ -85,12 +85,8 @@ pub fn json_object() -> *JsonValue {
 // wrapper allocation itself is released. After this call, `v` is
 // dangling - do not touch it again.
 pub fn json_arr_push(arr: *JsonValue, v: *JsonValue) {
-    if arr == null || arr.kind != JSON_ARRAY {
-        return;
-    }
-    if v == null {
-        return;
-    }
+    if arr == null || arr.kind != JSON_ARRAY { return; }
+    if v == null { return; }
     arr.arr.push(*v);
     free(v as *void);
 }
@@ -99,12 +95,8 @@ pub fn json_arr_push(arr: *JsonValue, v: *JsonValue) {
 // and its wrapper is freed. The nested heap children (if any) live on
 // inside the parent.
 pub fn json_obj_set(obj: *JsonValue, key: string, v: *JsonValue) {
-    if obj == null || obj.kind != JSON_OBJECT {
-        return;
-    }
-    if v == null {
-        return;
-    }
+    if obj == null || obj.kind != JSON_OBJECT { return; }
+    if v == null { return; }
     obj.obj_keys.push(key);
     obj.obj_vals.push(*v);
     free(v as *void);
@@ -115,9 +107,7 @@ pub fn json_obj_set(obj: *JsonValue, key: string, v: *JsonValue) {
 // the top-level wrapper. Safe on null. Pair with json_object/json_array
 // builders or the json_parse output.
 pub fn json_free(v: *JsonValue) {
-    if v == null {
-        return;
-    }
+    if v == null { return; }
     json_free_contents(v);
     free(v as *void);
 }
@@ -133,9 +123,7 @@ pub fn json_free(v: *JsonValue) {
 // string past that point (handle_did_open/change holding doc.text)
 // must strdup it first.
 fn json_free_contents(v: *JsonValue) {
-    if v == null {
-        return;
-    }
+    if v == null { return; }
     if v.kind == JSON_ARRAY {
         if v.arr != null {
             for let i: i32 = 0; i < v.arr.len(); i++ {
@@ -153,18 +141,14 @@ fn json_free_contents(v: *JsonValue) {
                 }
                 v.obj_vals.free();
             }
-            if v.obj_keys != null {
-                v.obj_keys.free();
-            }
+            if v.obj_keys != null { v.obj_keys.free(); }
         }
     }
 }
 
 // ---- accessors ----------------------------------------------------------
 pub fn json_get(v: *JsonValue, key: string) -> *JsonValue {
-    if v == null || v.kind != JSON_OBJECT {
-        return null;
-    }
+    if v == null || v.kind != JSON_OBJECT { return null; }
     for let i: i32 = 0; i < v.obj_keys.len(); i++ {
         if v.obj_keys.get(i).eq(key) {
             let val: JsonValue = v.obj_vals.get(i);
@@ -177,12 +161,8 @@ pub fn json_get(v: *JsonValue, key: string) -> *JsonValue {
 }
 
 pub fn json_at(v: *JsonValue, idx: i32) -> *JsonValue {
-    if v == null || v.kind != JSON_ARRAY {
-        return null;
-    }
-    if idx < 0 || idx >= v.arr.len() {
-        return null;
-    }
+    if v == null || v.kind != JSON_ARRAY { return null; }
+    if idx < 0 || idx >= v.arr.len() { return null; }
     let val: JsonValue = v.arr.get(idx);
     let p: *JsonValue = malloc(sizeof(JsonValue)) as *JsonValue;
     *p = val;
@@ -190,33 +170,23 @@ pub fn json_at(v: *JsonValue, idx: i32) -> *JsonValue {
 }
 
 pub fn json_as_string(v: *JsonValue) -> string {
-    if v == null || v.kind != JSON_STRING {
-        return "";
-    }
+    if v == null || v.kind != JSON_STRING { return ""; }
     return v.s;
 }
 
 pub fn json_as_int(v: *JsonValue) -> i32 {
-    if v == null {
-        return 0;
-    }
-    if v.kind == JSON_INT {
-        return v.i;
-    }
+    if v == null { return 0; }
+    if v.kind == JSON_INT { return v.i; }
     return 0;
 }
 
 pub fn json_as_bool(v: *JsonValue) -> bool {
-    if v == null || v.kind != JSON_BOOL {
-        return false;
-    }
+    if v == null || v.kind != JSON_BOOL { return false; }
     return v.b;
 }
 
 pub fn json_is_null(v: *JsonValue) -> bool {
-    if v == null {
-        return true;
-    }
+    if v == null { return true; }
     return v.kind == JSON_NULL;
 }
 
@@ -228,9 +198,7 @@ pub struct JsonParser {
 }
 
 fn jp_peek(p: *JsonParser) -> i32 {
-    if p.pos >= p.n {
-        return -1;
-    }
+    if p.pos >= p.n { return -1; }
     return p.src.at(p.pos).to_int();
 }
 
@@ -248,24 +216,12 @@ fn jp_skip_ws(p: *JsonParser) {
 fn jp_value(p: *JsonParser) -> *JsonValue {
     jp_skip_ws(p);
     let c: i32 = jp_peek(p);
-    if c == 123 {
-        return jp_object(p);
-    } // '{'
-    if c == 91 {
-        return jp_array(p);
-    } // '['
-    if c == 34 {
-        return jp_string_value(p);
-    } // '"'
-    if c == 116 || c == 102 {
-        return jp_bool(p);
-    } // 't' / 'f'
-    if c == 110 {
-        return jp_null(p);
-    } // 'n'
-    if c == 45 || c >= 48 && c <= 57 {
-        return jp_number(p);
-    } // '-' / digit
+    if c == 123 { return jp_object(p); } // '{'
+    if c == 91 { return jp_array(p); } // '['
+    if c == 34 { return jp_string_value(p); } // '"'
+    if c == 116 || c == 102 { return jp_bool(p); } // 't' / 'f'
+    if c == 110 { return jp_null(p); } // 'n'
+    if c == 45 || c >= 48 && c <= 57 { return jp_number(p); } // '-' / digit
     return null;
 }
 
@@ -280,17 +236,11 @@ fn jp_object(p: *JsonParser) -> *JsonValue {
     while p.pos < p.n {
         jp_skip_ws(p);
         let k: *JsonValue = jp_string_value(p);
-        if k == null {
-            return obj;
-        }
+        if k == null { return obj; }
         jp_skip_ws(p);
-        if jp_peek(p) == 58 {
-            p.pos = p.pos + 1;
-        }
+        if jp_peek(p) == 58 { p.pos = p.pos + 1; }
         let mut v: *JsonValue = jp_value(p);
-        if v == null {
-            v = json_null();
-        }
+        if v == null { v = json_null(); }
         obj.obj_keys.push(k.s);
         obj.obj_vals.push(*v);
         jp_skip_ws(p);
@@ -318,9 +268,7 @@ fn jp_array(p: *JsonParser) -> *JsonValue {
     }
     while p.pos < p.n {
         let v: *JsonValue = jp_value(p);
-        if v == null {
-            return arr;
-        }
+        if v == null { return arr; }
         arr.arr.push(*v);
         jp_skip_ws(p);
         let c: i32 = jp_peek(p);
@@ -338,34 +286,24 @@ fn jp_array(p: *JsonParser) -> *JsonValue {
 }
 
 fn jp_string_value(p: *JsonParser) -> *JsonValue {
-    if jp_peek(p) != 34 {
-        return null;
-    }
+    if jp_peek(p) != 34 { return null; }
     p.pos = p.pos + 1;
     let start: i32 = p.pos;
     let mut has_escape: bool = false;
     while p.pos < p.n {
         let c: i32 = jp_peek(p);
-        if c == 34 {
-            break;
-        }
+        if c == 34 { break; }
         if c == 92 {
             has_escape = true;
             p.pos = p.pos + 1;
-            if p.pos < p.n {
-                p.pos = p.pos + 1;
-            }
+            if p.pos < p.n { p.pos = p.pos + 1; }
             continue;
         }
         p.pos = p.pos + 1;
     }
     let raw: string = p.src.substring(start, p.pos);
-    if jp_peek(p) == 34 {
-        p.pos = p.pos + 1;
-    }
-    if !has_escape {
-        return json_string(raw);
-    }
+    if jp_peek(p) == 34 { p.pos = p.pos + 1; }
+    if !has_escape { return json_string(raw); }
     // jp_unescape produces a fresh heap buffer; raw becomes orphaned
     // and would leak the size of the source substring per request
     // (165 KB+ for any LSP didChange on a non-trivial file).
@@ -397,9 +335,7 @@ fn jp_unescape(raw: string) -> string {
             continue;
         }
         i = i + 1;
-        if i >= n {
-            break;
-        }
+        if i >= n { break; }
         let e: i32 = raw.at(i).to_int();
         i = i + 1;
         let mut wc: i32 = -1;
@@ -466,9 +402,7 @@ fn jp_number(p: *JsonParser) -> *JsonValue {
     let mut n: i32 = 0;
     while p.pos < p.n {
         let c: i32 = jp_peek(p);
-        if c < 48 || c > 57 {
-            break;
-        }
+        if c < 48 || c > 57 { break; }
         n = n * 10 + (c - 48);
         p.pos = p.pos + 1;
     }
@@ -477,15 +411,11 @@ fn jp_number(p: *JsonParser) -> *JsonValue {
         p.pos = p.pos + 1;
         while p.pos < p.n {
             let c: i32 = jp_peek(p);
-            if c < 48 || c > 57 {
-                break;
-            }
+            if c < 48 || c > 57 { break; }
             p.pos = p.pos + 1;
         }
     }
-    if neg {
-        n = -n;
-    }
+    if neg { n = -n; }
     return json_int(n);
 }
 
@@ -571,9 +501,7 @@ fn json_emit_into(b: *ByteBuffer, v: *JsonValue) {
         b.push(91 as u8); // [
         let n: i32 = v.arr.len();
         for let i: i32 = 0; i < n; i++ {
-            if i > 0 {
-                b.push(44 as u8);
-            } // ,
+            if i > 0 { b.push(44 as u8); } // ,
             let e: JsonValue = v.arr.get(i);
             json_emit_into(b, &e);
         }
@@ -584,9 +512,7 @@ fn json_emit_into(b: *ByteBuffer, v: *JsonValue) {
         b.push(123 as u8); // {
         let n: i32 = v.obj_keys.len();
         for let i: i32 = 0; i < n; i++ {
-            if i > 0 {
-                b.push(44 as u8);
-            } // ,
+            if i > 0 { b.push(44 as u8); } // ,
             json_escape_into(b, v.obj_keys.get(i));
             b.push(58 as u8); // :
             let val: JsonValue = v.obj_vals.get(i);

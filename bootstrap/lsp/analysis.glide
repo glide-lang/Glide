@@ -19,9 +19,7 @@ fn _is_int_type_name(n: string) -> bool {
     if n.eq("u8") || n.eq("u16") || n.eq("u32") || n.eq("u64") || n.eq("u128") || n.eq("u256") {
         return true;
     }
-    if n.eq("usize") || n.eq("isize") {
-        return true;
-    }
+    if n.eq("usize") || n.eq("isize") { return true; }
     return false;
 }
 
@@ -30,106 +28,60 @@ fn _is_int_type_name(n: string) -> bool {
 // Result-shaped fields (a bare literal must be wrapped in some()/ok()/etc).
 // Generic / struct / pointer fields are never false-flagged.
 fn _lit_field_mismatch(vk: i32, fty: *Type) -> bool {
-    if fty == null {
-        return false;
-    }
+    if fty == null { return false; }
     let is_lit: bool = vk == EX_INT || vk == EX_STRING || vk == EX_BOOL || vk == EX_FLOAT || vk == EX_CHAR;
     // `?T` / `!T` / `?!T` field: a raw literal silently mis-stores into the
     // wrapper, so it must go through a ctor. Any literal is a mismatch.
     if fty.kind == TY_OPTION || fty.kind == TY_RESULT || fty.kind == TY_OPT_RESULT {
         return is_lit;
     }
-    if fty.kind != TY_NAMED {
-        return false;
-    }
+    if fty.kind != TY_NAMED { return false; }
     let tn: string = fty.name;
     let is_str: bool = tn.eq("string");
     let is_bool: bool = tn.eq("bool");
     let is_char: bool = tn.eq("char");
     let is_float: bool = tn.eq("f32") || tn.eq("f64");
     let is_int: bool = _is_int_type_name(tn);
-    if !(is_str || is_bool || is_char || is_float || is_int) {
-        return false;
-    }
-    if vk == EX_STRING {
-        return !is_str;
-    }
-    if vk == EX_BOOL {
-        return !is_bool;
-    }
-    if vk == EX_CHAR {
-        return !is_char;
-    }
-    if vk == EX_FLOAT {
-        return !is_float;
-    }
-    if vk == EX_INT {
-        return !(is_int || is_float);
-    }
+    if !(is_str || is_bool || is_char || is_float || is_int) { return false; }
+    if vk == EX_STRING { return !is_str; }
+    if vk == EX_BOOL { return !is_bool; }
+    if vk == EX_CHAR { return !is_char; }
+    if vk == EX_FLOAT { return !is_float; }
+    if vk == EX_INT { return !(is_int || is_float); }
     return false;
 }
 
 fn _lit_kind_name(vk: i32) -> string {
-    if vk == EX_STRING {
-        return "a string literal";
-    }
-    if vk == EX_BOOL {
-        return "a bool literal";
-    }
-    if vk == EX_CHAR {
-        return "a char literal";
-    }
-    if vk == EX_FLOAT {
-        return "a float literal";
-    }
-    if vk == EX_INT {
-        return "an integer literal";
-    }
+    if vk == EX_STRING { return "a string literal"; }
+    if vk == EX_BOOL { return "a bool literal"; }
+    if vk == EX_CHAR { return "a char literal"; }
+    if vk == EX_FLOAT { return "a float literal"; }
+    if vk == EX_INT { return "an integer literal"; }
     return "a literal";
 }
 
 // Literal kind without a leading article, for "never a bare <kind>" phrasing.
 fn _lit_kind_bare(vk: i32) -> string {
-    if vk == EX_STRING {
-        return "string literal";
-    }
-    if vk == EX_BOOL {
-        return "bool literal";
-    }
-    if vk == EX_CHAR {
-        return "char literal";
-    }
-    if vk == EX_FLOAT {
-        return "float literal";
-    }
-    if vk == EX_INT {
-        return "integer literal";
-    }
+    if vk == EX_STRING { return "string literal"; }
+    if vk == EX_BOOL { return "bool literal"; }
+    if vk == EX_CHAR { return "char literal"; }
+    if vk == EX_FLOAT { return "float literal"; }
+    if vk == EX_INT { return "integer literal"; }
     return "literal";
 }
 
 // Reconstruct a literal expression's source text, for quoting the exact
 // value back to the user in a fix suggestion (e.g. `some(32)`).
 fn _lit_text(e: *Expr) -> string {
-    if e == null {
-        return "value";
-    }
-    if e.kind == EX_INT {
-        return int_to_str(e.int_val);
-    }
-    if e.kind == EX_STRING {
-        return "\"".concat(e.str_val).concat("\"");
-    }
+    if e == null { return "value"; }
+    if e.kind == EX_INT { return int_to_str(e.int_val); }
+    if e.kind == EX_STRING { return "\"".concat(e.str_val).concat("\""); }
     if e.kind == EX_BOOL {
-        if e.bool_val {
-            return "true";
-        }
+        if e.bool_val { return "true"; }
         return "false";
     }
     if e.kind == EX_FLOAT {
-        if e.float_val != null && !e.float_val.eq("") {
-            return e.float_val;
-        }
+        if e.float_val != null && !e.float_val.eq("") { return e.float_val; }
         return "0.0";
     }
     return "value";
@@ -138,9 +90,7 @@ fn _lit_text(e: *Expr) -> string {
 // Walk an expression; for every `Struct { field: value }` literal, flag
 // unknown field names and literal values whose type can't match the field.
 fn _struct_lit_check_expr(t: *Typer, stmts: *Vector<Stmt>, e: *Expr) {
-    if e == null {
-        return;
-    }
+    if e == null { return; }
     if e.kind == EX_STRUCT_LIT && e.str_val != null && e.field_names != null && e.args != null {
         // A qualified literal (`pkg::MyStruct { ... }`) arrives with the full
         // `pkg::MyStruct` name; strip the module prefix so the struct decl is
@@ -149,9 +99,7 @@ fn _struct_lit_check_expr(t: *Typer, stmts: *Vector<Stmt>, e: *Expr) {
         if sd != null && sd.kind == ST_STRUCT && sd.struct_fields != null {
             let nf: i32 = e.field_names.len();
             for let i: i32 = 0; i < nf; i++ {
-                if i >= e.args.len() {
-                    break;
-                }
+                if i >= e.args.len() { break; }
                 let fname: string = e.field_names.get(i);
                 let val: Expr = e.args.get(i);
                 let mut fty: *Type = null;
@@ -198,35 +146,23 @@ fn _struct_lit_check_expr(t: *Typer, stmts: *Vector<Stmt>, e: *Expr) {
             }
             for let j: i32 = 0; j < sd.struct_fields.len(); j++ {
                 let fd: Field = sd.struct_fields.get(j);
-                if fd.name == null || fd.name.eq("") {
-                    continue;
-                }
-                if present.contains(fd.name) {
-                    continue;
-                }
+                if fd.name == null || fd.name.eq("") { continue; }
+                if present.contains(fd.name) { continue; }
                 if fd.ty != null && (fd.ty.kind == TY_OPTION || fd.ty.kind == TY_OPT_RESULT) {
                     continue;
                 }
                 // A private field can't be set from another file, so omitting
                 // it there is correct — the struct's own file initializes it.
                 // It is only "missing" (required) inside its own file.
-                if !fd.is_pub && sd.origin != null && !sd.origin.eq(t.current_origin) {
-                    continue;
-                }
+                if !fd.is_pub && sd.origin != null && !sd.origin.eq(t.current_origin) { continue; }
                 t.err_code_range(e.line, e.column, e.str_val.len(), "missing-struct-field", "struct `".concat(e.str_val).concat("` literal is missing field `").concat(fd.name).concat("`"));
             }
             present.free();
         }
     }
-    if e.lhs != null {
-        _struct_lit_check_expr(t, stmts, e.lhs);
-    }
-    if e.rhs != null {
-        _struct_lit_check_expr(t, stmts, e.rhs);
-    }
-    if e.operand != null {
-        _struct_lit_check_expr(t, stmts, e.operand);
-    }
+    if e.lhs != null { _struct_lit_check_expr(t, stmts, e.lhs); }
+    if e.rhs != null { _struct_lit_check_expr(t, stmts, e.rhs); }
+    if e.operand != null { _struct_lit_check_expr(t, stmts, e.operand); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
@@ -236,32 +172,18 @@ fn _struct_lit_check_expr(t: *Typer, stmts: *Vector<Stmt>, e: *Expr) {
 }
 
 fn _struct_lit_check_body(t: *Typer, stmts: *Vector<Stmt>, body: *Vector<Stmt>) {
-    if body == null {
-        return;
-    }
+    if body == null { return; }
     for let i: i32 = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
-        if s.let_value != null {
-            _struct_lit_check_expr(t, stmts, s.let_value);
-        }
-        if s.expr_value != null {
-            _struct_lit_check_expr(t, stmts, s.expr_value);
-        }
-        if s.cond != null {
-            _struct_lit_check_expr(t, stmts, s.cond);
-        }
-        if s.for_step != null {
-            _struct_lit_check_expr(t, stmts, s.for_step);
-        }
+        if s.let_value != null { _struct_lit_check_expr(t, stmts, s.let_value); }
+        if s.expr_value != null { _struct_lit_check_expr(t, stmts, s.expr_value); }
+        if s.cond != null { _struct_lit_check_expr(t, stmts, s.cond); }
+        if s.for_step != null { _struct_lit_check_expr(t, stmts, s.for_step); }
         if s.for_init != null && s.for_init.let_value != null {
             _struct_lit_check_expr(t, stmts, s.for_init.let_value);
         }
-        if s.then_body != null {
-            _struct_lit_check_body(t, stmts, s.then_body);
-        }
-        if s.else_body != null {
-            _struct_lit_check_body(t, stmts, s.else_body);
-        }
+        if s.then_body != null { _struct_lit_check_body(t, stmts, s.then_body); }
+        if s.else_body != null { _struct_lit_check_body(t, stmts, s.else_body); }
     }
 }
 
@@ -280,9 +202,7 @@ pub fn analysis_struct_lit_fields(t: *Typer, stmts: *Vector<Stmt>) {
                     let m: Stmt = s.impl_methods.get(j);
                     if m.kind == ST_FN && m.fn_body != null {
                         let mut org: string = m.origin;
-                        if org == null || org.eq("") {
-                            org = s.origin;
-                        }
+                        if org == null || org.eq("") { org = s.origin; }
                         t.current_origin = org;
                         _struct_lit_check_body(t, stmts, m.fn_body);
                     }
@@ -297,42 +217,28 @@ pub fn analysis_trait_conformance(t: *Typer, stmts: *Vector<Stmt>) {
     let traits: *HashMap<Stmt> = HashMap::new();
     for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
-        if s.kind == ST_TRAIT && s.name != null && !s.name.eq("") {
-            traits.insert(s.name, s);
-        }
+        if s.kind == ST_TRAIT && s.name != null && !s.name.eq("") { traits.insert(s.name, s); }
     }
     // Build a `<trait>::<type>` set so we can check supertraits in O(1).
     let impl_set: *HashMap<bool> = HashMap::new();
     for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
-        if s.kind != ST_IMPL {
-            continue;
-        }
-        if s.impl_trait_name == null || s.impl_trait_name.eq("") {
-            continue;
-        }
-        if s.impl_target == null || s.impl_target.kind != TY_NAMED {
-            continue;
-        }
+        if s.kind != ST_IMPL { continue; }
+        if s.impl_trait_name == null || s.impl_trait_name.eq("") { continue; }
+        if s.impl_target == null || s.impl_target.kind != TY_NAMED { continue; }
         impl_set.insert(s.impl_trait_name.concat("::").concat(s.impl_target.name), true);
     }
     // Second pass: validate each `impl Trait for Type`.
     for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
-        if s.kind != ST_IMPL {
-            continue;
-        }
+        if s.kind != ST_IMPL { continue; }
         // Synthesized impls (proc-macro / @derive output, emitted at line 0)
         // are the compiler's job to validate. The LSP parses imported bodies
         // header-only, so a proc-derive's helper fns are empty here and the
         // generated impl comes out method-less — flagging it would be a false
         // positive. The real `glide build` expands and checks it for real.
-        if s.line <= 0 {
-            continue;
-        }
-        if s.impl_trait_name == null || s.impl_trait_name.eq("") {
-            continue;
-        }
+        if s.line <= 0 { continue; }
+        if s.impl_trait_name == null || s.impl_trait_name.eq("") { continue; }
         if !traits.contains(s.impl_trait_name) {
             t.current_origin = s.origin;
             t.err_code_range(s.line, s.column, 4, "unknown-trait", "trait `".concat(s.impl_trait_name).concat("` is not declared"));
@@ -355,18 +261,14 @@ pub fn analysis_trait_conformance(t: *Typer, stmts: *Vector<Stmt>) {
                 }
             }
         }
-        if trait_def.impl_methods == null {
-            continue;
-        }
+        if trait_def.impl_methods == null { continue; }
         // Build a name-indexed lookup of impl methods so we can match each
         // trait method to its implementation and compare signatures.
         let provided: *HashMap<Stmt> = HashMap::new();
         if s.impl_methods != null {
             for let k: i32 = 0; k < s.impl_methods.len(); k++ {
                 let m: Stmt = s.impl_methods.get(k);
-                if m.name != null {
-                    provided.insert(m.name, m);
-                }
+                if m.name != null { provided.insert(m.name, m); }
             }
         }
         let mut target_name: string = "?";
@@ -375,9 +277,7 @@ pub fn analysis_trait_conformance(t: *Typer, stmts: *Vector<Stmt>) {
         }
         for let k: i32 = 0; k < trait_def.impl_methods.len(); k++ {
             let req: Stmt = trait_def.impl_methods.get(k);
-            if req.name == null || req.name.eq("") {
-                continue;
-            }
+            if req.name == null || req.name.eq("") { continue; }
             if !provided.contains(req.name) {
                 t.current_origin = s.origin;
                 t.err_code_range(s.line, s.column, 4, "missing-trait-method", "impl of trait `".concat(s.impl_trait_name).concat("` for `").concat(target_name).concat("` is missing method `").concat(req.name).concat("`"));
@@ -430,38 +330,24 @@ fn check_method_signature(t: *Typer, impl_stmt: Stmt, req: Stmt, got: Stmt, _tar
 // that against the impl's own `type Item = X;` declarations. Returns a fresh
 // node — must NOT mutate the input (shared across impls).
 fn subst_assoc(t: *Type, assocs: *Vector<Param>) -> *Type {
-    if t == null {
-        return null;
-    }
-    if assocs == null {
-        return t;
-    }
+    if t == null { return null; }
+    if assocs == null { return t; }
     if t.kind == TY_ASSOC {
         for let i: i32 = 0; i < assocs.len(); i++ {
             let a: Param = assocs.get(i);
-            if a.name.eq(t.name) {
-                return a.ty;
-            }
+            if a.name.eq(t.name) { return a.ty; }
         }
     }
-    if t.inner == null && t.fnptr_ret == null {
-        return t;
-    }
+    if t.inner == null && t.fnptr_ret == null { return t; }
     let copy: *Type = malloc(sizeof(Type)) as *Type;
     *copy = *t;
-    if copy.inner != null {
-        copy.inner = subst_assoc(copy.inner, assocs);
-    }
-    if copy.fnptr_ret != null {
-        copy.fnptr_ret = subst_assoc(copy.fnptr_ret, assocs);
-    }
+    if copy.inner != null { copy.inner = subst_assoc(copy.inner, assocs); }
+    if copy.fnptr_ret != null { copy.fnptr_ret = subst_assoc(copy.fnptr_ret, assocs); }
     return copy;
 }
 
 fn if_param_count(s: Stmt) -> i32 {
-    if s.fn_params == null {
-        return 0;
-    }
+    if s.fn_params == null { return 0; }
     return s.fn_params.len();
 }
 
@@ -469,26 +355,14 @@ fn if_param_count(s: Stmt) -> i32 {
 // else untouched. Returns a fresh node — must NOT mutate the input, since
 // the trait sig is shared across every impl that names the trait.
 fn subst_self(t: *Type, impl_target: *Type) -> *Type {
-    if t == null {
-        return null;
-    }
-    if impl_target == null {
-        return t;
-    }
-    if t.kind == TY_NAMED && t.name.eq("Self") {
-        return impl_target;
-    }
-    if t.inner == null && t.fnptr_ret == null {
-        return t;
-    }
+    if t == null { return null; }
+    if impl_target == null { return t; }
+    if t.kind == TY_NAMED && t.name.eq("Self") { return impl_target; }
+    if t.inner == null && t.fnptr_ret == null { return t; }
     let copy: *Type = malloc(sizeof(Type)) as *Type;
     *copy = *t;
-    if copy.inner != null {
-        copy.inner = subst_self(copy.inner, impl_target);
-    }
-    if copy.fnptr_ret != null {
-        copy.fnptr_ret = subst_self(copy.fnptr_ret, impl_target);
-    }
+    if copy.inner != null { copy.inner = subst_self(copy.inner, impl_target); }
+    if copy.fnptr_ret != null { copy.fnptr_ret = subst_self(copy.fnptr_ret, impl_target); }
     return copy;
 }
 
@@ -498,9 +372,7 @@ fn subst_self(t: *Type, impl_target: *Type) -> *Type {
 pub fn analysis_unused_vars(t: *Typer, program: *Vector<Stmt>) {
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind != ST_FN || s.fn_body == null {
-            continue;
-        }
+        if s.kind != ST_FN || s.fn_body == null { continue; }
         t.current_origin = s.origin;
         check_unused_in_body(t, s.fn_body);
     }
@@ -514,16 +386,10 @@ fn check_unused_in_body(t: *Typer, body: *Vector<Stmt>) {
             let name: string = s.name;
             // Tuple destructuring (`let (a, b) = ...`) has no single binder
             // name; element positions aren't tracked, so skip the lint.
-            if s.let_names != null && s.let_names.len() > 0 {
-                continue;
-            }
+            if s.let_names != null && s.let_names.len() > 0 { continue; }
             // Skip names beginning with `_` (intentional discard convention).
-            if name.len() == 0 {
-                continue;
-            }
-            if name.len() > 0 && name.at(0).to_int() == 95 {
-                continue;
-            }
+            if name.len() == 0 { continue; }
+            if name.len() > 0 && name.at(0).to_int() == 95 { continue; }
             let mut used: bool = false;
             for let j: i32 = i + 1; j < n; j++ {
                 let s2: Stmt = body.get(j);
@@ -537,18 +403,12 @@ fn check_unused_in_body(t: *Typer, body: *Vector<Stmt>) {
             }
         }
         // Recurse into nested bodies.
-        if s.then_body != null {
-            check_unused_in_body(t, s.then_body);
-        }
-        if s.else_body != null {
-            check_unused_in_body(t, s.else_body);
-        }
+        if s.then_body != null { check_unused_in_body(t, s.then_body); }
+        if s.else_body != null { check_unused_in_body(t, s.else_body); }
         if s.kind == ST_SELECT && s.select_arms != null {
             for let k: i32 = 0; k < s.select_arms.len(); k++ {
                 let arm: SelectArm = s.select_arms.get(k);
-                if arm.body != null {
-                    check_unused_in_body(t, arm.body);
-                }
+                if arm.body != null { check_unused_in_body(t, arm.body); }
             }
         }
     }
@@ -564,12 +424,8 @@ fn check_unused_in_body(t: *Typer, body: *Vector<Stmt>) {
 pub fn analysis_arena_not_freed(t: *Typer, program: *Vector<Stmt>) {
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind != ST_FN || s.fn_body == null {
-            continue;
-        }
-        if _has_allow(&s, "unfreed-alloc") || _has_allow(&s, "arena-not-freed") {
-            continue;
-        }
+        if s.kind != ST_FN || s.fn_body == null { continue; }
+        if _has_allow(&s, "unfreed-alloc") || _has_allow(&s, "arena-not-freed") { continue; }
         t.current_origin = s.origin;
         check_arena_in_body(t, s.fn_body, s.fn_body, false);
     }
@@ -584,47 +440,33 @@ fn check_arena_in_body(t: *Typer, body: *Vector<Stmt>, root: *Vector<Stmt>, supp
             // itself silences the warning without polluting the
             // enclosing fn. Either alias is recognised. The `suppress`
             // flag propagates a parent block's `@allow`.
-            if suppress {
-                continue;
-            }
-            if _has_allow(&s, "unfreed-alloc") || _has_allow(&s, "arena-not-freed") {
-                continue;
-            }
+            if suppress { continue; }
+            if _has_allow(&s, "unfreed-alloc") || _has_allow(&s, "arena-not-freed") { continue; }
             let kind: i32 = _alloc_kind(s.let_value);
             if kind != 0 {
                 // Scan the entire fn body (not just the current block) so a
                 // `defer foo.free()` registered in a nested if/while still counts.
-                if alloc_is_freed_in_body(s.name, kind, root) {
-                    continue;
-                }
+                if alloc_is_freed_in_body(s.name, kind, root) { continue; }
                 // Heuristic ownership-escape suppression. If the
                 // resource is stored in a struct field, pushed into a
                 // container, or handed to any non-free fn, we assume
                 // the receiver takes over the lifetime. The warning
                 // only fires for true "let, never reference again,
                 // never free" cases.
-                if alloc_escapes_in_body(s.name, kind, root) {
-                    continue;
-                }
+                if alloc_escapes_in_body(s.name, kind, root) { continue; }
                 t.warn_range(s.name_line, s.name_col, s.name.len(), _alloc_code(kind), _alloc_msg(kind, s.name));
             }
         }
         // Block-level `@allow("...")` on if/while/for/block/etc. — add
         // it to the active suppression set for the recursive walk.
         let sub_suppress: bool = suppress || _has_allow(&s, "unfreed-alloc") || _has_allow(&s, "arena-not-freed");
-        if s.then_body != null {
-            check_arena_in_body(t, s.then_body, root, sub_suppress);
-        }
-        if s.else_body != null {
-            check_arena_in_body(t, s.else_body, root, sub_suppress);
-        }
+        if s.then_body != null { check_arena_in_body(t, s.then_body, root, sub_suppress); }
+        if s.else_body != null { check_arena_in_body(t, s.else_body, root, sub_suppress); }
     }
 }
 
 fn _alloc_code(kind: i32) -> string {
-    if kind == 1 {
-        return "arena-not-freed";
-    }
+    if kind == 1 { return "arena-not-freed"; }
     return "unfreed-alloc";
 }
 
@@ -642,111 +484,69 @@ fn alloc_is_freed_in_body(name: string, kind: i32, body: *Vector<Stmt>) -> bool 
     let n: i32 = body.len();
     for let i: i32 = 0; i < n; i++ {
         let s: Stmt = body.get(i);
-        if stmt_frees_resource(&s, name, kind) {
-            return true;
-        }
+        if stmt_frees_resource(&s, name, kind) { return true; }
     }
     return false;
 }
 
 fn stmt_frees_resource(s: *Stmt, name: string, kind: i32) -> bool {
-    if s == null {
-        return false;
-    }
+    if s == null { return false; }
     if kind == 1 {
-        if stmt_calls_method(s, name, "free") {
-            return true;
-        }
+        if stmt_calls_method(s, name, "free") { return true; }
     }
     if kind == 2 {
-        if stmt_calls_fn_with(s, "free", name) {
-            return true;
-        }
+        if stmt_calls_fn_with(s, "free", name) { return true; }
     }
     if kind == 3 {
-        if stmt_calls_fn_with(s, "__glide_palloc_free", name) {
-            return true;
-        }
+        if stmt_calls_fn_with(s, "__glide_palloc_free", name) { return true; }
     }
     // Returning the resource counts as ownership transfer.
-    if s.expr_value != null && expr_returns_ident(s.expr_value, name) {
-        return true;
-    }
+    if s.expr_value != null && expr_returns_ident(s.expr_value, name) { return true; }
     return false;
 }
 
 fn stmt_calls_fn_with(s: *Stmt, fn_name: string, arg_name: string) -> bool {
-    if s == null {
-        return false;
-    }
-    if s.expr_value != null && expr_calls_fn_with(s.expr_value, fn_name, arg_name) {
-        return true;
-    }
-    if s.let_value != null && expr_calls_fn_with(s.let_value, fn_name, arg_name) {
-        return true;
-    }
-    if s.cond != null && expr_calls_fn_with(s.cond, fn_name, arg_name) {
-        return true;
-    }
+    if s == null { return false; }
+    if s.expr_value != null && expr_calls_fn_with(s.expr_value, fn_name, arg_name) { return true; }
+    if s.let_value != null && expr_calls_fn_with(s.let_value, fn_name, arg_name) { return true; }
+    if s.cond != null && expr_calls_fn_with(s.cond, fn_name, arg_name) { return true; }
     if s.then_body != null {
         for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
-            if stmt_calls_fn_with(&b, fn_name, arg_name) {
-                return true;
-            }
+            if stmt_calls_fn_with(&b, fn_name, arg_name) { return true; }
         }
     }
     if s.else_body != null {
         for let i: i32 = 0; i < s.else_body.len(); i++ {
             let b: Stmt = s.else_body.get(i);
-            if stmt_calls_fn_with(&b, fn_name, arg_name) {
-                return true;
-            }
+            if stmt_calls_fn_with(&b, fn_name, arg_name) { return true; }
         }
     }
     return false;
 }
 
 fn expr_returns_ident(e: *Expr, name: string) -> bool {
-    if e == null {
-        return false;
-    }
-    if e.kind == EX_IDENT && e.str_val.eq(name) {
-        return true;
-    }
+    if e == null { return false; }
+    if e.kind == EX_IDENT && e.str_val.eq(name) { return true; }
     return false;
 }
 
 fn stmt_calls_method(s: *Stmt, var: string, method: string) -> bool {
-    if s == null {
-        return false;
-    }
-    if s.expr_value != null && expr_calls_method(s.expr_value, var, method) {
-        return true;
-    }
-    if s.let_value != null && expr_calls_method(s.let_value, var, method) {
-        return true;
-    }
-    if s.cond != null && expr_calls_method(s.cond, var, method) {
-        return true;
-    }
-    if s.for_step != null && expr_calls_method(s.for_step, var, method) {
-        return true;
-    }
+    if s == null { return false; }
+    if s.expr_value != null && expr_calls_method(s.expr_value, var, method) { return true; }
+    if s.let_value != null && expr_calls_method(s.let_value, var, method) { return true; }
+    if s.cond != null && expr_calls_method(s.cond, var, method) { return true; }
+    if s.for_step != null && expr_calls_method(s.for_step, var, method) { return true; }
     if s.then_body != null {
         for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
-            if stmt_calls_method(&b, var, method) {
-                return true;
-            }
+            if stmt_calls_method(&b, var, method) { return true; }
         }
     }
     if s.else_body != null {
         for let i: i32 = 0; i < s.else_body.len(); i++ {
             let b: Stmt = s.else_body.get(i);
-            if stmt_calls_method(&b, var, method) {
-                return true;
-            }
+            if stmt_calls_method(&b, var, method) { return true; }
         }
     }
     return false;
@@ -767,9 +567,7 @@ pub fn analysis_addr_of_temporary(t: *Typer, program: *Vector<Stmt>) {
             t.current_origin = s.origin;
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                if m.fn_body != null {
-                    check_addr_temp_body(t, m.fn_body);
-                }
+                if m.fn_body != null { check_addr_temp_body(t, m.fn_body); }
             }
         }
     }
@@ -780,16 +578,14 @@ fn check_addr_temp_body(t: *Typer, body: *Vector<Stmt>) {
         let s: Stmt = body.get(i);
         if s.kind == ST_RETURN && s.expr_value != null {
             let e: *Expr = s.expr_value;
-            if e.kind == EX_UNARY && (e.op_code == UN_ADDR || e.op_code == UN_ADDR_MUT) && e.operand != null && (e.operand.kind == EX_STRUCT_LIT || e.operand.kind == EX_NEW) {
+            if e.kind == EX_UNARY && (e.op_code == UN_ADDR || e.op_code == UN_ADDR_MUT)
+                && e.operand != null
+                && (e.operand.kind == EX_STRUCT_LIT || e.operand.kind == EX_NEW) {
                 t.err_code_range(e.line, e.column, _expr_span(e), "addr-of-temporary", "cannot return address of a temporary value (would dangle); use `new T { ... }` to heap-allocate or return by value");
             }
         }
-        if s.then_body != null {
-            check_addr_temp_body(t, s.then_body);
-        }
-        if s.else_body != null {
-            check_addr_temp_body(t, s.else_body);
-        }
+        if s.then_body != null { check_addr_temp_body(t, s.then_body); }
+        if s.else_body != null { check_addr_temp_body(t, s.else_body); }
     }
 }
 
@@ -806,9 +602,7 @@ pub fn analysis_dead_code(t: *Typer, program: *Vector<Stmt>) {
             t.current_origin = s.origin;
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                if m.fn_body != null {
-                    check_dead_code_body(t, m.fn_body);
-                }
+                if m.fn_body != null { check_dead_code_body(t, m.fn_body); }
             }
         }
     }
@@ -823,16 +617,10 @@ fn check_dead_code_body(t: *Typer, body: *Vector<Stmt>) {
             t.warn_unused(s.line, s.column, "dead-code", "unreachable code after return / break / continue");
             return; // flag only the first dead stmt per block
         }
-        if s.kind == ST_RETURN || s.kind == ST_BREAK || s.kind == ST_CONTINUE {
-            terminated = true;
-        }
+        if s.kind == ST_RETURN || s.kind == ST_BREAK || s.kind == ST_CONTINUE { terminated = true; }
         // Recurse into nested bodies regardless.
-        if s.then_body != null {
-            check_dead_code_body(t, s.then_body);
-        }
-        if s.else_body != null {
-            check_dead_code_body(t, s.else_body);
-        }
+        if s.then_body != null { check_dead_code_body(t, s.then_body); }
+        if s.else_body != null { check_dead_code_body(t, s.else_body); }
     }
 }
 
@@ -842,41 +630,23 @@ pub fn analysis_unused_fn(t: *Typer, program: *Vector<Stmt>) {
     let called: *HashMap<bool> = HashMap::new();
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind == ST_FN && s.fn_body != null {
-            collect_calls_body(s.fn_body, called);
-        }
+        if s.kind == ST_FN && s.fn_body != null { collect_calls_body(s.fn_body, called); }
         if s.kind == ST_IMPL && s.impl_methods != null {
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                if m.fn_body != null {
-                    collect_calls_body(m.fn_body, called);
-                }
+                if m.fn_body != null { collect_calls_body(m.fn_body, called); }
             }
         }
     }
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind != ST_FN {
-            continue;
-        }
-        if s.fn_body == null {
-            continue;
-        } // extern
-        if s.is_pub {
-            continue;
-        } // public API
-        if s.name.eq("main") {
-            continue;
-        }
-        if s.type_params != null && s.type_params.len() > 0 {
-            continue;
-        } // generic, may be referenced indirectly
-        if called.contains(s.name) {
-            continue;
-        }
-        if t.dup_flagged.contains(s.name) {
-            continue;
-        }
+        if s.kind != ST_FN { continue; }
+        if s.fn_body == null { continue; } // extern
+        if s.is_pub { continue; } // public API
+        if s.name.eq("main") { continue; }
+        if s.type_params != null && s.type_params.len() > 0 { continue; } // generic, may be referenced indirectly
+        if called.contains(s.name) { continue; }
+        if t.dup_flagged.contains(s.name) { continue; }
         t.current_origin = s.origin;
         t.warn_unused_range(s.name_line, s.name_col, s.name_len, "unused-fn", "function `".concat(s.name).concat("` is never called"));
     }
@@ -891,24 +661,12 @@ fn collect_calls_body(body: *Vector<Stmt>, out: *HashMap<bool>) {
 }
 
 fn collect_calls_stmt(s: *Stmt, out: *HashMap<bool>) {
-    if s == null {
-        return;
-    }
-    if s.let_value != null {
-        collect_calls_expr(s.let_value, out);
-    }
-    if s.expr_value != null {
-        collect_calls_expr(s.expr_value, out);
-    }
-    if s.cond != null {
-        collect_calls_expr(s.cond, out);
-    }
-    if s.for_step != null {
-        collect_calls_expr(s.for_step, out);
-    }
-    if s.for_init != null {
-        collect_calls_stmt(s.for_init, out);
-    }
+    if s == null { return; }
+    if s.let_value != null { collect_calls_expr(s.let_value, out); }
+    if s.expr_value != null { collect_calls_expr(s.expr_value, out); }
+    if s.cond != null { collect_calls_expr(s.cond, out); }
+    if s.for_step != null { collect_calls_expr(s.for_step, out); }
+    if s.for_init != null { collect_calls_stmt(s.for_init, out); }
     if s.then_body != null {
         for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
@@ -923,15 +681,11 @@ fn collect_calls_stmt(s: *Stmt, out: *HashMap<bool>) {
     }
     // `match` statement: the scrutinee and every arm body carry calls too. Without
     // this a fn called only inside a match is wrongly reported "never called".
-    if s.scrutinee != null {
-        collect_calls_expr(s.scrutinee, out);
-    }
+    if s.scrutinee != null { collect_calls_expr(s.scrutinee, out); }
     if s.arms != null {
         for let i: i32 = 0; i < s.arms.len(); i++ {
             let a: MatchArm = s.arms.get(i);
-            if a.lit != null {
-                collect_calls_expr(a.lit, out);
-            }
+            if a.lit != null { collect_calls_expr(a.lit, out); }
             if a.body != null {
                 for let k: i32 = 0; k < a.body.len(); k++ {
                     let ab: Stmt = a.body.get(k);
@@ -943,38 +697,24 @@ fn collect_calls_stmt(s: *Stmt, out: *HashMap<bool>) {
 }
 
 fn collect_calls_expr(e: *Expr, out: *HashMap<bool>) {
-    if e == null {
-        return;
-    }
+    if e == null { return; }
     if e.kind == EX_CALL && e.lhs != null {
-        if e.lhs.kind == EX_IDENT {
-            out.insert(e.lhs.str_val, true);
-        }
+        if e.lhs.kind == EX_IDENT { out.insert(e.lhs.str_val, true); }
         if e.lhs.kind == EX_PATH {
             out.insert(e.lhs.str_val.concat("_").concat(e.lhs.field), true);
             out.insert(e.lhs.field, true);
         }
-        if e.lhs.kind == EX_MEMBER {
-            out.insert(e.lhs.field, true);
-        }
+        if e.lhs.kind == EX_MEMBER { out.insert(e.lhs.field, true); }
     }
     // Any free-standing identifier reference counts as a use too — covers
     // function pointers passed as args (`http_listen(8090, my_handler)`)
     // or stored in structs / vectors. False positives (a non-fn variable
     // happening to share a name) only suppress the warning, which is the
     // safer failure mode.
-    if e.kind == EX_IDENT {
-        out.insert(e.str_val, true);
-    }
-    if e.lhs != null {
-        collect_calls_expr(e.lhs, out);
-    }
-    if e.rhs != null {
-        collect_calls_expr(e.rhs, out);
-    }
-    if e.operand != null {
-        collect_calls_expr(e.operand, out);
-    }
+    if e.kind == EX_IDENT { out.insert(e.str_val, true); }
+    if e.lhs != null { collect_calls_expr(e.lhs, out); }
+    if e.rhs != null { collect_calls_expr(e.rhs, out); }
+    if e.operand != null { collect_calls_expr(e.operand, out); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
@@ -986,9 +726,7 @@ fn collect_calls_expr(e: *Expr, out: *HashMap<bool>) {
     if e.match_arms != null {
         for let i: i32 = 0; i < e.match_arms.len(); i++ {
             let ma: MatchArm = e.match_arms.get(i);
-            if ma.lit != null {
-                collect_calls_expr(ma.lit, out);
-            }
+            if ma.lit != null { collect_calls_expr(ma.lit, out); }
             if ma.body != null {
                 for let k: i32 = 0; k < ma.body.len(); k++ {
                     let mb: Stmt = ma.body.get(k);
@@ -1009,18 +747,14 @@ pub fn analysis_unnecessary_mut(t: *Typer, program: *Vector<Stmt>) {
     let mutself: *HashMap<bool> = HashMap::new();
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind != ST_IMPL || s.impl_methods == null {
-            continue;
-        }
+        if s.kind != ST_IMPL || s.impl_methods == null { continue; }
         for let j: i32 = 0; j < s.impl_methods.len(); j++ {
             let m: Stmt = s.impl_methods.get(j);
             if m.kind != ST_FN || m.name == null || m.fn_params == null || m.fn_params.len() == 0 {
                 continue;
             }
             let p0: Param = m.fn_params.get(0);
-            if p0.ty != null && p0.ty.kind == TY_BORROW_MUT {
-                mutself.insert(m.name, true);
-            }
+            if p0.ty != null && p0.ty.kind == TY_BORROW_MUT { mutself.insert(m.name, true); }
         }
     }
     for let i: i32 = 0; i < program.len(); i++ {
@@ -1033,9 +767,7 @@ pub fn analysis_unnecessary_mut(t: *Typer, program: *Vector<Stmt>) {
             t.current_origin = s.origin;
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                if m.fn_body != null {
-                    check_mut_body(t, m.fn_body, mutself);
-                }
+                if m.fn_body != null { check_mut_body(t, m.fn_body, mutself); }
             }
         }
     }
@@ -1060,53 +792,33 @@ fn check_mut_body(t: *Typer, body: *Vector<Stmt>, mutself: *HashMap<bool>) {
                 t.warn_with_fix(s.name_line, s.name_col, s.name.len(), "unnecessary-mut", "`mut` on `".concat(s.name).concat("` is unnecessary; binding is never reassigned"), s.name_line, s.name_col - 4, s.name_line, s.name_col, "");
             }
         }
-        if s.then_body != null {
-            check_mut_body(t, s.then_body, mutself);
-        }
-        if s.else_body != null {
-            check_mut_body(t, s.else_body, mutself);
-        }
+        if s.then_body != null { check_mut_body(t, s.then_body, mutself); }
+        if s.else_body != null { check_mut_body(t, s.else_body, mutself); }
         if s.kind == ST_SELECT && s.select_arms != null {
             for let k: i32 = 0; k < s.select_arms.len(); k++ {
                 let arm: SelectArm = s.select_arms.get(k);
-                if arm.body != null {
-                    check_mut_body(t, arm.body, mutself);
-                }
+                if arm.body != null { check_mut_body(t, arm.body, mutself); }
             }
         }
     }
 }
 
 fn stmt_reassigns(s: *Stmt, name: string, mutself: *HashMap<bool>) -> bool {
-    if s == null {
-        return false;
-    }
-    if s.expr_value != null && expr_reassigns(s.expr_value, name, mutself) {
-        return true;
-    }
-    if s.let_value != null && expr_reassigns(s.let_value, name, mutself) {
-        return true;
-    }
-    if s.cond != null && expr_reassigns(s.cond, name, mutself) {
-        return true;
-    }
-    if s.for_step != null && expr_reassigns(s.for_step, name, mutself) {
-        return true;
-    }
+    if s == null { return false; }
+    if s.expr_value != null && expr_reassigns(s.expr_value, name, mutself) { return true; }
+    if s.let_value != null && expr_reassigns(s.let_value, name, mutself) { return true; }
+    if s.cond != null && expr_reassigns(s.cond, name, mutself) { return true; }
+    if s.for_step != null && expr_reassigns(s.for_step, name, mutself) { return true; }
     if s.then_body != null {
         for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
-            if stmt_reassigns(&b, name, mutself) {
-                return true;
-            }
+            if stmt_reassigns(&b, name, mutself) { return true; }
         }
     }
     if s.else_body != null {
         for let i: i32 = 0; i < s.else_body.len(); i++ {
             let b: Stmt = s.else_body.get(i);
-            if stmt_reassigns(&b, name, mutself) {
-                return true;
-            }
+            if stmt_reassigns(&b, name, mutself) { return true; }
         }
     }
     if s.kind == ST_SELECT && s.select_arms != null {
@@ -1118,9 +830,7 @@ fn stmt_reassigns(s: *Stmt, name: string, mutself: *HashMap<bool>) -> bool {
             if arm.body != null {
                 for let j: i32 = 0; j < arm.body.len(); j++ {
                     let b: Stmt = arm.body.get(j);
-                    if stmt_reassigns(&b, name, mutself) {
-                        return true;
-                    }
+                    if stmt_reassigns(&b, name, mutself) { return true; }
                 }
             }
         }
@@ -1130,9 +840,7 @@ fn stmt_reassigns(s: *Stmt, name: string, mutself: *HashMap<bool>) -> bool {
     if s.asm_out_exprs != null {
         for let i: i32 = 0; i < s.asm_out_exprs.len(); i++ {
             let oe: Expr = s.asm_out_exprs.get(i);
-            if oe.kind == EX_IDENT && oe.str_val.eq(name) {
-                return true;
-            }
+            if oe.kind == EX_IDENT && oe.str_val.eq(name) { return true; }
         }
     }
     return false;
@@ -1143,59 +851,47 @@ fn stmt_reassigns(s: *Stmt, name: string, mutself: *HashMap<bool>) -> bool {
 // the same writes the assign-immutable check demands `mut` for (an index
 // write through a `mut` slice binding must not earn "unnecessary mut").
 fn _write_root_name(e: *Expr) -> string {
-    if e == null {
-        return "";
-    }
-    if e.kind == EX_IDENT {
-        return e.str_val;
-    }
-    if e.kind == EX_MEMBER || e.kind == EX_INDEX {
-        return _write_root_name(e.lhs);
-    }
-    if e.kind == EX_UNARY && e.op_code == UN_DEREF {
-        return _write_root_name(e.operand);
-    }
+    if e == null { return ""; }
+    if e.kind == EX_IDENT { return e.str_val; }
+    if e.kind == EX_MEMBER || e.kind == EX_INDEX { return _write_root_name(e.lhs); }
+    if e.kind == EX_UNARY && e.op_code == UN_DEREF { return _write_root_name(e.operand); }
     return "";
 }
 
 fn expr_reassigns(e: *Expr, name: string, mutself: *HashMap<bool>) -> bool {
-    if e == null {
-        return false;
-    }
-    if e.kind == EX_ASSIGN && e.lhs != null && _write_root_name(e.lhs).eq(name) {
-        return true;
-    }
-    if (e.kind == EX_POSTINC || e.kind == EX_POSTDEC) && e.lhs != null && _write_root_name(e.lhs).eq(name) {
+    if e == null { return false; }
+    if e.kind == EX_ASSIGN && e.lhs != null && _write_root_name(e.lhs).eq(name) { return true; }
+    if (e.kind == EX_POSTINC || e.kind == EX_POSTDEC) && e.lhs != null
+        && _write_root_name(e.lhs).eq(name) {
         return true;
     }
     // `&name` / `&mut name`: address-of yields a mutable `*T` that a callee
     // can write through, so the `mut` is justified — not a redundant one.
-    if e.kind == EX_UNARY && (e.op_code == UN_ADDR || e.op_code == UN_ADDR_MUT) && e.operand != null && e.operand.kind == EX_IDENT && e.operand.str_val.eq(name) {
+    if e.kind == EX_UNARY && (e.op_code == UN_ADDR || e.op_code == UN_ADDR_MUT)
+        && e.operand != null
+        && e.operand.kind == EX_IDENT
+        && e.operand.str_val.eq(name) {
         return true;
     }
     // `name.m(...)` where some impl's `m` takes `&mut self`: the call is an
     // implicit `&mut name` (the typer enforces the mut now), so the mut is
     // used — never advise deleting it.
     if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.lhs != null
-        && e.lhs.lhs.kind == EX_IDENT && e.lhs.lhs.str_val != null && e.lhs.lhs.str_val.eq(name)
-        && e.lhs.field != null && mutself != null && mutself.contains(e.lhs.field) {
+        && e.lhs.lhs.kind == EX_IDENT
+        && e.lhs.lhs.str_val != null
+        && e.lhs.lhs.str_val.eq(name)
+        && e.lhs.field != null
+        && mutself != null
+        && mutself.contains(e.lhs.field) {
         return true;
     }
-    if e.lhs != null && expr_reassigns(e.lhs, name, mutself) {
-        return true;
-    }
-    if e.rhs != null && expr_reassigns(e.rhs, name, mutself) {
-        return true;
-    }
-    if e.operand != null && expr_reassigns(e.operand, name, mutself) {
-        return true;
-    }
+    if e.lhs != null && expr_reassigns(e.lhs, name, mutself) { return true; }
+    if e.rhs != null && expr_reassigns(e.rhs, name, mutself) { return true; }
+    if e.operand != null && expr_reassigns(e.operand, name, mutself) { return true; }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
-            if expr_reassigns(&a, name, mutself) {
-                return true;
-            }
+            if expr_reassigns(&a, name, mutself) { return true; }
         }
     }
     return false;
@@ -1204,19 +900,15 @@ fn expr_reassigns(e: *Expr, name: string, mutself: *HashMap<bool>) -> bool {
 // Function declared `-> T` (non-void) where some path doesn't return.
 // Conservative: walks the body, checks the LAST stmt of each branch.
 fn _missing_return_check(t: *Typer, s: *Stmt, origin: string) {
-    if s.fn_body == null {
-        return;
-    }
-    if s.fn_ret_ty == null {
-        return;
-    } // void -> ok
-    if s.is_naked {
-        return;
-    } // raw asm; `ret` lives in the asm
+    if s.fn_body == null { return; }
+    if s.fn_ret_ty == null { return; } // void -> ok
+    if s.is_naked { return; } // raw asm; `ret` lives in the asm
     // `-> !` (Result-without-value) returns Ok implicitly when the body
     // falls off the end. Codegen injects `return __glide_ok_void();` at
     // the function tail, so missing explicit return is not an error.
-    if s.fn_ret_ty.kind == TY_RESULT && s.fn_ret_ty.inner != null && s.fn_ret_ty.inner.kind == TY_NAMED && s.fn_ret_ty.inner.name.eq("void") {
+    if s.fn_ret_ty.kind == TY_RESULT && s.fn_ret_ty.inner != null
+        && s.fn_ret_ty.inner.kind == TY_NAMED
+        && s.fn_ret_ty.inner.name.eq("void") {
         return;
     }
     // Bool ret is okay-ish but still must return; same logic.
@@ -1233,13 +925,12 @@ pub fn analysis_missing_return(t: *Typer, program: *Vector<Stmt>) {
         // top-level fns. Scoped to the focused file so an imported impl's
         // backlog doesn't surface, and so full builds (no user_origin) skip it.
         if s.kind == ST_IMPL && s.impl_methods != null {
-            let own: bool = t.user_origin != null && !t.user_origin.eq("") && (s.origin == null || s.origin.eq(t.user_origin));
+            let own: bool = t.user_origin != null && !t.user_origin.eq("")
+                && (s.origin == null || s.origin.eq(t.user_origin));
             if own {
                 for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                     let m: Stmt = s.impl_methods.get(j);
-                    if m.kind == ST_FN {
-                        _missing_return_check(t, &m, s.origin);
-                    }
+                    if m.kind == ST_FN { _missing_return_check(t, &m, s.origin); }
                 }
             }
             continue;
@@ -1250,15 +941,11 @@ pub fn analysis_missing_return(t: *Typer, program: *Vector<Stmt>) {
         if s.kind == ST_TRAIT && s.impl_methods != null {
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                if m.kind == ST_FN {
-                    _missing_return_check(t, &m, s.origin);
-                }
+                if m.kind == ST_FN { _missing_return_check(t, &m, s.origin); }
             }
             continue;
         }
-        if s.kind != ST_FN {
-            continue;
-        }
+        if s.kind != ST_FN { continue; }
         _missing_return_check(t, &s, s.origin);
     }
 }
@@ -1268,9 +955,7 @@ pub fn analysis_missing_return(t: *Typer, program: *Vector<Stmt>) {
 pub fn analysis_unused_params(t: *Typer, program: *Vector<Stmt>) {
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind == ST_FN {
-            check_unused_params_fn(t, &s);
-        }
+        if s.kind == ST_FN { check_unused_params_fn(t, &s); }
         if s.kind == ST_IMPL && s.impl_methods != null {
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
@@ -1281,40 +966,24 @@ pub fn analysis_unused_params(t: *Typer, program: *Vector<Stmt>) {
 }
 
 fn check_unused_params_fn(t: *Typer, fnstmt: *Stmt) {
-    if fnstmt == null {
-        return;
-    }
-    if fnstmt.fn_body == null {
-        return;
-    }
+    if fnstmt == null { return; }
+    if fnstmt.fn_body == null { return; }
     // An empty body means either a genuine stub or, for the LSP, an imported
     // file parsed header-only (bodies brace-skipped). Either way every param
     // would look unused and the diagnostics don't belong on the active file
     // (imported impl methods carry no origin, so the publish filter can't drop
     // them). Skip.
-    if fnstmt.fn_body.len() == 0 {
-        return;
-    }
-    if fnstmt.fn_params == null {
-        return;
-    }
-    if fnstmt.is_naked {
-        return;
-    } // params accessed via raw calling-conv regs
+    if fnstmt.fn_body.len() == 0 { return; }
+    if fnstmt.fn_params == null { return; }
+    if fnstmt.is_naked { return; } // params accessed via raw calling-conv regs
     // Synthesised fns (proc-macro outputs with line == 0) — the user
     // can't fix the `_` here, and the warning would anchor at line 1
     // of their file. Skip.
-    if fnstmt.line <= 0 {
-        return;
-    }
+    if fnstmt.line <= 0 { return; }
     for let i: i32 = 0; i < fnstmt.fn_params.len(); i++ {
         let p: Param = fnstmt.fn_params.get(i);
-        if p.name.eq("self") {
-            continue;
-        }
-        if p.name.len() > 0 && p.name.at(0).to_int() == 95 {
-            continue;
-        }
+        if p.name.eq("self") { continue; }
+        if p.name.len() > 0 && p.name.at(0).to_int() == 95 { continue; }
         let mut used: bool = false;
         for let j: i32 = 0; j < fnstmt.fn_body.len(); j++ {
             let b: Stmt = fnstmt.fn_body.get(j);
@@ -1343,50 +1012,29 @@ fn check_unused_params_fn(t: *Typer, fnstmt: *Stmt) {
 // Estimate a type's size in bytes. Approximate (no alignment / padding) but
 // good enough to spot "I'm returning a 2KB struct by value" anti-patterns.
 fn type_size_bytes(t: *Type, structs: *HashMap<Stmt>) -> i32 {
-    if t == null {
-        return 0;
-    }
-    if t.kind == TY_POINTER || t.kind == TY_BORROW || t.kind == TY_BORROW_MUT {
-        return 8;
-    }
-    if t.kind == TY_FNPTR {
-        return 8;
-    }
-    if t.kind == TY_SLICE {
-        return 16;
-    } // {data, len}
+    if t == null { return 0; }
+    if t.kind == TY_POINTER || t.kind == TY_BORROW || t.kind == TY_BORROW_MUT { return 8; }
+    if t.kind == TY_FNPTR { return 8; }
+    if t.kind == TY_SLICE { return 16; } // {data, len}
     if t.kind == TY_RESULT {
         return type_size_bytes(t.inner, structs) + 16; // ok flag + val + err msg
     }
-    if t.kind == TY_GENERIC {
-        return 16;
-    } // best-effort guess for unmonomorphized
+    if t.kind == TY_GENERIC { return 16; } // best-effort guess for unmonomorphized
     if t.kind == TY_NAMED {
         let n: string = t.name;
-        if n.eq("char") || n.eq("bool") || n.eq("i8") || n.eq("u8") {
-            return 1;
-        }
-        if n.eq("i16") || n.eq("u16") {
-            return 2;
-        }
-        if n.eq("int") || n.eq("uint") || n.eq("i32") || n.eq("u32") || n.eq("f32") {
-            return 4;
-        }
-        if n.eq("long") || n.eq("ulong") || n.eq("i64") || n.eq("u64") || n.eq("usize") || n.eq("isize") || n.eq("float") || n.eq("f64") {
+        if n.eq("char") || n.eq("bool") || n.eq("i8") || n.eq("u8") { return 1; }
+        if n.eq("i16") || n.eq("u16") { return 2; }
+        if n.eq("int") || n.eq("uint") || n.eq("i32") || n.eq("u32") || n.eq("f32") { return 4; }
+        if n.eq("long") || n.eq("ulong") || n.eq("i64") || n.eq("u64") || n.eq("usize")
+            || n.eq("isize")
+            || n.eq("float")
+            || n.eq("f64") {
             return 8;
         }
-        if n.eq("i128") || n.eq("u128") {
-            return 16;
-        }
-        if n.eq("i256") || n.eq("u256") {
-            return 32;
-        }
-        if n.eq("string") {
-            return 8;
-        } // const char*
-        if n.eq("void") {
-            return 0;
-        }
+        if n.eq("i128") || n.eq("u128") { return 16; }
+        if n.eq("i256") || n.eq("u256") { return 32; }
+        if n.eq("string") { return 8; } // const char*
+        if n.eq("void") { return 0; }
         if structs.contains(n) {
             let sd: Stmt = structs.get(n);
             let mut sz: i32 = 0;
@@ -1410,25 +1058,18 @@ pub fn analysis_large_return(t: *Typer, program: *Vector<Stmt>) {
     let structs: *HashMap<Stmt> = HashMap::new();
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind == ST_STRUCT {
-            structs.insert(s.name, s);
-        }
+        if s.kind == ST_STRUCT { structs.insert(s.name, s); }
     }
     let threshold: i32 = 64;
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind != ST_FN {
-            continue;
-        }
-        if s.fn_body == null {
-            continue;
-        } // skip extern declarations
+        if s.kind != ST_FN { continue; }
+        if s.fn_body == null { continue; } // skip extern declarations
         let ret: *Type = s.fn_ret_ty;
-        if ret == null {
-            continue;
-        }
+        if ret == null { continue; }
         // Already a pointer / borrow — nothing to recommend.
-        if ret.kind == TY_POINTER || ret.kind == TY_BORROW || ret.kind == TY_BORROW_MUT || ret.kind == TY_FNPTR {
+        if ret.kind == TY_POINTER || ret.kind == TY_BORROW || ret.kind == TY_BORROW_MUT
+            || ret.kind == TY_FNPTR {
             continue;
         }
         let sz: i32 = type_size_bytes(ret, structs);
@@ -1498,9 +1139,7 @@ fn _collect_lint_categories(program: *Vector<Stmt>) -> *Vector<string> {
     let out: *Vector<string> = Vector::new();
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind == ST_FN {
-            _gather_lint_cats(&s, seen, out);
-        }
+        if s.kind == ST_FN { _gather_lint_cats(&s, seen, out); }
         if s.kind == ST_IMPL && s.impl_methods != null {
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
@@ -1513,24 +1152,14 @@ fn _collect_lint_categories(program: *Vector<Stmt>) -> *Vector<string> {
 }
 
 fn _gather_lint_cats(s: *Stmt, seen: *HashMap<bool>, out: *Vector<string>) {
-    if s == null || s.attrs == null {
-        return;
-    }
+    if s == null || s.attrs == null { return; }
     for let i: i32 = 0; i < s.attrs.len(); i++ {
         let a: Attr = s.attrs.get(i);
-        if !a.name.eq("lint") {
-            continue;
-        }
-        if a.args == null || a.args.len() == 0 {
-            continue;
-        }
+        if !a.name.eq("lint") { continue; }
+        if a.args == null || a.args.len() == 0 { continue; }
         let cat_expr: Expr = a.args.get(0);
-        if cat_expr.kind != EX_STRING {
-            continue;
-        }
-        if seen.contains(cat_expr.str_val) {
-            continue;
-        }
+        if cat_expr.kind != EX_STRING { continue; }
+        if seen.contains(cat_expr.str_val) { continue; }
         seen.insert(cat_expr.str_val, true);
         out.push(cat_expr.str_val);
     }
@@ -1544,57 +1173,35 @@ fn _build_lint_index_for_cat(program: *Vector<Stmt>, cat: string, dep: *HashMap<
         let s: Stmt = program.get(i);
         if s.kind == ST_FN {
             let r: ?string = _lint_reason_for_cat(&s, cat);
-            if r.has {
-                dep.insert(s.name, r.val);
-            }
+            if r.has { dep.insert(s.name, r.val); }
         }
         if s.kind == ST_IMPL && s.impl_methods != null {
             let mut owner: string = "";
-            if s.impl_target != null && s.impl_target.name != null {
-                owner = s.impl_target.name;
-            }
+            if s.impl_target != null && s.impl_target.name != null { owner = s.impl_target.name; }
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
                 let r: ?string = _lint_reason_for_cat(&m, cat);
-                if !r.has {
-                    continue;
-                }
+                if !r.has { continue; }
                 let rv: string = r.val;
-                if !owner.eq("") {
-                    dep.insert(owner.concat("::").concat(m.name), rv);
-                }
-                if !dep.contains(m.name) {
-                    dep.insert(m.name, rv);
-                }
+                if !owner.eq("") { dep.insert(owner.concat("::").concat(m.name), rv); }
+                if !dep.contains(m.name) { dep.insert(m.name, rv); }
             }
         }
     }
 }
 
 fn _lint_reason_for_cat(s: *Stmt, cat: string) -> ?string {
-    if s == null || s.attrs == null {
-        return none();
-    }
+    if s == null || s.attrs == null { return none(); }
     for let i: i32 = 0; i < s.attrs.len(); i++ {
         let a: Attr = s.attrs.get(i);
-        if !a.name.eq("lint") {
-            continue;
-        }
-        if a.args == null || a.args.len() == 0 {
-            continue;
-        }
+        if !a.name.eq("lint") { continue; }
+        if a.args == null || a.args.len() == 0 { continue; }
         let cat_expr: Expr = a.args.get(0);
-        if cat_expr.kind != EX_STRING {
-            continue;
-        }
-        if !cat_expr.str_val.eq(cat) {
-            continue;
-        }
+        if cat_expr.kind != EX_STRING { continue; }
+        if !cat_expr.str_val.eq(cat) { continue; }
         if a.args.len() > 1 {
             let r_expr: Expr = a.args.get(1);
-            if r_expr.kind == EX_STRING {
-                return some(r_expr.str_val);
-            }
+            if r_expr.kind == EX_STRING { return some(r_expr.str_val); }
         }
         return some("");
     }
@@ -1637,9 +1244,7 @@ pub fn analysis_expect_fulfillment(t: *Typer, program: *Vector<Stmt>) {
     let consumed: *HashMap<bool> = HashMap::new();
     for let j: i32 = 0; j < t.diagnostics.len(); j++ {
         let d: DiagEntry = t.diagnostics.get(j);
-        if d.severity != 2 {
-            continue;
-        }
+        if d.severity != 2 { continue; }
         let mut matched: bool = false;
         let key: string = _expect_key(d.origin, d.line, d.code);
         if index.contains(key) {
@@ -1647,14 +1252,10 @@ pub fn analysis_expect_fulfillment(t: *Typer, program: *Vector<Stmt>) {
             let toks: *Vector<string> = bucket.trim().split(" ");
             for let k: i32 = 0; k < toks.len(); k++ {
                 let t_tok: string = toks.get(k);
-                if t_tok.eq("") {
-                    continue;
-                }
+                if t_tok.eq("") { continue; }
                 let idx: i32 = _expect_str_to_int(t_tok);
                 let pe: ExpectPending = pending.get(idx);
-                if pe.pe_done {
-                    continue;
-                }
+                if pe.pe_done { continue; }
                 let mut updated: ExpectPending = pe;
                 updated.pe_done = true;
                 pending.set(idx, updated);
@@ -1666,18 +1267,10 @@ pub fn analysis_expect_fulfillment(t: *Typer, program: *Vector<Stmt>) {
             for let k: i32 = 0; k < ranged.len(); k++ {
                 let idx: i32 = ranged.get(k);
                 let pe: ExpectPending = pending.get(idx);
-                if pe.pe_done {
-                    continue;
-                }
-                if !pe.pe_origin.eq(d.origin) {
-                    continue;
-                }
-                if !pe.pe_code.eq(d.code) {
-                    continue;
-                }
-                if d.line < pe.pe_line || d.line > pe.pe_end_line {
-                    continue;
-                }
+                if pe.pe_done { continue; }
+                if !pe.pe_origin.eq(d.origin) { continue; }
+                if !pe.pe_code.eq(d.code) { continue; }
+                if d.line < pe.pe_line || d.line > pe.pe_end_line { continue; }
                 let mut updated: ExpectPending = pe;
                 updated.pe_done = true;
                 pending.set(idx, updated);
@@ -1685,9 +1278,7 @@ pub fn analysis_expect_fulfillment(t: *Typer, program: *Vector<Stmt>) {
                 break;
             }
         }
-        if matched {
-            consumed.insert(int_to_str(j), true);
-        }
+        if matched { consumed.insert(int_to_str(j), true); }
     }
     // Phase 2: rebuild diagnostics list without consumed entries. The
     // compaction shifts indices, so remap relatedInformation (keyed by
@@ -1708,13 +1299,9 @@ pub fn analysis_expect_fulfillment(t: *Typer, program: *Vector<Stmt>) {
             let kept_rel: *Vector<DiagRelated> = Vector::new();
             for let r_i: i32 = 0; r_i < t.related.len(); r_i++ {
                 let mut r: DiagRelated = t.related.get(r_i);
-                if r.diag_index < 0 || r.diag_index >= remap.len() {
-                    continue;
-                }
+                if r.diag_index < 0 || r.diag_index >= remap.len() { continue; }
                 let ni: i32 = remap.get(r.diag_index);
-                if ni < 0 {
-                    continue;
-                }
+                if ni < 0 { continue; }
                 r.diag_index = ni;
                 kept_rel.push(r);
             }
@@ -1723,9 +1310,7 @@ pub fn analysis_expect_fulfillment(t: *Typer, program: *Vector<Stmt>) {
         let kept: *Vector<DiagEntry> = Vector::new();
         for let i: i32 = 0; i < t.diagnostics.len(); i++ {
             let key: string = int_to_str(i);
-            if consumed.contains(key) {
-                continue;
-            }
+            if consumed.contains(key) { continue; }
             kept.push(t.diagnostics.get(i));
         }
         t.diagnostics = kept;
@@ -1734,9 +1319,7 @@ pub fn analysis_expect_fulfillment(t: *Typer, program: *Vector<Stmt>) {
     // expectations no diagnostic satisfied.
     for let i: i32 = 0; i < pending.len(); i++ {
         let pe: ExpectPending = pending.get(i);
-        if pe.pe_done {
-            continue;
-        }
+        if pe.pe_done { continue; }
         t.current_origin = pe.pe_origin;
         t.err_code(pe.pe_line, pe.pe_col, "unfulfilled-expectation", "@expect(\"".concat(pe.pe_code).concat("\") on this stmt did not match any emitted diagnostic"));
     }
@@ -1758,9 +1341,7 @@ fn _expect_str_to_int(s: string) -> i32 {
     let mut acc: i32 = 0;
     for let i: i32 = 0; i < s.len(); i++ {
         let c: i32 = s.at(i).to_int();
-        if c < 48 || c > 57 {
-            return acc;
-        }
+        if c < 48 || c > 57 { return acc; }
         acc = acc * 10 + (c - 48);
     }
     return acc;
@@ -1780,9 +1361,7 @@ fn _collect_expectations(program: *Vector<Stmt>, out: *Vector<ExpectPending>) {
         if s.kind == ST_IMPL && s.impl_methods != null {
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                if m.fn_body == null {
-                    continue;
-                }
+                if m.fn_body == null { continue; }
                 _gather_expects_in_fn(&m, m.fn_body, out);
                 _gather_expects_in_body(m.fn_body, m.origin, out);
             }
@@ -1791,22 +1370,14 @@ fn _collect_expectations(program: *Vector<Stmt>, out: *Vector<ExpectPending>) {
 }
 
 fn _gather_expects_in_fn(s: *Stmt, body: *Vector<Stmt>, out: *Vector<ExpectPending>) {
-    if s == null || s.attrs == null {
-        return;
-    }
+    if s == null || s.attrs == null { return; }
     let end_line: i32 = _max_line_in_body(body, s.line);
     for let i: i32 = 0; i < s.attrs.len(); i++ {
         let a: Attr = s.attrs.get(i);
-        if !a.name.eq("expect") {
-            continue;
-        }
-        if a.args == null || a.args.len() == 0 {
-            continue;
-        }
+        if !a.name.eq("expect") { continue; }
+        if a.args == null || a.args.len() == 0 { continue; }
         let v: Expr = a.args.get(0);
-        if v.kind != EX_STRING {
-            continue;
-        }
+        if v.kind != EX_STRING { continue; }
         let pe: ExpectPending = ExpectPending { pe_code: v.str_val, pe_line: s.line, pe_end_line: end_line, pe_col: s.column, pe_origin: s.origin, pe_done: false };
         out.push(pe);
     }
@@ -1820,20 +1391,14 @@ fn _max_line_in_body(body: *Vector<Stmt>, fallback: i32) -> i32 {
     let mut best: i32 = fallback;
     for let i: i32 = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
-        if s.line > best {
-            best = s.line;
-        }
+        if s.line > best { best = s.line; }
         if s.then_body != null {
             let sub: i32 = _max_line_in_body(s.then_body, best);
-            if sub > best {
-                best = sub;
-            }
+            if sub > best { best = sub; }
         }
         if s.else_body != null {
             let sub: i32 = _max_line_in_body(s.else_body, best);
-            if sub > best {
-                best = sub;
-            }
+            if sub > best { best = sub; }
         }
     }
     return best;
@@ -1843,31 +1408,19 @@ fn _gather_expects_in_body(body: *Vector<Stmt>, origin: string, out: *Vector<Exp
     for let i: i32 = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
         _gather_expects_in_stmt(&s, origin, out);
-        if s.then_body != null {
-            _gather_expects_in_body(s.then_body, origin, out);
-        }
-        if s.else_body != null {
-            _gather_expects_in_body(s.else_body, origin, out);
-        }
+        if s.then_body != null { _gather_expects_in_body(s.then_body, origin, out); }
+        if s.else_body != null { _gather_expects_in_body(s.else_body, origin, out); }
     }
 }
 
 fn _gather_expects_in_stmt(s: *Stmt, origin: string, out: *Vector<ExpectPending>) {
-    if s == null || s.attrs == null {
-        return;
-    }
+    if s == null || s.attrs == null { return; }
     for let i: i32 = 0; i < s.attrs.len(); i++ {
         let a: Attr = s.attrs.get(i);
-        if !a.name.eq("expect") {
-            continue;
-        }
-        if a.args == null || a.args.len() == 0 {
-            continue;
-        }
+        if !a.name.eq("expect") { continue; }
+        if a.args == null || a.args.len() == 0 { continue; }
         let v: Expr = a.args.get(0);
-        if v.kind != EX_STRING {
-            continue;
-        }
+        if v.kind != EX_STRING { continue; }
         let pe: ExpectPending = ExpectPending { pe_code: v.str_val, pe_line: s.line, pe_end_line: s.line, pe_col: s.column, pe_origin: origin, pe_done: false };
         out.push(pe);
     }
@@ -1877,15 +1430,11 @@ fn _gather_expects_in_stmt(s: *Stmt, origin: string, out: *Vector<ExpectPending>
 // emits a custom code. Used by `analysis_custom_lints` to drive the
 // shared scanner without rebuilding the dep map for each call.
 fn _run_call_lint_with_index(t: *Typer, program: *Vector<Stmt>, dep: *HashMap<string>, lint_code: string, what: string) {
-    if dep.len() == 0 {
-        return;
-    }
+    if dep.len() == 0 { return; }
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_FN && s.fn_body != null {
-            if _has_allow(&s, lint_code) {
-                continue;
-            }
+            if _has_allow(&s, lint_code) { continue; }
             t.current_origin = s.origin;
             let scope: *HashMap<string> = HashMap::new();
             _seed_scope_from_params(&s, scope, "");
@@ -1894,17 +1443,11 @@ fn _run_call_lint_with_index(t: *Typer, program: *Vector<Stmt>, dep: *HashMap<st
         }
         if s.kind == ST_IMPL && s.impl_methods != null {
             let mut owner: string = "";
-            if s.impl_target != null && s.impl_target.name != null {
-                owner = s.impl_target.name;
-            }
+            if s.impl_target != null && s.impl_target.name != null { owner = s.impl_target.name; }
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                if m.fn_body == null {
-                    continue;
-                }
-                if _has_allow(&m, lint_code) {
-                    continue;
-                }
+                if m.fn_body == null { continue; }
+                if _has_allow(&m, lint_code) { continue; }
                 t.current_origin = m.origin;
                 let scope: *HashMap<string> = HashMap::new();
                 _seed_scope_from_params(&m, scope, owner);
@@ -1925,9 +1468,7 @@ fn _run_attr_call_lint(t: *Typer, program: *Vector<Stmt>, attr_name: string, lin
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_FN && s.fn_body != null {
-            if _has_allow(&s, lint_code) {
-                continue;
-            }
+            if _has_allow(&s, lint_code) { continue; }
             t.current_origin = s.origin;
             let scope: *HashMap<string> = HashMap::new();
             // Top-level fn: seed scope with the declared param types
@@ -1942,17 +1483,11 @@ fn _run_attr_call_lint(t: *Typer, program: *Vector<Stmt>, attr_name: string, lin
             // owner. Surface that to the receiver lookup so
             // `self.old()` resolves to `Type::old`.
             let mut owner: string = "";
-            if s.impl_target != null && s.impl_target.name != null {
-                owner = s.impl_target.name;
-            }
+            if s.impl_target != null && s.impl_target.name != null { owner = s.impl_target.name; }
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                if m.fn_body == null {
-                    continue;
-                }
-                if _has_allow(&m, lint_code) {
-                    continue;
-                }
+                if m.fn_body == null { continue; }
+                if _has_allow(&m, lint_code) { continue; }
                 t.current_origin = m.origin;
                 let scope: *HashMap<string> = HashMap::new();
                 _seed_scope_from_params(&m, scope, owner);
@@ -1969,9 +1504,7 @@ fn _run_attr_call_lint(t: *Typer, program: *Vector<Stmt>, attr_name: string, lin
 // `Type::method`. `self_owner` is the impl target name (used to
 // auto-type the implicit `self` param).
 fn _seed_scope_from_params(s: *Stmt, scope: *HashMap<string>, self_owner: string) {
-    if s == null || s.fn_params == null {
-        return;
-    }
+    if s == null || s.fn_params == null { return; }
     for let i: i32 = 0; i < s.fn_params.len(); i++ {
         let p: Param = s.fn_params.get(i);
         if p.name.eq("self") && !self_owner.eq("") {
@@ -1979,9 +1512,7 @@ fn _seed_scope_from_params(s: *Stmt, scope: *HashMap<string>, self_owner: string
             continue;
         }
         let n: string = _type_root_name(p.ty);
-        if !n.eq("") {
-            scope.insert(p.name, n);
-        }
+        if !n.eq("") { scope.insert(p.name, n); }
     }
 }
 
@@ -1990,9 +1521,7 @@ fn _collect_attr_fns(program: *Vector<Stmt>, dep: *HashMap<string>, attr_name: s
         let s: Stmt = program.get(i);
         if s.kind == ST_FN {
             let reason: ?string = _attr_reason(&s, attr_name);
-            if reason.has {
-                dep.insert(s.name, reason.val);
-            }
+            if reason.has { dep.insert(s.name, reason.val); }
         }
         if s.kind == ST_IMPL && s.impl_methods != null {
             // Methods inside `impl Type { ... }` get keyed under
@@ -2001,25 +1530,17 @@ fn _collect_attr_fns(program: *Vector<Stmt>, dep: *HashMap<string>, attr_name: s
             // `obj.method()` style calls where the call site can't tell
             // the receiver type without type info.
             let mut owner: string = "";
-            if s.impl_target != null && s.impl_target.name != null {
-                owner = s.impl_target.name;
-            }
+            if s.impl_target != null && s.impl_target.name != null { owner = s.impl_target.name; }
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
                 let reason: ?string = _attr_reason(&m, attr_name);
-                if !reason.has {
-                    continue;
-                }
+                if !reason.has { continue; }
                 let rv: string = reason.val;
-                if !owner.eq("") {
-                    dep.insert(owner.concat("::").concat(m.name), rv);
-                }
+                if !owner.eq("") { dep.insert(owner.concat("::").concat(m.name), rv); }
                 // Only register the bare-name fallback if nothing's
                 // there yet — preserves the older (and more specific)
                 // entry when two impls share a method name.
-                if !dep.contains(m.name) {
-                    dep.insert(m.name, rv);
-                }
+                if !dep.contains(m.name) { dep.insert(m.name, rv); }
             }
         }
     }
@@ -2029,21 +1550,13 @@ fn _collect_attr_fns(program: *Vector<Stmt>, dep: *HashMap<string>, attr_name: s
 // carry the attribute. Empty string means the attribute was present
 // without an argument (e.g. `@deprecated`).
 fn _attr_reason(s: *Stmt, attr_name: string) -> ?string {
-    if s == null || s.attrs == null {
-        return none();
-    }
+    if s == null || s.attrs == null { return none(); }
     for let i: i32 = 0; i < s.attrs.len(); i++ {
         let a: Attr = s.attrs.get(i);
-        if !a.name.eq(attr_name) {
-            continue;
-        }
-        if a.args == null || a.args.len() == 0 {
-            return some("");
-        }
+        if !a.name.eq(attr_name) { continue; }
+        if a.args == null || a.args.len() == 0 { return some(""); }
         let v: Expr = a.args.get(0);
-        if v.kind == EX_STRING {
-            return some(v.str_val);
-        }
+        if v.kind == EX_STRING { return some(v.str_val); }
         return some("");
     }
     return none();
@@ -2087,9 +1600,7 @@ pub fn analysis_null_deref(t: *Typer, program: *Vector<Stmt>) {
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_FN && s.fn_body != null {
-            if _has_allow(&s, "null-deref") {
-                continue;
-            }
+            if _has_allow(&s, "null-deref") { continue; }
             t.current_origin = s.origin;
             let nulls: *HashMap<bool> = HashMap::new();
             _scan_null_body(t, s.fn_body, nulls);
@@ -2101,12 +1612,8 @@ pub fn analysis_null_deref(t: *Typer, program: *Vector<Stmt>) {
         if s.kind == ST_IMPL && s.impl_methods != null {
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                if m.fn_body == null {
-                    continue;
-                }
-                if _has_allow(&m, "null-deref") {
-                    continue;
-                }
+                if m.fn_body == null { continue; }
+                if _has_allow(&m, "null-deref") { continue; }
                 t.current_origin = m.origin;
                 let nulls: *HashMap<bool> = HashMap::new();
                 _scan_null_body(t, m.fn_body, nulls);
@@ -2135,15 +1642,11 @@ fn _ndp_collect_param_derefs(program: *Vector<Stmt>, deref_params: *HashMap<stri
             if s.impl_target.kind == TY_NAMED {
                 tname = s.impl_target.name;
             } else {
-                if s.impl_target.kind == TY_GENERIC {
-                    tname = s.impl_target.name;
-                }
+                if s.impl_target.kind == TY_GENERIC { tname = s.impl_target.name; }
             }
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                if m.fn_body == null || m.fn_params == null {
-                    continue;
-                }
+                if m.fn_body == null || m.fn_params == null { continue; }
                 _ndp_index_one_fn(&m, deref_params, guards_params);
                 if !tname.eq("") {
                     // Also index under `<Type>::<method>` so callers
@@ -2170,15 +1673,9 @@ fn _ndp_index_one_fn(m: *Stmt, deref_params: *HashMap<string>, guards_params: *H
     let mut idxs: string = "";
     for let i: i32 = 0; i < m.fn_params.len(); i++ {
         let p: Param = m.fn_params.get(i);
-        if p.ty == null || p.ty.kind != TY_POINTER {
-            continue;
-        }
-        if !unprotected.contains(p.name) {
-            continue;
-        }
-        if !unprotected.get(p.name) {
-            continue;
-        } // guarded first
+        if p.ty == null || p.ty.kind != TY_POINTER { continue; }
+        if !unprotected.contains(p.name) { continue; }
+        if !unprotected.get(p.name) { continue; } // guarded first
         if idxs.eq("") {
             idxs = i.to_string();
         } else {
@@ -2187,18 +1684,14 @@ fn _ndp_index_one_fn(m: *Stmt, deref_params: *HashMap<string>, guards_params: *H
     }
     unprotected.free();
     seen_guard.free();
-    if !idxs.eq("") {
-        deref_params.insert(m.name, idxs);
-    }
+    if !idxs.eq("") { deref_params.insert(m.name, idxs); }
 }
 
 // Walks body in source order. For each name, the first event wins:
 // guard sets `unprotected[name] = false` (and never overwritten),
 // deref sets `unprotected[name] = true` if no entry exists yet.
 fn _ndp_walk_order(body: *Vector<Stmt>, unprotected: *HashMap<bool>, seen_guard: *HashMap<bool>, guards_params: *HashMap<string>) {
-    if body == null {
-        return;
-    }
+    if body == null { return; }
     for let i: i32 = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
         // Process cond before bodies — a guard registers before
@@ -2244,9 +1737,7 @@ fn _ndp_walk_order(body: *Vector<Stmt>, unprotected: *HashMap<bool>, seen_guard:
 // Only bare-ident args count — `f(p.val)` / `f(*p)` are real derefs handled
 // elsewhere. First-event-wins is preserved (skip if already recorded).
 fn _ndp_register_validated_args(e: *Expr, guards_params: *HashMap<string>, unprotected: *HashMap<bool>) {
-    if e == null {
-        return;
-    }
+    if e == null { return; }
     if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT && e.args != null {
         let fname: string = e.lhs.str_val;
         if guards_params.contains(fname) {
@@ -2271,15 +1762,9 @@ fn _ndp_register_validated_args(e: *Expr, guards_params: *HashMap<string>, unpro
             }
         }
     }
-    if e.lhs != null {
-        _ndp_register_validated_args(e.lhs, guards_params, unprotected);
-    }
-    if e.rhs != null {
-        _ndp_register_validated_args(e.rhs, guards_params, unprotected);
-    }
-    if e.operand != null {
-        _ndp_register_validated_args(e.operand, guards_params, unprotected);
-    }
+    if e.lhs != null { _ndp_register_validated_args(e.lhs, guards_params, unprotected); }
+    if e.rhs != null { _ndp_register_validated_args(e.rhs, guards_params, unprotected); }
+    if e.operand != null { _ndp_register_validated_args(e.operand, guards_params, unprotected); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
@@ -2302,15 +1787,11 @@ fn _ndp_collect_param_guards(program: *Vector<Stmt>, guards_params: *HashMap<str
             if s.impl_target.kind == TY_NAMED {
                 tname = s.impl_target.name;
             } else {
-                if s.impl_target.kind == TY_GENERIC {
-                    tname = s.impl_target.name;
-                }
+                if s.impl_target.kind == TY_GENERIC { tname = s.impl_target.name; }
             }
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                if m.fn_body == null || m.fn_params == null {
-                    continue;
-                }
+                if m.fn_body == null || m.fn_params == null { continue; }
                 _ndp_index_guards_one_fn(&m, guards_params);
                 if !tname.eq("") && guards_params.contains(m.name) {
                     guards_params.insert(tname.concat("::").concat(m.name), guards_params.get(m.name));
@@ -2326,9 +1807,7 @@ fn _ndp_index_guards_one_fn(m: *Stmt, guards_params: *HashMap<string>) {
     let mut idxs: string = "";
     for let i: i32 = 0; i < m.fn_params.len(); i++ {
         let p: Param = m.fn_params.get(i);
-        if p.ty == null || p.ty.kind != TY_POINTER {
-            continue;
-        }
+        if p.ty == null || p.ty.kind != TY_POINTER { continue; }
         let mut is_guarded: bool = false;
         for let g: i32 = 0; g < guarded.len(); g++ {
             if guarded.get(g).eq(p.name) {
@@ -2336,9 +1815,7 @@ fn _ndp_index_guards_one_fn(m: *Stmt, guards_params: *HashMap<string>) {
                 break;
             }
         }
-        if !is_guarded {
-            continue;
-        }
+        if !is_guarded { continue; }
         if idxs.eq("") {
             idxs = i.to_string();
         } else {
@@ -2346,71 +1823,42 @@ fn _ndp_index_guards_one_fn(m: *Stmt, guards_params: *HashMap<string>) {
         }
     }
     guarded.free();
-    if !idxs.eq("") {
-        guards_params.insert(m.name, idxs);
-    }
+    if !idxs.eq("") { guards_params.insert(m.name, idxs); }
 }
 
 // Collect every name that is null-tested in any cond throughout the body.
 fn _ndp_collect_all_guards(body: *Vector<Stmt>, names: *Vector<string>) {
-    if body == null {
-        return;
-    }
+    if body == null { return; }
     for let i: i32 = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
-        if s.cond != null {
-            _ndp_collect_guarded_names(s.cond, names);
-        }
-        if s.then_body != null {
-            _ndp_collect_all_guards(s.then_body, names);
-        }
-        if s.else_body != null {
-            _ndp_collect_all_guards(s.else_body, names);
-        }
+        if s.cond != null { _ndp_collect_guarded_names(s.cond, names); }
+        if s.then_body != null { _ndp_collect_all_guards(s.then_body, names); }
+        if s.else_body != null { _ndp_collect_all_guards(s.else_body, names); }
     }
 }
 
 fn _ndp_collect_guarded_names(e: *Expr, names: *Vector<string>) {
-    if e == null {
-        return;
+    if e == null { return; }
+    if e.kind == EX_BINARY && (e.op_code == OP_EQ || e.op_code == OP_NE) && e.lhs != null
+        && e.rhs != null {
+        if e.lhs.kind == EX_IDENT && e.rhs.kind == EX_NULL { names.push(e.lhs.str_val); }
+        if e.rhs.kind == EX_IDENT && e.lhs.kind == EX_NULL { names.push(e.rhs.str_val); }
     }
-    if e.kind == EX_BINARY && (e.op_code == OP_EQ || e.op_code == OP_NE) && e.lhs != null && e.rhs != null {
-        if e.lhs.kind == EX_IDENT && e.rhs.kind == EX_NULL {
-            names.push(e.lhs.str_val);
-        }
-        if e.rhs.kind == EX_IDENT && e.lhs.kind == EX_NULL {
-            names.push(e.rhs.str_val);
-        }
-    }
-    if e.lhs != null {
-        _ndp_collect_guarded_names(e.lhs, names);
-    }
-    if e.rhs != null {
-        _ndp_collect_guarded_names(e.rhs, names);
-    }
-    if e.operand != null {
-        _ndp_collect_guarded_names(e.operand, names);
-    }
+    if e.lhs != null { _ndp_collect_guarded_names(e.lhs, names); }
+    if e.rhs != null { _ndp_collect_guarded_names(e.rhs, names); }
+    if e.operand != null { _ndp_collect_guarded_names(e.operand, names); }
 }
 
 fn _ndp_record_derefs_in_expr_ordered(e: *Expr, unprotected: *HashMap<bool>, seen_guard: *HashMap<bool>) {
-    if e == null {
-        return;
-    }
+    if e == null { return; }
     let target: string = _ndp_deref_target(e);
     if !target.eq("") && !unprotected.contains(target) {
         // First event for this name is a deref → mark unprotected.
         unprotected.insert(target, true);
     }
-    if e.lhs != null {
-        _ndp_record_derefs_in_expr_ordered(e.lhs, unprotected, seen_guard);
-    }
-    if e.rhs != null {
-        _ndp_record_derefs_in_expr_ordered(e.rhs, unprotected, seen_guard);
-    }
-    if e.operand != null {
-        _ndp_record_derefs_in_expr_ordered(e.operand, unprotected, seen_guard);
-    }
+    if e.lhs != null { _ndp_record_derefs_in_expr_ordered(e.lhs, unprotected, seen_guard); }
+    if e.rhs != null { _ndp_record_derefs_in_expr_ordered(e.rhs, unprotected, seen_guard); }
+    if e.operand != null { _ndp_record_derefs_in_expr_ordered(e.operand, unprotected, seen_guard); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
@@ -2420,51 +1868,31 @@ fn _ndp_record_derefs_in_expr_ordered(e: *Expr, unprotected: *HashMap<bool>, see
 }
 
 fn _ndp_deref_target(e: *Expr) -> string {
-    if e == null {
-        return "";
-    }
+    if e == null { return ""; }
     if e.kind == EX_UNARY && e.op_code == UN_DEREF && e.operand != null && e.operand.kind == EX_IDENT {
         return e.operand.str_val;
     }
-    if e.kind == EX_MEMBER && e.lhs != null && e.lhs.kind == EX_IDENT {
-        return e.lhs.str_val;
-    }
-    if e.kind == EX_INDEX && e.lhs != null && e.lhs.kind == EX_IDENT {
-        return e.lhs.str_val;
-    }
+    if e.kind == EX_MEMBER && e.lhs != null && e.lhs.kind == EX_IDENT { return e.lhs.str_val; }
+    if e.kind == EX_INDEX && e.lhs != null && e.lhs.kind == EX_IDENT { return e.lhs.str_val; }
     return "";
 }
 
 // Walk a body and flag every call site where a null literal hits
 // a known-non-null-required param of the callee.
 fn _ndp_check_calls_in_body(t: *Typer, body: *Vector<Stmt>, deref_params: *HashMap<string>) {
-    if body == null {
-        return;
-    }
+    if body == null { return; }
     for let i: i32 = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
-        if s.expr_value != null {
-            _ndp_check_calls_in_expr(t, s.expr_value, deref_params);
-        }
-        if s.let_value != null {
-            _ndp_check_calls_in_expr(t, s.let_value, deref_params);
-        }
-        if s.cond != null {
-            _ndp_check_calls_in_expr(t, s.cond, deref_params);
-        }
-        if s.then_body != null {
-            _ndp_check_calls_in_body(t, s.then_body, deref_params);
-        }
-        if s.else_body != null {
-            _ndp_check_calls_in_body(t, s.else_body, deref_params);
-        }
+        if s.expr_value != null { _ndp_check_calls_in_expr(t, s.expr_value, deref_params); }
+        if s.let_value != null { _ndp_check_calls_in_expr(t, s.let_value, deref_params); }
+        if s.cond != null { _ndp_check_calls_in_expr(t, s.cond, deref_params); }
+        if s.then_body != null { _ndp_check_calls_in_body(t, s.then_body, deref_params); }
+        if s.else_body != null { _ndp_check_calls_in_body(t, s.else_body, deref_params); }
     }
 }
 
 fn _ndp_check_calls_in_expr(t: *Typer, e: *Expr, deref_params: *HashMap<string>) {
-    if e == null {
-        return;
-    }
+    if e == null { return; }
     if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT && e.args != null {
         let fname: string = e.lhs.str_val;
         if deref_params.contains(fname) {
@@ -2490,15 +1918,9 @@ fn _ndp_check_calls_in_expr(t: *Typer, e: *Expr, deref_params: *HashMap<string>)
             }
         }
     }
-    if e.lhs != null {
-        _ndp_check_calls_in_expr(t, e.lhs, deref_params);
-    }
-    if e.rhs != null {
-        _ndp_check_calls_in_expr(t, e.rhs, deref_params);
-    }
-    if e.operand != null {
-        _ndp_check_calls_in_expr(t, e.operand, deref_params);
-    }
+    if e.lhs != null { _ndp_check_calls_in_expr(t, e.lhs, deref_params); }
+    if e.rhs != null { _ndp_check_calls_in_expr(t, e.rhs, deref_params); }
+    if e.operand != null { _ndp_check_calls_in_expr(t, e.operand, deref_params); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
@@ -2511,9 +1933,7 @@ fn _ndp_atoi(s: string) -> i32 {
     let mut n: i32 = 0;
     for let i: i32 = 0; i < s.len(); i++ {
         let c: i32 = s.at(i).to_int();
-        if c < 48 || c > 57 {
-            return -1;
-        }
+        if c < 48 || c > 57 { return -1; }
         n = n * 10 + (c - 48);
     }
     return n;
@@ -2535,9 +1955,7 @@ pub fn analysis_bad_free(t: *Typer, program: *Vector<Stmt>) {
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_FN && s.fn_body != null {
-            if _has_allow(&s, "bad-free") {
-                continue;
-            }
+            if _has_allow(&s, "bad-free") { continue; }
             t.current_origin = s.origin;
             let tys: *HashMap<string> = HashMap::new();
             _bf_scan_body(t, s.fn_body, tys, "");
@@ -2554,22 +1972,14 @@ pub fn analysis_bad_free(t: *Typer, program: *Vector<Stmt>) {
                 if s.impl_target.kind == TY_NAMED {
                     impl_target = s.impl_target.name;
                 } else {
-                    if s.impl_target.kind == TY_GENERIC {
-                        impl_target = s.impl_target.name;
-                    }
+                    if s.impl_target.kind == TY_GENERIC { impl_target = s.impl_target.name; }
                 }
             }
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                if m.fn_body == null {
-                    continue;
-                }
-                if _has_allow(&m, "bad-free") {
-                    continue;
-                }
-                if s.origin != null && !s.origin.eq("") {
-                    t.current_origin = s.origin;
-                }
+                if m.fn_body == null { continue; }
+                if _has_allow(&m, "bad-free") { continue; }
+                if s.origin != null && !s.origin.eq("") { t.current_origin = s.origin; }
                 let mut self_destructor_of: string = "";
                 if m.name.eq("free") && (impl_target.eq("Vector") || impl_target.eq("HashMap")) {
                     self_destructor_of = impl_target;
@@ -2585,24 +1995,14 @@ pub fn analysis_bad_free(t: *Typer, program: *Vector<Stmt>) {
 // Reduce a Type to a short tag we can store in a HashMap<string>.
 // Returns "" for types we don't care about.
 fn _bf_ty_tag(ty: *Type) -> string {
-    if ty == null {
-        return "";
-    }
-    if ty.kind == TY_NAMED {
-        return ty.name;
-    }
+    if ty == null { return ""; }
+    if ty.kind == TY_NAMED { return ty.name; }
     if ty.kind == TY_POINTER && ty.inner != null {
         // *Vector<T> / *HashMap<V> / *T — keep the inner head name.
-        if ty.inner.kind == TY_NAMED {
-            return ty.inner.name;
-        }
-        if ty.inner.kind == TY_GENERIC {
-            return ty.inner.name;
-        }
+        if ty.inner.kind == TY_NAMED { return ty.inner.name; }
+        if ty.inner.kind == TY_GENERIC { return ty.inner.name; }
     }
-    if ty.kind == TY_GENERIC {
-        return ty.name;
-    }
+    if ty.kind == TY_GENERIC { return ty.name; }
     return "";
 }
 
@@ -2615,9 +2015,7 @@ pub fn analysis_string_eq_op(t: *Typer, program: *Vector<Stmt>) {
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_FN && s.fn_body != null {
-            if _has_allow(&s, "string-eq-op") {
-                continue;
-            }
+            if _has_allow(&s, "string-eq-op") { continue; }
             t.current_origin = s.origin;
             let tys: *HashMap<string> = HashMap::new();
             _seq_scan_body(t, s.fn_body, tys);
@@ -2626,15 +2024,9 @@ pub fn analysis_string_eq_op(t: *Typer, program: *Vector<Stmt>) {
         if s.kind == ST_IMPL && s.impl_methods != null {
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                if m.fn_body == null {
-                    continue;
-                }
-                if _has_allow(&m, "string-eq-op") {
-                    continue;
-                }
-                if s.origin != null && !s.origin.eq("") {
-                    t.current_origin = s.origin;
-                }
+                if m.fn_body == null { continue; }
+                if _has_allow(&m, "string-eq-op") { continue; }
+                if s.origin != null && !s.origin.eq("") { t.current_origin = s.origin; }
                 let tys: *HashMap<string> = HashMap::new();
                 _seq_scan_body(t, m.fn_body, tys);
                 tys.free();
@@ -2649,29 +2041,18 @@ fn _seq_scan_body(t: *Typer, body: *Vector<Stmt>, tys: *HashMap<string>) {
         if s.kind == ST_LET && s.name != null && !s.name.eq("") && s.let_ty != null {
             tys.insert(s.name, _bf_ty_tag(s.let_ty));
         }
-        if s.expr_value != null {
-            _seq_check_expr(t, s.expr_value, tys);
-        }
-        if s.let_value != null {
-            _seq_check_expr(t, s.let_value, tys);
-        }
-        if s.cond != null {
-            _seq_check_expr(t, s.cond, tys);
-        }
-        if s.then_body != null {
-            _seq_scan_body(t, s.then_body, tys);
-        }
-        if s.else_body != null {
-            _seq_scan_body(t, s.else_body, tys);
-        }
+        if s.expr_value != null { _seq_check_expr(t, s.expr_value, tys); }
+        if s.let_value != null { _seq_check_expr(t, s.let_value, tys); }
+        if s.cond != null { _seq_check_expr(t, s.cond, tys); }
+        if s.then_body != null { _seq_scan_body(t, s.then_body, tys); }
+        if s.else_body != null { _seq_scan_body(t, s.else_body, tys); }
     }
 }
 
 fn _seq_check_expr(t: *Typer, e: *Expr, tys: *HashMap<string>) {
-    if e == null {
-        return;
-    }
-    if e.kind == EX_BINARY && (e.op_code == OP_EQ || e.op_code == OP_NE) && e.lhs != null && e.rhs != null {
+    if e == null { return; }
+    if e.kind == EX_BINARY && (e.op_code == OP_EQ || e.op_code == OP_NE) && e.lhs != null
+        && e.rhs != null {
         // `s == null` / `s != null` is a legitimate pointer-presence
         // check — strings ARE nullable in Glide. Skip those.
         if e.lhs.kind == EX_NULL || e.rhs.kind == EX_NULL {
@@ -2680,26 +2061,16 @@ fn _seq_check_expr(t: *Typer, e: *Expr, tys: *HashMap<string>) {
             let rhs_str: bool = _seq_is_string_expr(e.rhs, tys);
             if lhs_str || rhs_str {
                 let mut op_name: string = "==";
-                if e.op_code == OP_NE {
-                    op_name = "!=";
-                }
+                if e.op_code == OP_NE { op_name = "!="; }
                 let mut suggest: string = ".eq(…)";
-                if e.op_code == OP_NE {
-                    suggest = "!… .eq(…)";
-                }
+                if e.op_code == OP_NE { suggest = "!… .eq(…)"; }
                 t.warn_range(e.line, e.column, _expr_span(e.lhs), "string-eq-op", "`".concat(op_name).concat("` on strings compares pointers, not bytes — use `").concat(suggest).concat("` for the actual comparison"));
             }
         }
     }
-    if e.lhs != null {
-        _seq_check_expr(t, e.lhs, tys);
-    }
-    if e.rhs != null {
-        _seq_check_expr(t, e.rhs, tys);
-    }
-    if e.operand != null {
-        _seq_check_expr(t, e.operand, tys);
-    }
+    if e.lhs != null { _seq_check_expr(t, e.lhs, tys); }
+    if e.rhs != null { _seq_check_expr(t, e.rhs, tys); }
+    if e.operand != null { _seq_check_expr(t, e.operand, tys); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
@@ -2709,15 +2080,9 @@ fn _seq_check_expr(t: *Typer, e: *Expr, tys: *HashMap<string>) {
 }
 
 fn _seq_is_string_expr(e: *Expr, tys: *HashMap<string>) -> bool {
-    if e == null {
-        return false;
-    }
-    if e.kind == EX_STRING {
-        return true;
-    }
-    if e.kind == EX_IDENT && tys.contains(e.str_val) {
-        return tys.get(e.str_val).eq("string");
-    }
+    if e == null { return false; }
+    if e.kind == EX_STRING { return true; }
+    if e.kind == EX_IDENT && tys.contains(e.str_val) { return tys.get(e.str_val).eq("string"); }
     return false;
 }
 
@@ -2728,35 +2093,27 @@ fn _seq_is_string_expr(e: *Expr, tys: *HashMap<string>) -> bool {
 // referenced via macro expansion that we don't track here.
 // The text of 0-indexed source line `ln0` (without the trailing newline).
 fn _src_line(source: string, ln0: i32) -> string {
-    if source == null {
-        return "";
-    }
+    if source == null { return ""; }
     let n: i32 = source.len();
     let mut ln: i32 = 0;
     let mut start: i32 = 0;
     let mut i: i32 = 0;
     while i < n {
         if source.at(i).to_int() == 10 {
-            if ln == ln0 {
-                return source.substring(start, i);
-            }
+            if ln == ln0 { return source.substring(start, i); }
             ln = ln + 1;
             start = i + 1;
         }
         i = i + 1;
     }
-    if ln == ln0 {
-        return source.substring(start, n);
-    }
+    if ln == ln0 { return source.substring(start, n); }
     return "";
 }
 
 // Byte index of `needle` as a word in `hay` (bounded by non-identifier chars),
 // or -1. Skips `import ` prefix noise by taking the first standalone match.
 fn _word_index(hay: string, needle: string) -> i32 {
-    if needle.eq("") {
-        return -1;
-    }
+    if needle.eq("") { return -1; }
     let hn: i32 = hay.len();
     let nn: i32 = needle.len();
     for let i: i32 = 0; i + nn <= hn; i++ {
@@ -2771,9 +2128,7 @@ fn _word_index(hay: string, needle: string) -> i32 {
                 let ca: i32 = hay.at(i + nn).to_int();
                 ok_after = !(ca >= 65 && ca <= 90 || ca >= 97 && ca <= 122 || ca >= 48 && ca <= 57 || ca == 95);
             }
-            if ok_before && ok_after {
-                return i;
-            }
+            if ok_before && ok_after { return i; }
         }
     }
     return -1;
@@ -2785,13 +2140,12 @@ fn _warn_import_whole(t: *Typer, s: *Stmt, source: string, code: string, msg: st
     let line_txt: string = _src_line(source, s.line - 1);
     let start0: i32 = s.column - 1;
     let mut end0: i32 = line_txt.len();
-    while end0 > start0 && (line_txt.at(end0 - 1).to_int() == 32 || line_txt.at(end0 - 1).to_int() == 9 || line_txt.at(end0 - 1).to_int() == 13) {
+    while end0 > start0
+        && (line_txt.at(end0 - 1).to_int() == 32 || line_txt.at(end0 - 1).to_int() == 9 || line_txt.at(end0 - 1).to_int() == 13) {
         end0 = end0 - 1;
     }
     let mut span: i32 = end0 - start0;
-    if span < 1 {
-        span = 6;
-    }
+    if span < 1 { span = 6; }
     t.warn_unused_range(s.line, s.column, span, code, msg);
 }
 
@@ -2802,9 +2156,7 @@ fn _warn_import_whole(t: *Typer, s: *Stmt, source: string, code: string, msg: st
 // method names straight off it and ask whether any lands in `used` (which
 // _ui_collect_expr fills with every member/call field name in the file).
 fn _trait_method_used(program: *Vector<Stmt>, name: string, used: *HashMap<bool>) -> bool {
-    if name == null || name.eq("") {
-        return false;
-    }
+    if name == null || name.eq("") { return false; }
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         // Methods come from the trait declaration itself and from every impl
@@ -2812,17 +2164,15 @@ fn _trait_method_used(program: *Vector<Stmt>, name: string, used: *HashMap<bool>
         let mut methods: *Vector<Stmt> = null;
         if s.kind == ST_TRAIT && s.name != null && s.name.eq(name) {
             methods = s.impl_methods;
-        } else if s.kind == ST_IMPL && s.impl_trait_name != null && s.impl_trait_name.eq(name) {
-            methods = s.impl_methods;
+        } else {
+            if s.kind == ST_IMPL && s.impl_trait_name != null && s.impl_trait_name.eq(name) {
+                methods = s.impl_methods;
+            }
         }
-        if methods == null {
-            continue;
-        }
+        if methods == null { continue; }
         for let m: i32 = 0; m < methods.len(); m++ {
             let mm: Stmt = methods.get(m);
-            if mm.kind == ST_FN && mm.name != null && used.contains(mm.name) {
-                return true;
-            }
+            if mm.kind == ST_FN && mm.name != null && used.contains(mm.name) { return true; }
         }
     }
     // Not a trait, or a trait with no called methods -> falls through to the
@@ -2837,28 +2187,18 @@ pub fn analysis_unused_import(t: *Typer, program: *Vector<Stmt>, source: string)
     let bare: *HashMap<bool> = HashMap::new();
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind == ST_IMPORT {
-            continue;
-        }
+        if s.kind == ST_IMPORT { continue; }
         _ui_collect_stmt(&s, used);
         _uib_collect_stmt(&s, bare);
     }
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind != ST_IMPORT {
-            continue;
-        }
-        if _has_allow(&s, "unused-import") {
-            continue;
-        }
-        if s.import_wildcard {
-            continue;
-        }
+        if s.kind != ST_IMPORT { continue; }
+        if _has_allow(&s, "unused-import") { continue; }
+        if s.import_wildcard { continue; }
         // Skip synthesized imports (the loader splits `a::{b::{C}}` into
         // line-0 helper imports); the user-written line carries the diagnostic.
-        if s.line < 1 {
-            continue;
-        }
+        if s.line < 1 { continue; }
         // Plain module import (`import a::b::mod;`, no selective items). It's
         // used when the `mod::` qualifier appears OR any name the module
         // exports is referenced bare (module imports bring every pub name).
@@ -2869,25 +2209,17 @@ pub fn analysis_unused_import(t: *Typer, program: *Vector<Stmt>, source: string)
             // imports bring every pub name into scope). The short name comes
             // from the resolved path, since single-segment imports don't set
             // import_short/import_is_module.
-            if s.import_wildcard || s.import_path == null || s.import_path.eq("") {
-                continue;
-            }
+            if s.import_wildcard || s.import_path == null || s.import_path.eq("") { continue; }
             let short: string = drop_glide_ext(last_path_segment(s.import_path));
-            if short.eq("") {
-                continue;
-            }
+            if short.eq("") { continue; }
             t.current_origin = s.origin;
             // Module semantics are qualified-only, so the import is used iff
             // its qualifier appears; bare names no longer come from it.
-            if used.contains(short) {
-                continue;
-            }
+            if used.contains(short) { continue; }
             // TYPE-position uses (`let x: *lib::T`) were collapsed to the bare
             // leaf by _canon_type before this lint ran — the typer recorded
             // the spent qualifier, so a load-bearing import isn't flagged.
-            if t.mod_type_uses.contains(short) {
-                continue;
-            }
+            if t.mod_type_uses.contains(short) { continue; }
             _warn_import_whole(t, &s, source, "unused-import", "import of `".concat(short).concat("` is never used in this file — remove it (module imports grant `").concat(short).concat("::…` access)"));
             continue;
         }
@@ -2901,26 +2233,18 @@ pub fn analysis_unused_import(t: *Typer, program: *Vector<Stmt>, source: string)
             let mut leaf: string = item;
             let mut cc: i32 = -1;
             for let k: i32 = 0; k + 1 < item.len(); k++ {
-                if item.at(k).to_int() == 58 && item.at(k + 1).to_int() == 58 {
-                    cc = k;
-                }
+                if item.at(k).to_int() == 58 && item.at(k + 1).to_int() == 58 { cc = k; }
             }
-            if cc >= 0 {
-                leaf = item.substring(cc + 2, item.len());
-            }
+            if cc >= 0 { leaf = item.substring(cc + 2, item.len()); }
             if !bare.contains(leaf) {
                 // A trait is used without ever naming it: `import a::Greet` is
                 // live if any method `Greet` declares is called (`x.hello()`).
                 // The method's field name lands in `used` via _ui_collect_expr.
-                if _trait_method_used(program, leaf, used) {
-                    continue;
-                }
+                if _trait_method_used(program, leaf, used) { continue; }
                 unused.push(item);
             }
         }
-        if unused.len() == 0 {
-            continue;
-        }
+        if unused.len() == 0 { continue; }
         let mut all: bool = unused.len() == s.imported_items.len();
         // A selective import also carries the module qualifier; when `mod::`
         // is in use, the LINE must stay — flag the dead members individually.
@@ -2934,9 +2258,7 @@ pub fn analysis_unused_import(t: *Typer, program: *Vector<Stmt>, source: string)
             // Nothing imported here is used — fade the whole statement.
             let mut names: string = "";
             for let j: i32 = 0; j < unused.len(); j++ {
-                if j > 0 {
-                    names = names.concat(", ");
-                }
+                if j > 0 { names = names.concat(", "); }
                 names = names.concat("`").concat(unused.get(j)).concat("`");
             }
             let mut msg: string = "";
@@ -2954,13 +2276,9 @@ pub fn analysis_unused_import(t: *Typer, program: *Vector<Stmt>, source: string)
                 let mut leaf: string = item;
                 let mut cc: i32 = -1;
                 for let k: i32 = 0; k + 1 < item.len(); k++ {
-                    if item.at(k).to_int() == 58 && item.at(k + 1).to_int() == 58 {
-                        cc = k;
-                    }
+                    if item.at(k).to_int() == 58 && item.at(k + 1).to_int() == 58 { cc = k; }
                 }
-                if cc >= 0 {
-                    leaf = item.substring(cc + 2, item.len());
-                }
+                if cc >= 0 { leaf = item.substring(cc + 2, item.len()); }
                 let at: i32 = _word_index(line_txt, leaf);
                 let mut msg: string = "`".concat(leaf).concat("` is imported but never used — remove it from the group");
                 if used.contains(leaf) {
@@ -2991,9 +2309,7 @@ pub fn analysis_unused_struct_enum(t: *Typer, program: *Vector<Stmt>) {
     let has_impl: *HashMap<bool> = HashMap::new();
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind == ST_IMPORT {
-            continue;
-        }
+        if s.kind == ST_IMPORT { continue; }
         if s.kind == ST_IMPL && s.impl_target != null && s.impl_target.name != null {
             has_impl.insert(s.impl_target.name, true);
         }
@@ -3001,38 +2317,18 @@ pub fn analysis_unused_struct_enum(t: *Typer, program: *Vector<Stmt>) {
     }
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind != ST_STRUCT && s.kind != ST_ENUM {
-            continue;
-        }
-        if s.is_pub {
-            continue;
-        }
-        if s.type_params != null && s.type_params.len() > 0 {
-            continue;
-        }
-        if s.name == null || s.name.len() == 0 {
-            continue;
-        }
-        if t.dup_flagged.contains(s.name) {
-            continue;
-        }
-        if _has_allow(&s, "unused-struct") {
-            continue;
-        }
-        if _has_allow(&s, "unused-enum") {
-            continue;
-        }
-        if has_impl.contains(s.name) {
-            continue;
-        }
-        if used.contains(s.name) {
-            continue;
-        }
+        if s.kind != ST_STRUCT && s.kind != ST_ENUM { continue; }
+        if s.is_pub { continue; }
+        if s.type_params != null && s.type_params.len() > 0 { continue; }
+        if s.name == null || s.name.len() == 0 { continue; }
+        if t.dup_flagged.contains(s.name) { continue; }
+        if _has_allow(&s, "unused-struct") { continue; }
+        if _has_allow(&s, "unused-enum") { continue; }
+        if has_impl.contains(s.name) { continue; }
+        if used.contains(s.name) { continue; }
         t.current_origin = s.origin;
         let mut nlen: i32 = s.name_len;
-        if nlen == 0 {
-            nlen = s.name.len();
-        }
+        if nlen == 0 { nlen = s.name.len(); }
         if s.kind == ST_STRUCT {
             t.warn_unused_range(s.name_line, s.name_col, nlen, "unused-struct", "struct `".concat(s.name).concat("` is never used"));
         } else {
@@ -3054,26 +2350,14 @@ pub fn analysis_unused_const(t: *Typer, program: *Vector<Stmt>) {
     }
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind != ST_CONST {
-            continue;
-        }
-        if s.is_pub {
-            continue;
-        }
-        if s.name == null || s.name.len() == 0 {
-            continue;
-        }
-        if _has_allow(&s, "unused-const") {
-            continue;
-        }
-        if used.contains(s.name) {
-            continue;
-        }
+        if s.kind != ST_CONST { continue; }
+        if s.is_pub { continue; }
+        if s.name == null || s.name.len() == 0 { continue; }
+        if _has_allow(&s, "unused-const") { continue; }
+        if used.contains(s.name) { continue; }
         t.current_origin = s.origin;
         let mut nlen: i32 = s.name_len;
-        if nlen == 0 {
-            nlen = s.name.len();
-        }
+        if nlen == 0 { nlen = s.name.len(); }
         t.warn_unused_range(s.name_line, s.name_col, nlen, "unused-const", "const `".concat(s.name).concat("` is never referenced"));
     }
     used.free();
@@ -3091,25 +2375,15 @@ pub fn analysis_redundant_import(t: *Typer, program: *Vector<Stmt>) {
     let seen: *HashMap<bool> = HashMap::new();
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind != ST_IMPORT {
-            continue;
-        }
-        if s.import_path == null || s.import_path.eq("") {
-            continue;
-        }
+        if s.kind != ST_IMPORT { continue; }
+        if s.import_path == null || s.import_path.eq("") { continue; }
         // Synthesized imports (package-child lazy loading) have no source
         // line. They must neither be flagged nor make the USER's own later
         // line look like a duplicate.
-        if s.line < 1 {
-            continue;
-        }
-        if _has_allow(&s, "redundant-import") {
-            continue;
-        }
+        if s.line < 1 { continue; }
+        if _has_allow(&s, "redundant-import") { continue; }
         let mut org: string = s.origin;
-        if org == null {
-            org = "";
-        }
+        if org == null { org = ""; }
         let key: string = org.concat(" ").concat(s.import_path);
         if seen.contains(key) {
             t.current_origin = s.origin;
@@ -3129,24 +2403,14 @@ pub fn analysis_redundant_import(t: *Typer, program: *Vector<Stmt>) {
 // enums and any enum the type-ref scan never saw (a wholly-dead enum is
 // owned by analysis_unused_struct_enum, no double report).
 fn _uv_collect_expr(e: *Expr, out: *HashMap<bool>) {
-    if e == null {
-        return;
-    }
-    if e.kind == EX_PATH {
-        out.insert(e.field, true);
-    }
+    if e == null { return; }
+    if e.kind == EX_PATH { out.insert(e.field, true); }
     if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_PATH {
         out.insert(e.lhs.field, true);
     }
-    if e.lhs != null {
-        _uv_collect_expr(e.lhs, out);
-    }
-    if e.rhs != null {
-        _uv_collect_expr(e.rhs, out);
-    }
-    if e.operand != null {
-        _uv_collect_expr(e.operand, out);
-    }
+    if e.lhs != null { _uv_collect_expr(e.lhs, out); }
+    if e.rhs != null { _uv_collect_expr(e.rhs, out); }
+    if e.operand != null { _uv_collect_expr(e.operand, out); }
     if e.match_arms != null {
         for let i: i32 = 0; i < e.match_arms.len(); i++ {
             let arm: MatchArm = e.match_arms.get(i);
@@ -3162,24 +2426,12 @@ fn _uv_collect_expr(e: *Expr, out: *HashMap<bool>) {
 }
 
 fn _uv_collect_stmt(s: *Stmt, out: *HashMap<bool>) {
-    if s == null {
-        return;
-    }
-    if s.let_value != null {
-        _uv_collect_expr(s.let_value, out);
-    }
-    if s.expr_value != null {
-        _uv_collect_expr(s.expr_value, out);
-    }
-    if s.cond != null {
-        _uv_collect_expr(s.cond, out);
-    }
-    if s.for_step != null {
-        _uv_collect_expr(s.for_step, out);
-    }
-    if s.for_init != null {
-        _uv_collect_stmt(s.for_init, out);
-    }
+    if s == null { return; }
+    if s.let_value != null { _uv_collect_expr(s.let_value, out); }
+    if s.expr_value != null { _uv_collect_expr(s.expr_value, out); }
+    if s.cond != null { _uv_collect_expr(s.cond, out); }
+    if s.for_step != null { _uv_collect_expr(s.for_step, out); }
+    if s.for_init != null { _uv_collect_stmt(s.for_init, out); }
     if s.arms != null {
         for let i: i32 = 0; i < s.arms.len(); i++ {
             let arm: MatchArm = s.arms.get(i);
@@ -3211,9 +2463,7 @@ pub fn analysis_unused_variant(t: *Typer, program: *Vector<Stmt>) {
     let used: *HashMap<bool> = HashMap::new();
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind != ST_IMPORT {
-            _ui_collect_stmt(&s, refs);
-        }
+        if s.kind != ST_IMPORT { _ui_collect_stmt(&s, refs); }
         if s.fn_body != null {
             for let j: i32 = 0; j < s.fn_body.len(); j++ {
                 let b: Stmt = s.fn_body.get(j);
@@ -3234,36 +2484,18 @@ pub fn analysis_unused_variant(t: *Typer, program: *Vector<Stmt>) {
     }
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind != ST_ENUM {
-            continue;
-        }
-        if s.is_pub {
-            continue;
-        }
-        if s.type_params != null && s.type_params.len() > 0 {
-            continue;
-        }
-        if s.name == null {
-            continue;
-        }
-        if _has_allow(&s, "unused-variant") {
-            continue;
-        }
-        if !refs.contains(s.name) {
-            continue;
-        }
-        if s.enum_variants == null {
-            continue;
-        }
+        if s.kind != ST_ENUM { continue; }
+        if s.is_pub { continue; }
+        if s.type_params != null && s.type_params.len() > 0 { continue; }
+        if s.name == null { continue; }
+        if _has_allow(&s, "unused-variant") { continue; }
+        if !refs.contains(s.name) { continue; }
+        if s.enum_variants == null { continue; }
         let mut nlen: i32 = s.name_len;
-        if nlen == 0 {
-            nlen = s.name.len();
-        }
+        if nlen == 0 { nlen = s.name.len(); }
         for let j: i32 = 0; j < s.enum_variants.len(); j++ {
             let v: EnumVariant = s.enum_variants.get(j);
-            if used.contains(v.name) {
-                continue;
-            }
+            if used.contains(v.name) { continue; }
             t.current_origin = s.origin;
             t.warn_unused_range(s.name_line, s.name_col, nlen, "unused-variant", "enum variant `".concat(s.name).concat("::").concat(v.name).concat("` is never constructed or matched"));
         }
@@ -3288,12 +2520,8 @@ pub fn analysis_arena_set_unbalanced(t: *Typer, program: *Vector<Stmt>) {
         if s.kind == ST_IMPL && s.impl_methods != null {
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                if m.fn_body == null || _has_allow(&m, "arena-set") {
-                    continue;
-                }
-                if s.origin != null && !s.origin.eq("") {
-                    t.current_origin = s.origin;
-                }
+                if m.fn_body == null || _has_allow(&m, "arena-set") { continue; }
+                if s.origin != null && !s.origin.eq("") { t.current_origin = s.origin; }
                 _asu_check_fn(t, m.fn_body, m.line, m.column);
             }
         }
@@ -3320,9 +2548,7 @@ fn _asu_walk(body: *Vector<Stmt>, sets: *i32, defer_sets: *i32, fline: *i32, fco
             // Any palloc_set inside a defer counts as a restore —
             // even `_set(prev)` carries a non-null arg, and defers
             // fire on every exit so the restore is guaranteed.
-            if _asu_is_palloc_set_any(s.expr_value) {
-                *defer_sets = *defer_sets + 1;
-            }
+            if _asu_is_palloc_set_any(s.expr_value) { *defer_sets = *defer_sets + 1; }
         } else {
             if s.expr_value != null && _asu_is_palloc_set_active(s.expr_value) {
                 // Only `_set(<non-null>)` needs a balancing restore.
@@ -3339,32 +2565,20 @@ fn _asu_walk(body: *Vector<Stmt>, sets: *i32, defer_sets: *i32, fline: *i32, fco
                 }
             }
         }
-        if s.then_body != null {
-            _asu_walk(s.then_body, sets, defer_sets, fline, fcol, in_defer);
-        }
-        if s.else_body != null {
-            _asu_walk(s.else_body, sets, defer_sets, fline, fcol, in_defer);
-        }
+        if s.then_body != null { _asu_walk(s.then_body, sets, defer_sets, fline, fcol, in_defer); }
+        if s.else_body != null { _asu_walk(s.else_body, sets, defer_sets, fline, fcol, in_defer); }
     }
 }
 
 fn _asu_is_palloc_set_any(e: *Expr) -> bool {
-    if e == null {
-        return false;
-    }
-    if e.kind != EX_CALL || e.lhs == null || e.lhs.kind != EX_IDENT {
-        return false;
-    }
+    if e == null { return false; }
+    if e.kind != EX_CALL || e.lhs == null || e.lhs.kind != EX_IDENT { return false; }
     return e.lhs.str_val.eq("__glide_palloc_set");
 }
 
 fn _asu_is_palloc_set_active(e: *Expr) -> bool {
-    if !_asu_is_palloc_set_any(e) {
-        return false;
-    }
-    if e.args == null || e.args.len() != 1 {
-        return false;
-    }
+    if !_asu_is_palloc_set_any(e) { return false; }
+    if e.args == null || e.args.len() != 1 { return false; }
     let arg: Expr = e.args.get(0);
     // Treat `_set(<arena-creating call>)` as the "active set" — that's
     // the form that actually starts a per-scope arena and needs a
@@ -3375,18 +2589,13 @@ fn _asu_is_palloc_set_active(e: *Expr) -> bool {
 }
 
 fn _asu_arg_creates_arena(e: *Expr) -> bool {
-    if e == null {
-        return false;
-    }
-    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT && e.lhs.str_val.eq("__glide_palloc_make") {
+    if e == null { return false; }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT
+        && e.lhs.str_val.eq("__glide_palloc_make") {
         return true;
     }
-    if e.lhs != null && _asu_arg_creates_arena(e.lhs) {
-        return true;
-    }
-    if e.operand != null && _asu_arg_creates_arena(e.operand) {
-        return true;
-    }
+    if e.lhs != null && _asu_arg_creates_arena(e.lhs) { return true; }
+    if e.operand != null && _asu_arg_creates_arena(e.operand) { return true; }
     return false;
 }
 
@@ -3411,15 +2620,11 @@ pub fn analysis_coro_blocking(t: *Typer, program: *Vector<Stmt>) {
     let bodies: *HashMap<*Vector<Stmt>> = HashMap::new();
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind == ST_FN && s.fn_body != null {
-            bodies.insert(s.name, s.fn_body);
-        }
+        if s.kind == ST_FN && s.fn_body != null { bodies.insert(s.name, s.fn_body); }
         if s.kind == ST_IMPL && s.impl_methods != null {
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                if m.fn_body != null {
-                    bodies.insert(m.name, m.fn_body);
-                }
+                if m.fn_body != null { bodies.insert(m.name, m.fn_body); }
             }
         }
     }
@@ -3432,12 +2637,8 @@ pub fn analysis_coro_blocking(t: *Typer, program: *Vector<Stmt>) {
         if s.kind == ST_IMPL && s.impl_methods != null {
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                if m.fn_body == null || _has_allow(&m, "coro-blocking") {
-                    continue;
-                }
-                if s.origin != null && !s.origin.eq("") {
-                    t.current_origin = s.origin;
-                }
+                if m.fn_body == null || _has_allow(&m, "coro-blocking") { continue; }
+                if s.origin != null && !s.origin.eq("") { t.current_origin = s.origin; }
                 _cb_scan_for_spawn(t, m.fn_body, blocking, bodies);
             }
         }
@@ -3449,7 +2650,10 @@ pub fn analysis_coro_blocking(t: *Typer, program: *Vector<Stmt>) {
 fn _cb_scan_for_spawn(t: *Typer, body: *Vector<Stmt>, blocking: *HashMap<bool>, bodies: *HashMap<*Vector<Stmt>>) {
     for let i: i32 = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
-        if s.kind == ST_SPAWN && !s.is_spawn_thread && s.expr_value != null && s.expr_value.kind == EX_CALL && s.expr_value.lhs != null && s.expr_value.lhs.kind == EX_IDENT {
+        if s.kind == ST_SPAWN && !s.is_spawn_thread && s.expr_value != null
+            && s.expr_value.kind == EX_CALL
+            && s.expr_value.lhs != null
+            && s.expr_value.lhs.kind == EX_IDENT {
             let tgt: string = s.expr_value.lhs.str_val;
             // Direct: spawn fs_read(...) — blocking name spawned.
             if blocking.contains(tgt) {
@@ -3461,12 +2665,8 @@ fn _cb_scan_for_spawn(t: *Typer, body: *Vector<Stmt>, blocking: *HashMap<bool>, 
                 }
             }
         }
-        if s.then_body != null {
-            _cb_scan_for_spawn(t, s.then_body, blocking, bodies);
-        }
-        if s.else_body != null {
-            _cb_scan_for_spawn(t, s.else_body, blocking, bodies);
-        }
+        if s.then_body != null { _cb_scan_for_spawn(t, s.then_body, blocking, bodies); }
+        if s.else_body != null { _cb_scan_for_spawn(t, s.else_body, blocking, bodies); }
     }
 }
 
@@ -3476,9 +2676,7 @@ fn _cb_walk_for_blocking(t: *Typer, body: *Vector<Stmt>, blocking: *HashMap<bool
         if s.expr_value != null {
             _cb_check_blocking_call(t, s.expr_value, blocking, spawn_target);
         }
-        if s.let_value != null {
-            _cb_check_blocking_call(t, s.let_value, blocking, spawn_target);
-        }
+        if s.let_value != null { _cb_check_blocking_call(t, s.let_value, blocking, spawn_target); }
         if s.then_body != null {
             _cb_walk_for_blocking(t, s.then_body, blocking, spawn_target, spawn_line);
         }
@@ -3489,21 +2687,13 @@ fn _cb_walk_for_blocking(t: *Typer, body: *Vector<Stmt>, blocking: *HashMap<bool
 }
 
 fn _cb_check_blocking_call(t: *Typer, e: *Expr, blocking: *HashMap<bool>, spawned: string) {
-    if e == null {
-        return;
-    }
+    if e == null { return; }
     if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT && blocking.contains(e.lhs.str_val) {
         t.warn_range(e.line, e.column, _expr_span(e), "coro-blocking", "`".concat(e.lhs.str_val).concat("` blocks the worker thread — reached from `spawn ").concat(spawned).concat("()`. Use `spawn_thread` instead, or call the async variant"));
     }
-    if e.lhs != null {
-        _cb_check_blocking_call(t, e.lhs, blocking, spawned);
-    }
-    if e.rhs != null {
-        _cb_check_blocking_call(t, e.rhs, blocking, spawned);
-    }
-    if e.operand != null {
-        _cb_check_blocking_call(t, e.operand, blocking, spawned);
-    }
+    if e.lhs != null { _cb_check_blocking_call(t, e.lhs, blocking, spawned); }
+    if e.rhs != null { _cb_check_blocking_call(t, e.rhs, blocking, spawned); }
+    if e.operand != null { _cb_check_blocking_call(t, e.operand, blocking, spawned); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
@@ -3537,12 +2727,8 @@ pub fn analysis_unhandled_result(t: *Typer, program: *Vector<Stmt>) {
         if s.kind == ST_IMPL && s.impl_methods != null {
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                if m.fn_body == null || _has_allow(&m, "unhandled-result") {
-                    continue;
-                }
-                if s.origin != null && !s.origin.eq("") {
-                    t.current_origin = s.origin;
-                }
+                if m.fn_body == null || _has_allow(&m, "unhandled-result") { continue; }
+                if s.origin != null && !s.origin.eq("") { t.current_origin = s.origin; }
                 let tys: *HashMap<string> = HashMap::new();
                 _ur_seed_params(m.fn_params, tys);
                 _ur_walk(t, m.fn_body, ret_kinds, method_rets, tys);
@@ -3555,35 +2741,25 @@ pub fn analysis_unhandled_result(t: *Typer, program: *Vector<Stmt>) {
 }
 
 fn _ur_seed_params(params: *Vector<Param>, tys: *HashMap<string>) {
-    if params == null {
-        return;
-    }
+    if params == null { return; }
     for let i: i32 = 0; i < params.len(); i++ {
         let p: Param = params.get(i);
-        if p.ty != null && !p.name.eq("") {
-            tys.insert(p.name, _bf_ty_tag(p.ty));
-        }
+        if p.ty != null && !p.name.eq("") { tys.insert(p.name, _bf_ty_tag(p.ty)); }
     }
 }
 
 fn _ur_collect_sigs(program: *Vector<Stmt>, ret_kinds: *HashMap<i32>, method_rets: *HashMap<i32>) {
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind == ST_FN && s.fn_ret_ty != null {
-            ret_kinds.insert(s.name, s.fn_ret_ty.kind);
-        }
+        if s.kind == ST_FN && s.fn_ret_ty != null { ret_kinds.insert(s.name, s.fn_ret_ty.kind); }
         if s.kind == ST_IMPL && s.impl_methods != null && s.impl_target != null {
             let mut tname: string = "";
             if s.impl_target.kind == TY_NAMED {
                 tname = s.impl_target.name;
             } else {
-                if s.impl_target.kind == TY_GENERIC {
-                    tname = s.impl_target.name;
-                }
+                if s.impl_target.kind == TY_GENERIC { tname = s.impl_target.name; }
             }
-            if tname.eq("") {
-                continue;
-            }
+            if tname.eq("") { continue; }
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
                 if m.fn_ret_ty != null {
@@ -3604,56 +2780,37 @@ fn _ur_walk(t: *Typer, body: *Vector<Stmt>, ret_kinds: *HashMap<i32>, method_ret
         if s.kind == ST_EXPR && s.expr_value != null {
             _ur_check_call(t, s.expr_value, ret_kinds, method_rets, tys);
         }
-        if s.then_body != null {
-            _ur_walk(t, s.then_body, ret_kinds, method_rets, tys);
-        }
-        if s.else_body != null {
-            _ur_walk(t, s.else_body, ret_kinds, method_rets, tys);
-        }
-        if s.fn_body != null {
-            _ur_walk(t, s.fn_body, ret_kinds, method_rets, tys);
-        }
+        if s.then_body != null { _ur_walk(t, s.then_body, ret_kinds, method_rets, tys); }
+        if s.else_body != null { _ur_walk(t, s.else_body, ret_kinds, method_rets, tys); }
+        if s.fn_body != null { _ur_walk(t, s.fn_body, ret_kinds, method_rets, tys); }
     }
 }
 
 fn _ur_check_call(t: *Typer, e: *Expr, ret_kinds: *HashMap<i32>, method_rets: *HashMap<i32>, tys: *HashMap<string>) {
-    if e == null {
-        return;
-    }
+    if e == null { return; }
     // `?` is enough — already propagating.
-    if e.kind == EX_UNARY && e.op_code == UN_TRY {
-        return;
-    }
-    if e.kind != EX_CALL || e.lhs == null {
-        return;
-    }
+    if e.kind == EX_UNARY && e.op_code == UN_TRY { return; }
+    if e.kind != EX_CALL || e.lhs == null { return; }
     let mut fn_label: string = "";
     let mut k: i32 = -1;
     if e.lhs.kind == EX_IDENT {
         // Bare fn: `foo(…)`.
         let n: string = e.lhs.str_val;
-        if !ret_kinds.contains(n) {
-            return;
-        }
+        if !ret_kinds.contains(n) { return; }
         fn_label = n;
         k = ret_kinds.get(n);
     } else {
-        if e.lhs.kind == EX_MEMBER && e.lhs.field != null && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT {
+        if e.lhs.kind == EX_MEMBER && e.lhs.field != null && e.lhs.lhs != null
+            && e.lhs.lhs.kind == EX_IDENT {
             // Method: `x.foo(…)`. Resolve x's declared type and look up
             // the per-type method table. Skip when receiver type isn't
             // tracked (param / let-without-annotation / chain receiver).
             let recv: string = e.lhs.lhs.str_val;
-            if !tys.contains(recv) {
-                return;
-            }
+            if !tys.contains(recv) { return; }
             let tname: string = tys.get(recv);
-            if tname.eq("") {
-                return;
-            }
+            if tname.eq("") { return; }
             let key: string = tname.concat("::").concat(e.lhs.field);
-            if !method_rets.contains(key) {
-                return;
-            }
+            if !method_rets.contains(key) { return; }
             fn_label = recv.concat(".").concat(e.lhs.field);
             k = method_rets.get(key);
         } else {
@@ -3686,12 +2843,8 @@ pub fn analysis_ignored_option(t: *Typer, program: *Vector<Stmt>) {
         if s.kind == ST_IMPL && s.impl_methods != null {
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                if m.fn_body == null || _has_allow(&m, "ignored-option") {
-                    continue;
-                }
-                if s.origin != null && !s.origin.eq("") {
-                    t.current_origin = s.origin;
-                }
+                if m.fn_body == null || _has_allow(&m, "ignored-option") { continue; }
+                if s.origin != null && !s.origin.eq("") { t.current_origin = s.origin; }
                 let opts: *HashMap<bool> = HashMap::new();
                 let checked: *HashMap<bool> = HashMap::new();
                 _io_scan(t, m.fn_body, opts, checked, program, s.origin);
@@ -3720,7 +2873,10 @@ fn _io_scan(t: *Typer, body: *Vector<Stmt>, opts: *HashMap<bool>, checked: *Hash
         }
         // Reassignment narrows: `x = some(v)` makes x present, `x = none()`
         // (or any non-present rhs) marks it unchecked again.
-        if s.kind == ST_EXPR && s.expr_value != null && s.expr_value.kind == EX_ASSIGN && s.expr_value.lhs != null && s.expr_value.lhs.kind == EX_IDENT && opts.contains(s.expr_value.lhs.str_val) {
+        if s.kind == ST_EXPR && s.expr_value != null && s.expr_value.kind == EX_ASSIGN
+            && s.expr_value.lhs != null
+            && s.expr_value.lhs.kind == EX_IDENT
+            && opts.contains(s.expr_value.lhs.str_val) {
             checked.insert(s.expr_value.lhs.str_val, _io_rhs_is_present(s.expr_value.rhs));
         }
         if s.cond != null {
@@ -3732,9 +2888,7 @@ fn _io_scan(t: *Typer, body: *Vector<Stmt>, opts: *HashMap<bool>, checked: *Hash
         // safe inside the then-body (`if x.is_some() && x.val > 0 { … }`).
         if s.then_body != null {
             let gnames: *Vector<string> = Vector::new();
-            if s.cond != null {
-                _io_collect_and_checks(s.cond, gnames);
-            }
+            if s.cond != null { _io_collect_and_checks(s.cond, gnames); }
             let saved: *Vector<bool> = Vector::new();
             for let k: i32 = 0; k < gnames.len(); k++ {
                 let nm: string = gnames.get(k);
@@ -3748,15 +2902,9 @@ fn _io_scan(t: *Typer, body: *Vector<Stmt>, opts: *HashMap<bool>, checked: *Hash
             saved.free();
             gnames.free();
         }
-        if s.else_body != null {
-            _io_scan(t, s.else_body, opts, checked, root, path);
-        }
-        if s.expr_value != null {
-            _io_check_expr(t, s.expr_value, opts, checked);
-        }
-        if s.let_value != null {
-            _io_check_expr(t, s.let_value, opts, checked);
-        }
+        if s.else_body != null { _io_scan(t, s.else_body, opts, checked, root, path); }
+        if s.expr_value != null { _io_check_expr(t, s.expr_value, opts, checked); }
+        if s.let_value != null { _io_check_expr(t, s.let_value, opts, checked); }
         // After an early-exit guard (`if !r.has { break/return/continue }`,
         // or a `||` chain of them), every subsequent sibling stmt is safe to
         // read the guarded option(s)' `.val`.
@@ -3773,73 +2921,59 @@ fn _io_scan(t: *Typer, body: *Vector<Stmt>, opts: *HashMap<bool>, checked: *Hash
 
 fn _io_extract_check_unsigned(e: *Expr) -> string {
     // Like _io_extract_check but strips the outer `!`.
-    if e == null {
-        return "";
-    }
-    if e.kind == EX_UNARY && e.operand != null {
-        return _io_extract_check_unsigned(e.operand);
-    }
+    if e == null { return ""; }
+    if e.kind == EX_UNARY && e.operand != null { return _io_extract_check_unsigned(e.operand); }
     return _io_extract_check(e);
 }
 
 fn _io_is_negated_check(e: *Expr) -> bool {
-    if e == null {
-        return false;
-    }
-    if e.kind == EX_UNARY {
-        return true;
-    }
+    if e == null { return false; }
+    if e.kind == EX_UNARY { return true; }
     return false;
 }
 
 fn _io_is_none_check(e: *Expr) -> bool {
-    if e == null {
-        return false;
-    }
-    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.field != null && e.lhs.field.eq("is_none") {
+    if e == null { return false; }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.field != null
+        && e.lhs.field.eq("is_none") {
         return true;
     }
     return false;
 }
 
 fn _io_body_is_early_exit(body: *Vector<Stmt>) -> bool {
-    if body == null || body.len() == 0 {
-        return false;
-    }
+    if body == null || body.len() == 0 { return false; }
     let last: Stmt = body.get(body.len() - 1);
-    if last.kind == ST_RETURN || last.kind == ST_BREAK || last.kind == ST_CONTINUE {
-        return true;
-    }
+    if last.kind == ST_RETURN || last.kind == ST_BREAK || last.kind == ST_CONTINUE { return true; }
     return false;
 }
 
 fn _io_extract_check(e: *Expr) -> string {
-    if e == null {
-        return "";
-    }
+    if e == null { return ""; }
     // `x.is_some()` — method form.
-    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.field != null && e.lhs.field.eq("is_some") && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT {
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.field != null
+        && e.lhs.field.eq("is_some")
+        && e.lhs.lhs != null
+        && e.lhs.lhs.kind == EX_IDENT {
         return e.lhs.lhs.str_val;
     }
     // `x.has` — direct field access on the option struct (used in
     // tight loops where the method-call overhead matters).
-    if e.kind == EX_MEMBER && e.field != null && e.field.eq("has") && e.lhs != null && e.lhs.kind == EX_IDENT {
+    if e.kind == EX_MEMBER && e.field != null && e.field.eq("has") && e.lhs != null
+        && e.lhs.kind == EX_IDENT {
         return e.lhs.str_val;
     }
     // `!x.is_some()` / `!x.has` — recurse through the unary !.
-    if e.kind == EX_UNARY && e.operand != null {
-        return _io_extract_check(e.operand);
-    }
+    if e.kind == EX_UNARY && e.operand != null { return _io_extract_check(e.operand); }
     return "";
 }
 
 // True when `e` is a definitely-present ctor — `some(...)` / `ok(...)`.
 // A local initialised or reassigned to one of these is safe to `.val`.
 fn _io_rhs_is_present(e: *Expr) -> bool {
-    if e == null {
-        return false;
-    }
-    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT && e.lhs.str_val != null && (e.lhs.str_val.eq("some") || e.lhs.str_val.eq("ok")) {
+    if e == null { return false; }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT && e.lhs.str_val != null
+        && (e.lhs.str_val.eq("some") || e.lhs.str_val.eq("ok")) {
         return true;
     }
     return false;
@@ -3850,9 +2984,7 @@ fn _io_rhs_is_present(e: *Expr) -> bool {
 // each negated-check receiver (`!x.has` / `!x.is_some()` / `x.is_none()`)
 // is guaranteed present afterwards. Also covers the single-check form.
 fn _io_collect_orexit_checks(e: *Expr, out: *Vector<string>) {
-    if e == null {
-        return;
-    }
+    if e == null { return; }
     if e.kind == EX_BINARY && e.op_code == OP_OR {
         _io_collect_orexit_checks(e.lhs, out);
         _io_collect_orexit_checks(e.rhs, out);
@@ -3860,9 +2992,7 @@ fn _io_collect_orexit_checks(e: *Expr, out: *Vector<string>) {
     }
     if e.kind == EX_UNARY && e.operand != null {
         let nm: string = _io_extract_check(e.operand);
-        if !nm.eq("") {
-            out.push(nm);
-        }
+        if !nm.eq("") { out.push(nm); }
         return;
     }
     if _io_is_none_check(e) && e.lhs != null && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT {
@@ -3875,30 +3005,22 @@ fn _io_collect_orexit_checks(e: *Expr, out: *Vector<string>) {
 // that is a positive check (`x.has` / `x.is_some()`, not negated/is_none)
 // contributes its receiver.
 fn _io_collect_and_checks(e: *Expr, out: *Vector<string>) {
-    if e == null {
-        return;
-    }
+    if e == null { return; }
     if e.kind == EX_BINARY && e.op_code == OP_AND {
         _io_collect_and_checks(e.lhs, out);
         _io_collect_and_checks(e.rhs, out);
         return;
     }
-    if _io_is_negated_check(e) || _io_is_none_check(e) {
-        return;
-    }
+    if _io_is_negated_check(e) || _io_is_none_check(e) { return; }
     let nm: string = _io_extract_check(e);
-    if !nm.eq("") {
-        out.push(nm);
-    }
+    if !nm.eq("") { out.push(nm); }
 }
 
 // Check a condition for unguarded `.val`, honouring `&&` short-circuit:
 // in `x.has && x.val`, the left guard protects the right operand, so the
 // `.val` there is safe — but a bare `if x.val` still flags.
 fn _io_check_cond(t: *Typer, e: *Expr, opts: *HashMap<bool>, checked: *HashMap<bool>) {
-    if e == null {
-        return;
-    }
+    if e == null { return; }
     if e.kind == EX_BINARY && e.op_code == OP_AND && e.lhs != null && e.rhs != null {
         _io_check_cond(t, e.lhs, opts, checked);
         let g: string = _io_extract_check_unsigned(e.lhs);
@@ -3917,28 +3039,20 @@ fn _io_check_cond(t: *Typer, e: *Expr, opts: *HashMap<bool>, checked: *HashMap<b
 }
 
 fn _io_check_expr(t: *Typer, e: *Expr, opts: *HashMap<bool>, checked: *HashMap<bool>) {
-    if e == null {
-        return;
-    }
-    if e.kind == EX_MEMBER && e.field != null && e.field.eq("val") && e.lhs != null && e.lhs.kind == EX_IDENT && opts.contains(e.lhs.str_val) {
+    if e == null { return; }
+    if e.kind == EX_MEMBER && e.field != null && e.field.eq("val") && e.lhs != null
+        && e.lhs.kind == EX_IDENT
+        && opts.contains(e.lhs.str_val) {
         let nm: string = e.lhs.str_val;
         if !(checked.contains(nm) && checked.get(nm)) {
             let mut span: i32 = 1;
-            if e.field_col > 0 {
-                span = e.field_col - e.column + e.field.len();
-            }
+            if e.field_col > 0 { span = e.field_col - e.column + e.field.len(); }
             t.warn_range(e.line, e.column, span, "ignored-option", "`".concat(nm).concat(".val` reads the payload without checking `").concat(nm).concat(".is_some()`. Guard with `if ").concat(nm).concat(".is_some() { ... }` or unwrap via `let v = ").concat(nm).concat("?;`."));
         }
     }
-    if e.lhs != null {
-        _io_check_expr(t, e.lhs, opts, checked);
-    }
-    if e.rhs != null {
-        _io_check_expr(t, e.rhs, opts, checked);
-    }
-    if e.operand != null {
-        _io_check_expr(t, e.operand, opts, checked);
-    }
+    if e.lhs != null { _io_check_expr(t, e.lhs, opts, checked); }
+    if e.rhs != null { _io_check_expr(t, e.rhs, opts, checked); }
+    if e.operand != null { _io_check_expr(t, e.operand, opts, checked); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
@@ -3969,12 +3083,8 @@ pub fn analysis_unchecked_result(t: *Typer, program: *Vector<Stmt>) {
         if s.kind == ST_IMPL && s.impl_methods != null {
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                if m.fn_body == null || _has_allow(&m, "unchecked-result") {
-                    continue;
-                }
-                if s.origin != null && !s.origin.eq("") {
-                    t.current_origin = s.origin;
-                }
+                if m.fn_body == null || _has_allow(&m, "unchecked-result") { continue; }
+                if s.origin != null && !s.origin.eq("") { t.current_origin = s.origin; }
                 let res: *HashMap<bool> = HashMap::new();
                 let checked: *HashMap<bool> = HashMap::new();
                 _ur_scan(t, m.fn_body, res, checked, program, s.origin);
@@ -4001,17 +3111,16 @@ fn _ur_scan(t: *Typer, body: *Vector<Stmt>, res: *HashMap<bool>, checked: *HashM
                 checked.insert(s.name, _io_rhs_is_present(s.let_value));
             }
         }
-        if s.kind == ST_EXPR && s.expr_value != null && s.expr_value.kind == EX_ASSIGN && s.expr_value.lhs != null && s.expr_value.lhs.kind == EX_IDENT && res.contains(s.expr_value.lhs.str_val) {
+        if s.kind == ST_EXPR && s.expr_value != null && s.expr_value.kind == EX_ASSIGN
+            && s.expr_value.lhs != null
+            && s.expr_value.lhs.kind == EX_IDENT
+            && res.contains(s.expr_value.lhs.str_val) {
             checked.insert(s.expr_value.lhs.str_val, _io_rhs_is_present(s.expr_value.rhs));
         }
-        if s.cond != null {
-            _ur_check_cond(t, s.cond, res, checked);
-        }
+        if s.cond != null { _ur_check_cond(t, s.cond, res, checked); }
         if s.then_body != null {
             let gnames: *Vector<string> = Vector::new();
-            if s.cond != null {
-                _ur_collect_and_checks(s.cond, gnames);
-            }
+            if s.cond != null { _ur_collect_and_checks(s.cond, gnames); }
             let saved: *Vector<bool> = Vector::new();
             for let k: i32 = 0; k < gnames.len(); k++ {
                 let nm: string = gnames.get(k);
@@ -4025,15 +3134,9 @@ fn _ur_scan(t: *Typer, body: *Vector<Stmt>, res: *HashMap<bool>, checked: *HashM
             saved.free();
             gnames.free();
         }
-        if s.else_body != null {
-            _ur_scan(t, s.else_body, res, checked, root, path);
-        }
-        if s.expr_value != null {
-            _ur_check_expr(t, s.expr_value, res, checked);
-        }
-        if s.let_value != null {
-            _ur_check_expr(t, s.let_value, res, checked);
-        }
+        if s.else_body != null { _ur_scan(t, s.else_body, res, checked, root, path); }
+        if s.expr_value != null { _ur_check_expr(t, s.expr_value, res, checked); }
+        if s.let_value != null { _ur_check_expr(t, s.let_value, res, checked); }
         if s.then_body != null && _io_body_is_early_exit(s.then_body) {
             let nms: *Vector<string> = Vector::new();
             _ur_collect_orexit_checks(s.cond, nms);
@@ -4047,13 +3150,10 @@ fn _ur_scan(t: *Typer, body: *Vector<Stmt>, res: *HashMap<bool>, checked: *HashM
 
 // Receiver name of an `r.ok` guard (strips a leading `!`); "" otherwise.
 fn _ur_extract_check(e: *Expr) -> string {
-    if e == null {
-        return "";
-    }
-    if e.kind == EX_UNARY && e.operand != null {
-        return _ur_extract_check(e.operand);
-    }
-    if e.kind == EX_MEMBER && e.field != null && e.field.eq("ok") && e.lhs != null && e.lhs.kind == EX_IDENT {
+    if e == null { return ""; }
+    if e.kind == EX_UNARY && e.operand != null { return _ur_extract_check(e.operand); }
+    if e.kind == EX_MEMBER && e.field != null && e.field.eq("ok") && e.lhs != null
+        && e.lhs.kind == EX_IDENT {
         return e.lhs.str_val;
     }
     return "";
@@ -4062,9 +3162,7 @@ fn _ur_extract_check(e: *Expr) -> string {
 // Result counterpart of `_io_collect_orexit_checks`: receivers of `!x.ok`
 // disjuncts in an early-exit guard are ok afterwards.
 fn _ur_collect_orexit_checks(e: *Expr, out: *Vector<string>) {
-    if e == null {
-        return;
-    }
+    if e == null { return; }
     if e.kind == EX_BINARY && e.op_code == OP_OR {
         _ur_collect_orexit_checks(e.lhs, out);
         _ur_collect_orexit_checks(e.rhs, out);
@@ -4072,37 +3170,27 @@ fn _ur_collect_orexit_checks(e: *Expr, out: *Vector<string>) {
     }
     if e.kind == EX_UNARY && e.operand != null {
         let nm: string = _ur_extract_check(e.operand);
-        if !nm.eq("") {
-            out.push(nm);
-        }
+        if !nm.eq("") { out.push(nm); }
     }
 }
 
 // Result counterpart of `_io_collect_and_checks`: positive `x.ok` checks in
 // an `&&`-chain prove their receivers ok inside the then-body.
 fn _ur_collect_and_checks(e: *Expr, out: *Vector<string>) {
-    if e == null {
-        return;
-    }
+    if e == null { return; }
     if e.kind == EX_BINARY && e.op_code == OP_AND {
         _ur_collect_and_checks(e.lhs, out);
         _ur_collect_and_checks(e.rhs, out);
         return;
     }
-    if _io_is_negated_check(e) {
-        return;
-    }
+    if _io_is_negated_check(e) { return; }
     let nm: string = _ur_extract_check(e);
-    if !nm.eq("") {
-        out.push(nm);
-    }
+    if !nm.eq("") { out.push(nm); }
 }
 
 // Result counterpart of `_io_check_cond`: `r.ok && r.val` is guarded.
 fn _ur_check_cond(t: *Typer, e: *Expr, res: *HashMap<bool>, checked: *HashMap<bool>) {
-    if e == null {
-        return;
-    }
+    if e == null { return; }
     if e.kind == EX_BINARY && e.op_code == OP_AND && e.lhs != null && e.rhs != null {
         _ur_check_cond(t, e.lhs, res, checked);
         let g: string = _ur_extract_check(e.lhs);
@@ -4121,28 +3209,20 @@ fn _ur_check_cond(t: *Typer, e: *Expr, res: *HashMap<bool>, checked: *HashMap<bo
 }
 
 fn _ur_check_expr(t: *Typer, e: *Expr, res: *HashMap<bool>, checked: *HashMap<bool>) {
-    if e == null {
-        return;
-    }
-    if e.kind == EX_MEMBER && e.field != null && e.field.eq("val") && e.lhs != null && e.lhs.kind == EX_IDENT && res.contains(e.lhs.str_val) {
+    if e == null { return; }
+    if e.kind == EX_MEMBER && e.field != null && e.field.eq("val") && e.lhs != null
+        && e.lhs.kind == EX_IDENT
+        && res.contains(e.lhs.str_val) {
         let nm: string = e.lhs.str_val;
         if !(checked.contains(nm) && checked.get(nm)) {
             let mut span: i32 = 1;
-            if e.field_col > 0 {
-                span = e.field_col - e.column + e.field.len();
-            }
+            if e.field_col > 0 { span = e.field_col - e.column + e.field.len(); }
             t.warn_range(e.line, e.column, span, "unchecked-result", "`".concat(nm).concat(".val` reads the value without checking `").concat(nm).concat(".ok`. On the error path it is a zeroed value. Guard with `if ").concat(nm).concat(".ok { ... }`, or unwrap with `let v = ").concat(nm).concat("?;`."));
         }
     }
-    if e.lhs != null {
-        _ur_check_expr(t, e.lhs, res, checked);
-    }
-    if e.rhs != null {
-        _ur_check_expr(t, e.rhs, res, checked);
-    }
-    if e.operand != null {
-        _ur_check_expr(t, e.operand, res, checked);
-    }
+    if e.lhs != null { _ur_check_expr(t, e.lhs, res, checked); }
+    if e.rhs != null { _ur_check_expr(t, e.rhs, res, checked); }
+    if e.operand != null { _ur_check_expr(t, e.operand, res, checked); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
@@ -4168,12 +3248,8 @@ pub fn analysis_use_after_free(t: *Typer, program: *Vector<Stmt>) {
         if s.kind == ST_IMPL && s.impl_methods != null {
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                if m.fn_body == null || _has_allow(&m, "use-after-free") {
-                    continue;
-                }
-                if s.origin != null && !s.origin.eq("") {
-                    t.current_origin = s.origin;
-                }
+                if m.fn_body == null || _has_allow(&m, "use-after-free") { continue; }
+                if s.origin != null && !s.origin.eq("") { t.current_origin = s.origin; }
                 let freed: *HashMap<bool> = HashMap::new();
                 _uaf_scan(t, m.fn_body, freed);
                 freed.free();
@@ -4186,9 +3262,7 @@ fn _uaf_scan(t: *Typer, body: *Vector<Stmt>, freed: *HashMap<bool>) {
     for let i: i32 = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
         // Defer doesn't mark freed — fires at scope exit only.
-        if s.kind == ST_DEFER {
-            continue;
-        }
+        if s.kind == ST_DEFER { continue; }
         // A return / propagation marks the end of this control-flow
         // path. Any siblings after a return are reached via a different
         // path (else-branch fall-through up the chain) where the freed
@@ -4203,28 +3277,20 @@ fn _uaf_scan(t: *Typer, body: *Vector<Stmt>, freed: *HashMap<bool>) {
         if s.kind == ST_LET && s.name != null && freed.contains(s.name) {
             freed.insert(s.name, false);
         }
-        if s.expr_value != null && s.expr_value.kind == EX_ASSIGN && s.expr_value.lhs != null && s.expr_value.lhs.kind == EX_IDENT && freed.contains(s.expr_value.lhs.str_val) {
+        if s.expr_value != null && s.expr_value.kind == EX_ASSIGN && s.expr_value.lhs != null
+            && s.expr_value.lhs.kind == EX_IDENT
+            && freed.contains(s.expr_value.lhs.str_val) {
             freed.insert(s.expr_value.lhs.str_val, false);
         }
         // The free call itself is allowed even though `x` appears in
         // it. Detect the free target up-front and skip its receiver
         // when we walk the expression.
         let mut free_target: string = "";
-        if s.expr_value != null {
-            free_target = _uaf_free_target(s.expr_value);
-        }
-        if s.expr_value != null {
-            _uaf_check_expr(t, s.expr_value, freed, free_target);
-        }
-        if s.let_value != null {
-            _uaf_check_expr(t, s.let_value, freed, "");
-        }
-        if s.cond != null {
-            _uaf_check_expr(t, s.cond, freed, "");
-        }
-        if !free_target.eq("") {
-            freed.insert(free_target, true);
-        }
+        if s.expr_value != null { free_target = _uaf_free_target(s.expr_value); }
+        if s.expr_value != null { _uaf_check_expr(t, s.expr_value, freed, free_target); }
+        if s.let_value != null { _uaf_check_expr(t, s.let_value, freed, ""); }
+        if s.cond != null { _uaf_check_expr(t, s.cond, freed, ""); }
+        if !free_target.eq("") { freed.insert(free_target, true); }
         // if/else branches are mutually exclusive paths: a free on the
         // `then` path must NOT poison reads on the `else` path. Scan each
         // branch with its own copy of `freed`, then merge the union of
@@ -4234,12 +3300,8 @@ fn _uaf_scan(t: *Typer, body: *Vector<Stmt>, freed: *HashMap<bool>) {
         if s.then_body != null || s.else_body != null {
             let then_freed: *HashMap<bool> = _uaf_clone_bool(freed);
             let else_freed: *HashMap<bool> = _uaf_clone_bool(freed);
-            if s.then_body != null {
-                _uaf_scan(t, s.then_body, then_freed);
-            }
-            if s.else_body != null {
-                _uaf_scan(t, s.else_body, else_freed);
-            }
+            if s.then_body != null { _uaf_scan(t, s.then_body, then_freed); }
+            if s.else_body != null { _uaf_scan(t, s.else_body, else_freed); }
             _uaf_merge_freed(then_freed, freed);
             _uaf_merge_freed(else_freed, freed);
             then_freed.free();
@@ -4265,45 +3327,27 @@ fn _uaf_merge_freed(src: *HashMap<bool>, dst: *HashMap<bool>) {
         // Union of TRUE-freed names: if either branch left it freed,
         // it stays freed after the if. A branch that reallocated it
         // (freed=false) does not clear a free recorded by the sibling.
-        if src.get(k) {
-            dst.insert(k, true);
-        }
+        if src.get(k) { dst.insert(k, true); }
     }
 }
 
 fn _uaf_free_target(e: *Expr) -> string {
-    if e == null {
-        return "";
-    }
-    if e.kind != EX_CALL || e.lhs == null || e.lhs.kind != EX_MEMBER {
-        return "";
-    }
-    if e.lhs.field == null || !e.lhs.field.eq("free") {
-        return "";
-    }
-    if e.lhs.lhs == null || e.lhs.lhs.kind != EX_IDENT {
-        return "";
-    }
+    if e == null { return ""; }
+    if e.kind != EX_CALL || e.lhs == null || e.lhs.kind != EX_MEMBER { return ""; }
+    if e.lhs.field == null || !e.lhs.field.eq("free") { return ""; }
+    if e.lhs.lhs == null || e.lhs.lhs.kind != EX_IDENT { return ""; }
     return e.lhs.lhs.str_val;
 }
 
 fn _uaf_check_expr(t: *Typer, e: *Expr, freed: *HashMap<bool>, skip: string) {
-    if e == null {
-        return;
-    }
+    if e == null { return; }
     if e.kind == EX_IDENT && freed.contains(e.str_val) && freed.get(e.str_val) && !e.str_val.eq(skip) {
         t.warn_range(e.line, e.column, _expr_span(e), "use-after-free", "`".concat(e.str_val).concat("` was freed earlier in this scope — accessing it is a dangling-pointer read"));
         return;
     }
-    if e.lhs != null {
-        _uaf_check_expr(t, e.lhs, freed, skip);
-    }
-    if e.rhs != null {
-        _uaf_check_expr(t, e.rhs, freed, skip);
-    }
-    if e.operand != null {
-        _uaf_check_expr(t, e.operand, freed, skip);
-    }
+    if e.lhs != null { _uaf_check_expr(t, e.lhs, freed, skip); }
+    if e.rhs != null { _uaf_check_expr(t, e.rhs, freed, skip); }
+    if e.operand != null { _uaf_check_expr(t, e.operand, freed, skip); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
@@ -4327,12 +3371,8 @@ pub fn analysis_mutex_unbalanced(t: *Typer, program: *Vector<Stmt>) {
         if s.kind == ST_IMPL && s.impl_methods != null {
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                if m.fn_body == null || _has_allow(&m, "mutex-unbalanced") {
-                    continue;
-                }
-                if s.origin != null && !s.origin.eq("") {
-                    t.current_origin = s.origin;
-                }
+                if m.fn_body == null || _has_allow(&m, "mutex-unbalanced") { continue; }
+                if s.origin != null && !s.origin.eq("") { t.current_origin = s.origin; }
                 _mu_check_fn(t, m.fn_body);
             }
         }
@@ -4353,9 +3393,7 @@ fn _mu_check_fn(t: *Typer, body: *Vector<Stmt>) {
     let names: *Vector<string> = held.keys();
     for let i: i32 = 0; i < names.len(); i++ {
         let nm: string = names.get(i);
-        if warned.contains(nm) {
-            continue;
-        }
+        if warned.contains(nm) { continue; }
         t.warn_range(held.get(nm), held_col.get(nm), nm.len(), "mutex-unbalanced", "`".concat(nm).concat(".lock()` falls off the end of the fn without `.unlock()` — release it on every exit (a `defer ").concat(nm).concat(".unlock();` right after the lock covers all returns)"));
         warned.insert(nm, true);
     }
@@ -4373,20 +3411,12 @@ fn _mu_walk_path(t: *Typer, body: *Vector<Stmt>, held: *HashMap<i32>, held_col: 
         if s.let_value != null && _ler_expr_has_try(s.let_value) {
             _mu_flag_held(t, held, held_col, warned, s.line, "?-propagation");
         }
-        if s.expr_value != null {
-            _mu_update_state(s.expr_value, held, held_col);
-        }
-        if s.let_value != null {
-            _mu_update_state(s.let_value, held, held_col);
-        }
+        if s.expr_value != null { _mu_update_state(s.expr_value, held, held_col); }
+        if s.let_value != null { _mu_update_state(s.let_value, held, held_col); }
         if s.kind == ST_RETURN || s.kind == ST_BREAK || s.kind == ST_CONTINUE {
             let mut exit_label: string = "return";
-            if s.kind == ST_BREAK {
-                exit_label = "break";
-            }
-            if s.kind == ST_CONTINUE {
-                exit_label = "continue";
-            }
+            if s.kind == ST_BREAK { exit_label = "break"; }
+            if s.kind == ST_CONTINUE { exit_label = "continue"; }
             _mu_flag_held(t, held, held_col, warned, s.line, exit_label);
             return;
         }
@@ -4408,14 +3438,10 @@ fn _mu_walk_path(t: *Typer, body: *Vector<Stmt>, held: *HashMap<i32>, held_col: 
             let snap_col: *HashMap<i32> = _mu_clone_int(held_col);
             let then_held: *HashMap<i32> = _mu_clone_int(held);
             let then_col: *HashMap<i32> = _mu_clone_int(held_col);
-            if s.then_body != null {
-                _mu_walk_path(t, s.then_body, then_held, then_col, warned);
-            }
+            if s.then_body != null { _mu_walk_path(t, s.then_body, then_held, then_col, warned); }
             let else_held: *HashMap<i32> = _mu_clone_int(snap);
             let else_col: *HashMap<i32> = _mu_clone_int(snap_col);
-            if s.else_body != null {
-                _mu_walk_path(t, s.else_body, else_held, else_col, warned);
-            }
+            if s.else_body != null { _mu_walk_path(t, s.else_body, else_held, else_col, warned); }
             // Merge: union of both branches' remaining held names.
             held.clear();
             held_col.clear();
@@ -4439,9 +3465,7 @@ fn _mu_walk_path(t: *Typer, body: *Vector<Stmt>, held: *HashMap<i32>, held_col: 
             let m_acc_col: *HashMap<i32> = HashMap::new();
             for let j: i32 = 0; j < s.arms.len(); j++ {
                 let arm: MatchArm = s.arms.get(j);
-                if arm.body == null {
-                    continue;
-                }
+                if arm.body == null { continue; }
                 let a_held: *HashMap<i32> = _mu_clone_int(m_snap);
                 let a_col: *HashMap<i32> = _mu_clone_int(m_snap_col);
                 _mu_walk_path(t, arm.body, a_held, a_col, warned);
@@ -4476,9 +3500,7 @@ fn _mu_merge_into(src: *HashMap<i32>, src_col: *HashMap<i32>, dst: *HashMap<i32>
         let k: string = ks.get(i);
         if !dst.contains(k) {
             dst.insert(k, src.get(k));
-            if src_col.contains(k) {
-                dst_col.insert(k, src_col.get(k));
-            }
+            if src_col.contains(k) { dst_col.insert(k, src_col.get(k)); }
         }
     }
 }
@@ -4487,19 +3509,17 @@ fn _mu_flag_held(t: *Typer, held: *HashMap<i32>, held_col: *HashMap<i32>, warned
     let names: *Vector<string> = held.keys();
     for let i: i32 = 0; i < names.len(); i++ {
         let nm: string = names.get(i);
-        if warned.contains(nm) {
-            continue;
-        }
+        if warned.contains(nm) { continue; }
         t.warn_range(held.get(nm), held_col.get(nm), nm.len(), "mutex-unbalanced", "`".concat(nm).concat(".lock()` is still held at the ").concat(exit_kind).concat(" — wrap it with `defer ").concat(nm).concat(".unlock();` so every exit path releases the lock"));
         warned.insert(nm, true);
     }
 }
 
 fn _mu_update_state(e: *Expr, held: *HashMap<i32>, held_col: *HashMap<i32>) {
-    if e == null {
-        return;
-    }
-    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.field != null && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT {
+    if e == null { return; }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.field != null
+        && e.lhs.lhs != null
+        && e.lhs.lhs.kind == EX_IDENT {
         let recv: string = e.lhs.lhs.str_val;
         if e.lhs.field.eq("lock") && !held.contains(recv) {
             held.insert(recv, e.line);
@@ -4510,15 +3530,9 @@ fn _mu_update_state(e: *Expr, held: *HashMap<i32>, held_col: *HashMap<i32>) {
             held_col.remove(recv);
         }
     }
-    if e.lhs != null {
-        _mu_update_state(e.lhs, held, held_col);
-    }
-    if e.rhs != null {
-        _mu_update_state(e.rhs, held, held_col);
-    }
-    if e.operand != null {
-        _mu_update_state(e.operand, held, held_col);
-    }
+    if e.lhs != null { _mu_update_state(e.lhs, held, held_col); }
+    if e.rhs != null { _mu_update_state(e.rhs, held, held_col); }
+    if e.operand != null { _mu_update_state(e.operand, held, held_col); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
@@ -4528,10 +3542,11 @@ fn _mu_update_state(e: *Expr, held: *HashMap<i32>, held_col: *HashMap<i32>) {
 }
 
 fn _mu_unlock_target(e: *Expr) -> string {
-    if e == null {
-        return "";
-    }
-    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.field != null && e.lhs.field.eq("unlock") && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT {
+    if e == null { return ""; }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.field != null
+        && e.lhs.field.eq("unlock")
+        && e.lhs.lhs != null
+        && e.lhs.lhs.kind == EX_IDENT {
         return e.lhs.lhs.str_val;
     }
     return "";
@@ -4553,12 +3568,8 @@ pub fn analysis_chan_leak(t: *Typer, program: *Vector<Stmt>) {
         if s.kind == ST_IMPL && s.impl_methods != null {
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                if m.fn_body == null || _has_allow(&m, "chan-leak") {
-                    continue;
-                }
-                if s.origin != null && !s.origin.eq("") {
-                    t.current_origin = s.origin;
-                }
+                if m.fn_body == null || _has_allow(&m, "chan-leak") { continue; }
+                if s.origin != null && !s.origin.eq("") { t.current_origin = s.origin; }
                 _cl_check_fn(t, m.fn_body);
             }
         }
@@ -4591,16 +3602,13 @@ fn _cl_check_fn(t: *Typer, body: *Vector<Stmt>) {
 fn _cl_collect_chans(body: *Vector<Stmt>, chans: *HashMap<i32>, chans_col: *HashMap<i32>) {
     for let i: i32 = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
-        if s.kind == ST_LET && s.name != null && s.let_ty != null && s.let_ty.kind == TY_GENERIC && s.let_ty.name.eq("chan") {
+        if s.kind == ST_LET && s.name != null && s.let_ty != null && s.let_ty.kind == TY_GENERIC
+            && s.let_ty.name.eq("chan") {
             chans.insert(s.name, s.line);
             chans_col.insert(s.name, s.column);
         }
-        if s.then_body != null {
-            _cl_collect_chans(s.then_body, chans, chans_col);
-        }
-        if s.else_body != null {
-            _cl_collect_chans(s.else_body, chans, chans_col);
-        }
+        if s.then_body != null { _cl_collect_chans(s.then_body, chans, chans_col); }
+        if s.else_body != null { _cl_collect_chans(s.else_body, chans, chans_col); }
     }
 }
 
@@ -4614,21 +3622,13 @@ fn _cl_walk(t: *Typer, body: *Vector<Stmt>, nm: string, closed_in: bool, chan_li
     let mut closed: bool = closed_in;
     for let i: i32 = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
-        if s.expr_value != null && _cl_expr_closes(s.expr_value, nm) {
-            closed = true;
-        }
-        if s.let_value != null && _cl_expr_closes(s.let_value, nm) {
-            closed = true;
-        }
+        if s.expr_value != null && _cl_expr_closes(s.expr_value, nm) { closed = true; }
+        if s.let_value != null && _cl_expr_closes(s.let_value, nm) { closed = true; }
         if s.kind == ST_RETURN || s.kind == ST_BREAK || s.kind == ST_CONTINUE {
             if !closed && !*warned {
                 let mut exit_label: string = "return";
-                if s.kind == ST_BREAK {
-                    exit_label = "break";
-                }
-                if s.kind == ST_CONTINUE {
-                    exit_label = "continue";
-                }
+                if s.kind == ST_BREAK { exit_label = "break"; }
+                if s.kind == ST_CONTINUE { exit_label = "continue"; }
                 t.warn_range(chan_line, chan_col, nm.len(), "chan-leak", "channel `".concat(nm).concat("` is still open at this ").concat(exit_label).concat(" — `close()` it before exiting so receivers can stop"));
                 *warned = true;
             }
@@ -4636,9 +3636,7 @@ fn _cl_walk(t: *Typer, body: *Vector<Stmt>, nm: string, closed_in: bool, chan_li
         }
         if s.kind == ST_IF {
             let mut fall_state: i32 = 0;
-            if closed {
-                fall_state = 1;
-            }
+            if closed { fall_state = 1; }
             let mut then_r: i32 = fall_state;
             if s.then_body != null {
                 then_r = _cl_walk(t, s.then_body, nm, closed, chan_line, chan_col, warned);
@@ -4650,57 +3648,41 @@ fn _cl_walk(t: *Typer, body: *Vector<Stmt>, nm: string, closed_in: bool, chan_li
             // Merge: if both never fall through, outer doesn't either.
             // Otherwise take the AND of fall-through closed states
             // (a branch that exited contributes nothing to the merge).
-            if then_r == 2 && else_r == 2 {
-                return 2;
-            }
+            if then_r == 2 && else_r == 2 { return 2; }
             let mut new_closed: bool = true;
             let mut any_fall: bool = false;
             if then_r != 2 {
                 any_fall = true;
-                if then_r == 0 {
-                    new_closed = false;
-                }
+                if then_r == 0 { new_closed = false; }
             }
             if else_r != 2 {
                 any_fall = true;
-                if else_r == 0 {
-                    new_closed = false;
-                }
+                if else_r == 0 { new_closed = false; }
             }
-            if !any_fall {
-                return 2;
-            }
+            if !any_fall { return 2; }
             closed = new_closed;
         }
     }
-    if closed {
-        return 1;
-    }
+    if closed { return 1; }
     return 0;
 }
 
 fn _cl_expr_closes(e: *Expr, nm: string) -> bool {
-    if e == null {
-        return false;
-    }
-    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.field != null && e.lhs.field.eq("close") && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT && e.lhs.lhs.str_val.eq(nm) {
+    if e == null { return false; }
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.field != null
+        && e.lhs.field.eq("close")
+        && e.lhs.lhs != null
+        && e.lhs.lhs.kind == EX_IDENT
+        && e.lhs.lhs.str_val.eq(nm) {
         return true;
     }
-    if e.lhs != null && _cl_expr_closes(e.lhs, nm) {
-        return true;
-    }
-    if e.rhs != null && _cl_expr_closes(e.rhs, nm) {
-        return true;
-    }
-    if e.operand != null && _cl_expr_closes(e.operand, nm) {
-        return true;
-    }
+    if e.lhs != null && _cl_expr_closes(e.lhs, nm) { return true; }
+    if e.rhs != null && _cl_expr_closes(e.rhs, nm) { return true; }
+    if e.operand != null && _cl_expr_closes(e.operand, nm) { return true; }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
-            if _cl_expr_closes(&a, nm) {
-                return true;
-            }
+            if _cl_expr_closes(&a, nm) { return true; }
         }
     }
     return false;
@@ -4720,12 +3702,8 @@ pub fn analysis_leak_on_early_return(t: *Typer, program: *Vector<Stmt>) {
         if s.kind == ST_IMPL && s.impl_methods != null {
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
-                if m.fn_body == null || _has_allow(&m, "leak-on-early-return") {
-                    continue;
-                }
-                if s.origin != null && !s.origin.eq("") {
-                    t.current_origin = s.origin;
-                }
+                if m.fn_body == null || _has_allow(&m, "leak-on-early-return") { continue; }
+                if s.origin != null && !s.origin.eq("") { t.current_origin = s.origin; }
                 _ler_check_fn(t, m.fn_body);
             }
         }
@@ -4741,7 +3719,8 @@ fn _ler_check_fn(t: *Typer, body: *Vector<Stmt>) {
     let returning: *Vector<i32> = Vector::new(); // idx of ?/return stmts
     for let i: i32 = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
-        if s.kind == ST_LET && s.name != null && s.let_value != null && _ler_is_allocating_call(s.let_value) {
+        if s.kind == ST_LET && s.name != null && s.let_value != null
+            && _ler_is_allocating_call(s.let_value) {
             alloc_idx.insert(s.name, i);
         }
         if s.kind == ST_DEFER && s.expr_value != null {
@@ -4756,21 +3735,15 @@ fn _ler_check_fn(t: *Typer, body: *Vector<Stmt>) {
                 alloc_col.insert(nm, s.column);
             }
         }
-        if _ler_has_early_exit(&s) {
-            returning.push(i);
-        }
+        if _ler_has_early_exit(&s) { returning.push(i); }
     }
     let names: *Vector<string> = defer_idx.keys();
     for let i: i32 = 0; i < names.len(); i++ {
         let nm: string = names.get(i);
-        if !alloc_idx.contains(nm) {
-            continue;
-        }
+        if !alloc_idx.contains(nm) { continue; }
         let a: i32 = alloc_idx.get(nm);
         let d: i32 = defer_idx.get(nm);
-        if d <= a + 1 {
-            continue;
-        } // defer placed right after alloc — safe
+        if d <= a + 1 { continue; } // defer placed right after alloc — safe
         for let k: i32 = 0; k < returning.len(); k++ {
             let r: i32 = returning.get(k);
             if r > a && r < d {
@@ -4778,9 +3751,7 @@ fn _ler_check_fn(t: *Typer, body: *Vector<Stmt>) {
                 // statement before the early exit, that exit path already
                 // releases it — no leak. Covers free-then-rebind and
                 // explicit free-before-`?` patterns.
-                if _ler_freed_inline_before(body, nm, a, r) {
-                    continue;
-                }
+                if _ler_freed_inline_before(body, nm, a, r) { continue; }
                 t.warn_range(alloc_line.get(nm), alloc_col.get(nm), nm.len(), "leak-on-early-return", "`defer ".concat(nm).concat(".free()` is registered after an early exit on line — move it right after `let ").concat(nm).concat(" = …;` so the cleanup also fires on the error path"));
                 break;
             }
@@ -4799,101 +3770,69 @@ fn _ler_check_fn(t: *Typer, body: *Vector<Stmt>) {
 fn _ler_freed_inline_before(body: *Vector<Stmt>, nm: string, a: i32, r: i32) -> bool {
     for let k: i32 = a + 1; k < r; k++ {
         let s: Stmt = body.get(k);
-        if s.kind == ST_DEFER {
-            continue;
-        }
-        if s.expr_value != null && _ler_defer_target(s.expr_value).eq(nm) {
-            return true;
-        }
+        if s.kind == ST_DEFER { continue; }
+        if s.expr_value != null && _ler_defer_target(s.expr_value).eq(nm) { return true; }
     }
     return false;
 }
 
 fn _ler_defer_target(e: *Expr) -> string {
-    if e == null {
-        return "";
-    }
+    if e == null { return ""; }
     // x.free()
     let mc: string = _uaf_free_target(e);
-    if !mc.eq("") {
-        return mc;
-    }
+    if !mc.eq("") { return mc; }
     // free(x as *void) / __glide_palloc_free(x)
-    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT && (e.lhs.str_val.eq("free") || e.lhs.str_val.eq("__glide_palloc_free")) && e.args != null && e.args.len() == 1 {
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_IDENT
+        && (e.lhs.str_val.eq("free") || e.lhs.str_val.eq("__glide_palloc_free"))
+        && e.args != null
+        && e.args.len() == 1 {
         let arg: Expr = e.args.get(0);
         let mut probe: *Expr = &arg;
         while probe != null && probe.kind == EX_CAST {
             probe = probe.lhs;
         }
-        if probe != null && probe.kind == EX_IDENT {
-            return probe.str_val;
-        }
+        if probe != null && probe.kind == EX_IDENT { return probe.str_val; }
     }
     return "";
 }
 
 fn _ler_is_allocating_call(e: *Expr) -> bool {
-    if e == null {
-        return false;
-    }
+    if e == null { return false; }
     // Peel cast wrappers: `malloc(n) as *T`, common at every alloc site.
     let mut p: *Expr = e;
     while p != null && p.kind == EX_CAST {
         p = p.lhs;
     }
-    if p == null {
-        return false;
-    }
+    if p == null { return false; }
     if p.kind == EX_CALL && p.lhs != null && p.lhs.kind == EX_IDENT {
         let n: string = p.lhs.str_val;
-        if n.eq("malloc") || n.eq("__glide_palloc_make") {
-            return true;
-        }
+        if n.eq("malloc") || n.eq("__glide_palloc_make") { return true; }
     }
-    if p.kind == EX_CALL && p.lhs != null && p.lhs.kind == EX_MEMBER && p.lhs.field != null && p.lhs.field.eq("new") {
+    if p.kind == EX_CALL && p.lhs != null && p.lhs.kind == EX_MEMBER && p.lhs.field != null
+        && p.lhs.field.eq("new") {
         return true;
     }
     return false;
 }
 
 fn _ler_has_early_exit(s: *Stmt) -> bool {
-    if s == null {
-        return false;
-    }
-    if s.kind == ST_RETURN {
-        return true;
-    }
-    if s.expr_value != null && _ler_expr_has_try(s.expr_value) {
-        return true;
-    }
-    if s.let_value != null && _ler_expr_has_try(s.let_value) {
-        return true;
-    }
+    if s == null { return false; }
+    if s.kind == ST_RETURN { return true; }
+    if s.expr_value != null && _ler_expr_has_try(s.expr_value) { return true; }
+    if s.let_value != null && _ler_expr_has_try(s.let_value) { return true; }
     return false;
 }
 
 fn _ler_expr_has_try(e: *Expr) -> bool {
-    if e == null {
-        return false;
-    }
-    if e.kind == EX_UNARY && e.op_code == UN_TRY {
-        return true;
-    }
-    if e.lhs != null && _ler_expr_has_try(e.lhs) {
-        return true;
-    }
-    if e.rhs != null && _ler_expr_has_try(e.rhs) {
-        return true;
-    }
-    if e.operand != null && _ler_expr_has_try(e.operand) {
-        return true;
-    }
+    if e == null { return false; }
+    if e.kind == EX_UNARY && e.op_code == UN_TRY { return true; }
+    if e.lhs != null && _ler_expr_has_try(e.lhs) { return true; }
+    if e.rhs != null && _ler_expr_has_try(e.rhs) { return true; }
+    if e.operand != null && _ler_expr_has_try(e.operand) { return true; }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
-            if _ler_expr_has_try(&a) {
-                return true;
-            }
+            if _ler_expr_has_try(&a) { return true; }
         }
     }
     return false;

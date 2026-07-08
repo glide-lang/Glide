@@ -35,30 +35,20 @@ pub fn ensure_fetched(m: *Manifest, d: ManifestDep) -> string {
 }
 
 fn _ensure_rec(m: *Manifest, d: ManifestDep, seen: *HashMap<bool>) -> string {
-    if d.kind != DEP_GIT {
-        return dep_cache_dir(m, d);
-    }
+    if d.kind != DEP_GIT { return dep_cache_dir(m, d); }
     let key: string = d.path.concat("@").concat(d.rev);
-    if seen.contains(key) {
-        return dep_cache_dir(m, d);
-    }
+    if seen.contains(key) { return dep_cache_dir(m, d); }
     seen.insert(key, true);
     let cache: string = _ensure_single(m, d);
-    if cache.eq("") {
-        return "";
-    }
+    if cache.eq("") { return ""; }
     // Walk the dep's own manifest, if any. Each transitive dep goes
     // into the same global cache, content-addressed by url@rev — so
     // two parents pulling the same library share one copy.
     let dep_m: *Manifest = read_manifest(cache);
-    if dep_m == null {
-        return cache;
-    }
+    if dep_m == null { return cache; }
     for let i: i32 = 0; i < dep_m.deps.len(); i++ {
         let sub: ManifestDep = dep_m.deps.get(i);
-        if sub.kind == DEP_PATH {
-            continue;
-        } // path deps make no sense across cache boundaries
+        if sub.kind == DEP_PATH { continue; } // path deps make no sense across cache boundaries
         _ensure_rec(dep_m, sub, seen);
     }
     return cache;
@@ -69,12 +59,8 @@ fn _ensure_rec(m: *Manifest, d: ManifestDep, seen: *HashMap<bool>) -> string {
 // or when the codeload URL is otherwise rejected.
 fn _ensure_single(m: *Manifest, d: ManifestDep) -> string {
     let cache: string = dep_cache_dir(m, d);
-    if cache.eq("") {
-        return "";
-    }
-    if fs_is_dir(cache) && _has_any_entry(cache) {
-        return cache;
-    }
+    if cache.eq("") { return ""; }
+    if fs_is_dir(cache) && _has_any_entry(cache) { return cache; }
     if !fs_mkdir_p(cache) {
         println!("fetch:", d.name, "- could not create cache dir");
         return "";
@@ -85,17 +71,13 @@ fn _ensure_single(m: *Manifest, d: ManifestDep) -> string {
     let mut ok: bool = false;
     if !url.eq("") {
         hash = _try_tarball(d, url, cache);
-        if !hash.eq("") {
-            ok = true;
-        }
+        if !hash.eq("") { ok = true; }
     }
     if !ok {
         // Either non-github host or tarball errored — try git clone.
         spinner_set("git clone ".concat(d.name));
         hash = _try_git_clone(d, cache);
-        if !hash.eq("") {
-            ok = true;
-        }
+        if !hash.eq("") { ok = true; }
     }
     if !ok {
         spinner_finish(false, d.name.concat(" - fetch failed"));
@@ -115,31 +97,23 @@ fn _ensure_single(m: *Manifest, d: ManifestDep) -> string {
 // Returns `sha256:<hex>` on success, "" on any failure.
 fn _try_tarball(d: ManifestDep, url: string, cache: string) -> string {
     let tmp: string = cache.concat("/.glide_fetch.tar.gz");
-    if !https_download(url, "", tmp) {
-        return "";
-    }
+    if !https_download(url, "", tmp) { return ""; }
     spinner_set("inflating ".concat(d.name));
     let mut read_len: i32 = 0;
     let archive_gz: string = fs_read_bytes(tmp, &read_len);
-    if read_len <= 0 {
-        return "";
-    }
+    if read_len <= 0 { return ""; }
     // Hash the raw tarball — the SHA covers EXACTLY what the network
     // delivered, not the post-extract on-disk state (which would
     // depend on file ordering, mtime jitter, etc).
     let hash: string = "sha256:".concat(sha256_hex(archive_gz));
     let mut decoded_len: i32 = 0;
     let raw: *void = gzip_decode(archive_gz, read_len, &decoded_len);
-    if raw == null || decoded_len <= 0 {
-        return "";
-    }
+    if raw == null || decoded_len <= 0 { return ""; }
     let archive: string = __glide_string_from_buf(raw, decoded_len);
     free(raw);
     spinner_set("extracting ".concat(d.name));
     let extracted: i32 = tar_extract(archive, decoded_len, cache, 1);
-    if extracted < 0 {
-        return "";
-    }
+    if extracted < 0 { return ""; }
     return hash;
 }
 
@@ -154,20 +128,20 @@ fn _try_tarball(d: ManifestDep, url: string, cache: string) -> string {
 // out of the surrounding quotes and run arbitrary commands. Reject the whole
 // fetch instead of trying to quote it.
 fn _valid_git_token(s: string) -> bool {
-    if s.len() == 0 {
-        return false;
-    }
-    if s.at(0).to_int() == 45 {
-        return false;
-    }
+    if s.len() == 0 { return false; }
+    if s.at(0).to_int() == 45 { return false; }
     let n: i32 = s.len();
     let mut i: i32 = 0;
     while i < n {
         let c: i32 = s.at(i).to_int();
-        let ok: bool = (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 46 || c == 95 || c == 47 || c == 58 || c == 64 || c == 126 || c == 43 || c == 45;
-        if !ok {
-            return false;
-        }
+        let ok: bool = c >= 65 && c <= 90 || c >= 97 && c <= 122 || c >= 48 && c <= 57 || c == 46 || c == 95
+            || c == 47
+            || c == 58
+            || c == 64
+            || c == 126
+            || c == 43
+            || c == 45;
+        if !ok { return false; }
         i = i + 1;
     }
     return true;
@@ -185,20 +159,14 @@ fn _try_git_clone(d: ManifestDep, cache: string) -> string {
     // Attempt 1: shallow clone of a specific branch/tag.
     let cmd1: string = "git clone --depth=1 --quiet --branch \"".concat(d.rev).concat("\" \"").concat(url).concat("\" \"").concat(cache).concat("\"");
     let rc1: i32 = __glide_shell(cmd1);
-    if rc1 == 0 {
-        return _git_tree_hash(cache);
-    }
+    if rc1 == 0 { return _git_tree_hash(cache); }
     // Attempt 2: full clone + checkout (for raw commit SHAs).
     let cmd2: string = "git clone --quiet \"".concat(url).concat("\" \"").concat(cache).concat("\"");
     let rc2: i32 = __glide_shell(cmd2);
-    if rc2 != 0 {
-        return "";
-    }
+    if rc2 != 0 { return ""; }
     let checkout: string = "git -C \"".concat(cache).concat("\" checkout --quiet \"").concat(d.rev).concat("\"");
     let rc3: i32 = __glide_shell(checkout);
-    if rc3 != 0 {
-        return "";
-    }
+    if rc3 != 0 { return ""; }
     return _git_tree_hash(cache);
 }
 
@@ -208,14 +176,10 @@ fn _try_git_clone(d: ManifestDep, cache: string) -> string {
 // "git:unknown" on any structural mismatch.
 fn _git_tree_hash(cache: string) -> string {
     let head_path: string = cache.concat("/.git/HEAD");
-    if !__glide_file_exists(head_path) {
-        return "git:unknown";
-    }
+    if !__glide_file_exists(head_path) { return "git:unknown"; }
     let head: string = read_file(head_path).trim();
     // Detached HEAD: the file holds the SHA directly (40 hex chars).
-    if head.len() == 40 && _is_hex(head) {
-        return "git:".concat(head);
-    }
+    if head.len() == 40 && _is_hex(head) { return "git:".concat(head); }
     // Symbolic ref: `ref: refs/heads/<branch>`. Follow it to the
     // matching loose ref or fall through to packed-refs.
     if head.starts_with("ref: ") {
@@ -223,9 +187,7 @@ fn _git_tree_hash(cache: string) -> string {
         let loose: string = cache.concat("/.git/").concat(ref_path);
         if __glide_file_exists(loose) {
             let sha: string = read_file(loose).trim();
-            if !sha.eq("") {
-                return "git:".concat(sha);
-            }
+            if !sha.eq("") { return "git:".concat(sha); }
         }
         let packed: string = cache.concat("/.git/packed-refs");
         if __glide_file_exists(packed) {
@@ -233,21 +195,13 @@ fn _git_tree_hash(cache: string) -> string {
             let lines: *Vector<string> = body.split("\n");
             for let i: i32 = 0; i < lines.len(); i++ {
                 let ln: string = lines.get(i);
-                if ln.eq("") {
-                    continue;
-                }
-                if ln.at(0).to_int() == 35 {
-                    continue;
-                } // '#'
+                if ln.eq("") { continue; }
+                if ln.at(0).to_int() == 35 { continue; } // '#'
                 let sp: i32 = _index_of(ln, " ");
-                if sp <= 0 {
-                    continue;
-                }
+                if sp <= 0 { continue; }
                 let sha: string = ln.substring(0, sp);
                 let name: string = ln.substring(sp + 1, ln.len()).trim();
-                if name.eq(ref_path) {
-                    return "git:".concat(sha);
-                }
+                if name.eq(ref_path) { return "git:".concat(sha); }
             }
         }
     }
@@ -258,17 +212,13 @@ fn _is_hex(s: string) -> bool {
     for let i: i32 = 0; i < s.len(); i++ {
         let c: i32 = s.at(i).to_int();
         let ok: bool = c >= 48 && c <= 57 || c >= 97 && c <= 102 || c >= 65 && c <= 70;
-        if !ok {
-            return false;
-        }
+        if !ok { return false; }
     }
     return true;
 }
 
 fn _index_of(s: string, needle: string) -> i32 {
-    if needle.len() == 0 || needle.len() > s.len() {
-        return -1;
-    }
+    if needle.len() == 0 || needle.len() > s.len() { return -1; }
     let m: i32 = needle.len();
     for let i: i32 = 0; i + m <= s.len(); i++ {
         let mut hit: bool = true;
@@ -278,9 +228,7 @@ fn _index_of(s: string, needle: string) -> i32 {
                 break;
             }
         }
-        if hit {
-            return i;
-        }
+        if hit { return i; }
     }
     return -1;
 }
@@ -289,24 +237,12 @@ fn _index_of(s: string, needle: string) -> i32 {
 // URLs (http(s)/git@) pass through unchanged so users can supply
 // SSH form for private repos.
 fn _normalise_git_url(url: string) -> string {
-    if url.starts_with("https://") {
-        return url;
-    }
-    if url.starts_with("http://") {
-        return url;
-    }
-    if url.starts_with("git@") {
-        return url;
-    }
-    if url.starts_with("ssh://") {
-        return url;
-    }
-    if url.starts_with("git://") {
-        return url;
-    }
-    if url.starts_with("file://") {
-        return url;
-    } // local / mirror remotes
+    if url.starts_with("https://") { return url; }
+    if url.starts_with("http://") { return url; }
+    if url.starts_with("git@") { return url; }
+    if url.starts_with("ssh://") { return url; }
+    if url.starts_with("git://") { return url; }
+    if url.starts_with("file://") { return url; } // local / mirror remotes
     return "https://".concat(url);
 }
 
@@ -314,9 +250,7 @@ fn _normalise_git_url(url: string) -> string {
 // user can browse deps locally. It lives under build/ (gitignored and dropped
 // by `glide clean`) rather than a separate top-level glide_modules/.
 fn _link_in_project(m: *Manifest, d: ManifestDep, target: string) {
-    if m == null || m.root_dir.eq("") || target.eq("") {
-        return;
-    }
+    if m == null || m.root_dir.eq("") || target.eq("") { return; }
     let modules: string = m.root_dir.concat("/build/deps");
     fs_mkdir_p(modules);
     let link: string = modules.concat("/").concat(d.name);
@@ -324,15 +258,11 @@ fn _link_in_project(m: *Manifest, d: ManifestDep, target: string) {
 }
 
 pub fn link_all(m: *Manifest) {
-    if m == null {
-        return;
-    }
+    if m == null { return; }
     for let i: i32 = 0; i < m.deps.len(); i++ {
         let d: ManifestDep = m.deps.get(i);
         let dir: string = dep_cache_dir(m, d);
-        if !dir.eq("") && fs_is_dir(dir) {
-            _link_in_project(m, d, dir);
-        }
+        if !dir.eq("") && fs_is_dir(dir) { _link_in_project(m, d, dir); }
     }
 }
 
@@ -341,21 +271,15 @@ pub fn link_all(m: *Manifest) {
 // the count of deps that needed a network round-trip (direct only —
 // transitive fetches don't change the surface count).
 pub fn fetch_all(m: *Manifest) -> i32 {
-    if m == null {
-        return 0;
-    }
+    if m == null { return 0; }
     let mut fetched: i32 = 0;
     let seen: *HashMap<bool> = HashMap::new();
     for let i: i32 = 0; i < m.deps.len(); i++ {
         let d: ManifestDep = m.deps.get(i);
-        if d.kind != DEP_GIT {
-            continue;
-        }
+        if d.kind != DEP_GIT { continue; }
         let before: bool = fs_is_dir(dep_cache_dir(m, d));
         let dir: string = _ensure_rec(m, d, seen);
-        if !dir.eq("") && !before {
-            fetched = fetched + 1;
-        }
+        if !dir.eq("") && !before { fetched = fetched + 1; }
     }
     return fetched;
 }
@@ -371,9 +295,7 @@ pub fn fetch_all(m: *Manifest) -> i32 {
 // so subsequent `dep_cache_dir` calls — including transitive walks and
 // `lockfile_from_manifest` — agree on the same selected rev.
 pub fn mvs_resolve(m: *Manifest) -> i32 {
-    if m == null {
-        return 0;
-    }
+    if m == null { return 0; }
     let urls: *Vector<string> = Vector::new();
     let revs: *Vector<string> = Vector::new();
     let seen_pairs: *HashMap<bool> = HashMap::new();
@@ -383,9 +305,7 @@ pub fn mvs_resolve(m: *Manifest) -> i32 {
     let unique: *HashMap<bool> = HashMap::new();
     for let i: i32 = 0; i < urls.len(); i++ {
         let u: string = urls.get(i);
-        if unique.contains(u) {
-            continue;
-        }
+        if unique.contains(u) { continue; }
         unique.insert(u, true);
         let winner: string = _resolve_one(u, urls, revs);
         if winner.eq("") {
@@ -406,29 +326,19 @@ pub fn mvs_report(m: *Manifest) -> i32 {
 }
 
 fn _collect_url_revs(m: *Manifest, urls: *Vector<string>, revs: *Vector<string>, seen: *HashMap<bool>) {
-    if m == null {
-        return;
-    }
+    if m == null { return; }
     for let i: i32 = 0; i < m.deps.len(); i++ {
         let d: ManifestDep = m.deps.get(i);
-        if d.kind != DEP_GIT {
-            continue;
-        }
+        if d.kind != DEP_GIT { continue; }
         let key: string = d.path.concat("@").concat(d.rev);
-        if seen.contains(key) {
-            continue;
-        }
+        if seen.contains(key) { continue; }
         seen.insert(key, true);
         urls.push(d.path);
         revs.push(d.rev);
         let cache: string = dep_cache_dir(m, d);
-        if cache.eq("") {
-            continue;
-        }
+        if cache.eq("") { continue; }
         let sub_m: *Manifest = read_manifest(cache);
-        if sub_m == null {
-            continue;
-        }
+        if sub_m == null { continue; }
         _collect_url_revs(sub_m, urls, revs, seen);
     }
 }
@@ -442,17 +352,11 @@ fn _resolve_one(url: string, urls: *Vector<string>, revs: *Vector<string>) -> st
     for let i: i32 = 0; i < urls.len(); i++ {
         if urls.get(i).eq(url) {
             let r: string = revs.get(i);
-            if !_contains_str(candidates, r) {
-                candidates.push(r);
-            }
+            if !_contains_str(candidates, r) { candidates.push(r); }
         }
     }
-    if candidates.len() == 1 {
-        return candidates.get(0);
-    }
-    if candidates.len() == 0 {
-        return "";
-    }
+    if candidates.len() == 1 { return candidates.get(0); }
+    if candidates.len() == 0 { return ""; }
     // Sort candidates into semver / opaque buckets.
     let semvers: *Vector<SemVer> = Vector::new();
     let opaque: *Vector<string> = Vector::new();
@@ -474,13 +378,9 @@ fn _resolve_one(url: string, urls: *Vector<string>, revs: *Vector<string>) -> st
     let mut conflict: bool = false;
     for let i: i32 = 1; i < semvers.len(); i++ {
         let v: SemVer = semvers.get(i);
-        if !semver_compatible(best, v) {
-            conflict = true;
-        }
+        if !semver_compatible(best, v) { conflict = true; }
         if semver_cmp(v, best) > 0 {
-            if !semver_compatible(best, v) {
-                conflict = true;
-            }
+            if !semver_compatible(best, v) { conflict = true; }
             best = v;
         }
     }
@@ -495,9 +395,7 @@ fn _resolve_one(url: string, urls: *Vector<string>, revs: *Vector<string>) -> st
 
 fn _contains_str(v: *Vector<string>, s: string) -> bool {
     for let i: i32 = 0; i < v.len(); i++ {
-        if v.get(i).eq(s) {
-            return true;
-        }
+        if v.get(i).eq(s) { return true; }
     }
     return false;
 }
@@ -505,9 +403,7 @@ fn _contains_str(v: *Vector<string>, s: string) -> bool {
 fn _join(v: *Vector<string>, sep: string) -> string {
     let mut out: string = "";
     for let i: i32 = 0; i < v.len(); i++ {
-        if i > 0 {
-            out = out.concat(sep);
-        }
+        if i > 0 { out = out.concat(sep); }
         out = out.concat(v.get(i));
     }
     return out;
@@ -517,9 +413,7 @@ fn _join(v: *Vector<string>, sep: string) -> string {
 // Non-github URLs return "" so the caller falls back to git clone.
 fn _codeload_url(url: string, rev: string) -> string {
     let stripped: string = _strip_scheme(url);
-    if !stripped.starts_with("github.com/") {
-        return "";
-    }
+    if !stripped.starts_with("github.com/") { return ""; }
     let path: string = stripped.substring("github.com/".len(), stripped.len());
     let mut clean: string = path;
     if clean.len() > 4 && clean.substring(clean.len() - 4, clean.len()).eq(".git") {
@@ -529,15 +423,9 @@ fn _codeload_url(url: string, rev: string) -> string {
 }
 
 fn _strip_scheme(url: string) -> string {
-    if url.starts_with("https://") {
-        return url.substring(8, url.len());
-    }
-    if url.starts_with("http://") {
-        return url.substring(7, url.len());
-    }
-    if url.starts_with("git@") {
-        return url.substring(4, url.len());
-    }
+    if url.starts_with("https://") { return url.substring(8, url.len()); }
+    if url.starts_with("http://") { return url.substring(7, url.len()); }
+    if url.starts_with("git@") { return url.substring(4, url.len()); }
     return url;
 }
 

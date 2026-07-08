@@ -12,6 +12,7 @@
 //
 // Pipeline: lexer -> parser -> expander -> lower -> typer -> codegen.
 import bootstrap::syntax::ast::*; // _is_num_suffix
+
 pub const TOK_EOF: i32 = 0;
 pub const TOK_IDENT: i32 = 1;
 pub const TOK_INT: i32 = 2;
@@ -67,26 +68,22 @@ impl Lexer {
         return l;
     }
 
-    pub fn free(self: *Lexer) {
+    pub fn free(self) {
         __glide_pfree(self as *void);
     }
 
-    fn peek(self: *Lexer) -> char {
-        if self.pos >= self.src_len {
-            return '\0';
-        }
+    fn peek(self) -> char {
+        if self.pos >= self.src_len { return '\0'; }
         return self.src.at(self.pos);
     }
 
-    fn peek_at(self: *Lexer, offset: i32) -> char {
+    fn peek_at(self, offset: i32) -> char {
         let i: i32 = self.pos + offset;
-        if i >= self.src_len {
-            return '\0';
-        }
+        if i >= self.src_len { return '\0'; }
         return self.src.at(i);
     }
 
-    fn advance(self: *Lexer) {
+    fn advance(self) {
         let c: char = self.peek();
         self.pos = self.pos + 1;
         if c.to_int() == 10 {
@@ -97,7 +94,7 @@ impl Lexer {
         }
     }
 
-    fn skip_trivia(self: *Lexer) {
+    fn skip_trivia(self) {
         let mut newlines_in_row: i32 = 0;
         let mut had_doc: bool = false;
         let mut total_nl: i32 = 0;
@@ -145,16 +142,12 @@ impl Lexer {
                                 // Stop at CR too: on CRLF sources the trailing `\r`
                                 // would otherwise ride along in the captured comment and
                                 // accumulate on every fmt round-trip.
-                                if cc.to_int() == 10 || cc.to_int() == 13 {
-                                    break;
-                                }
+                                if cc.to_int() == 10 || cc.to_int() == 13 { break; }
                                 self.advance();
                             }
                             let line_text: string = self.src.substring(line_start, self.pos);
                             let mut marked_text: string = line_text;
-                            if extra_slash {
-                                marked_text = "\x02".concat(line_text);
-                            }
+                            if extra_slash { marked_text = "\x02".concat(line_text); }
                             if total_nl == 0 && self.emitted {
                                 // Same line as the previous token: a trailing comment
                                 // that belongs to the token already emitted.
@@ -168,9 +161,7 @@ impl Lexer {
                                 // only the adjacent block (blank line breaks it) for
                                 // hover; `lead` keeps every comment with blank gaps for
                                 // faithful reformatting.
-                                if !had_doc {
-                                    self.pending_doc = "";
-                                }
+                                if !had_doc { self.pending_doc = ""; }
                                 if had_doc {
                                     self.pending_doc = self.pending_doc.concat("\n").concat(marked_text);
                                 } else {
@@ -223,7 +214,7 @@ impl Lexer {
         }
     }
 
-    pub fn next_token(self: *Lexer) -> Token {
+    pub fn next_token(self) -> Token {
         self.skip_trivia();
         // Capture the doc-comment chain that just preceded this token, so it
         // travels alongside the token itself (Parser uses LL(2), so we can't
@@ -294,9 +285,7 @@ impl Lexer {
                                     continue;
                                 }
                                 self.advance();
-                                if q == quote {
-                                    break;
-                                }
+                                if q == quote { break; }
                             }
                             continue;
                         }
@@ -324,9 +313,7 @@ impl Lexer {
                         } else {
                             if ic == 125 {
                                 depth = depth - 1;
-                                if depth == 0 {
-                                    break;
-                                }
+                                if depth == 0 { break; }
                             }
                         }
                         self.advance();
@@ -339,9 +326,7 @@ impl Lexer {
                 }
             }
             let mut kind: i32 = TOK_IDENT;
-            if is_keyword(lex) {
-                kind = TOK_KEYWORD;
-            }
+            if is_keyword(lex) { kind = TOK_KEYWORD; }
             return Token { kind: kind, lexeme: lex, line: start_line, column: start_col, doc: doc, lead: lead, trail: trail };
         }
         // number
@@ -410,16 +395,12 @@ impl Lexer {
                     while self.pos < sp {
                         self.advance();
                     }
-                    if sfx.at(0).to_int() == 102 {
-                        is_float = true;
-                    }
+                    if sfx.at(0).to_int() == 102 { is_float = true; }
                 }
             }
             let lex: string = self.src.substring(start_pos, self.pos);
             let mut kind: i32 = TOK_INT;
-            if is_float {
-                kind = TOK_FLOAT;
-            }
+            if is_float { kind = TOK_FLOAT; }
             return Token { kind: kind, lexeme: lex, line: start_line, column: start_col, doc: doc, lead: lead, trail: trail };
         }
         // string literal
@@ -431,9 +412,7 @@ impl Lexer {
                     self.advance();
                     break;
                 }
-                if cc.to_int() == 92 {
-                    self.advance();
-                }
+                if cc.to_int() == 92 { self.advance(); }
                 self.advance();
             }
             let lex: string = self.src.substring(start_pos, self.pos);
@@ -448,9 +427,7 @@ impl Lexer {
             } else {
                 self.advance();
             }
-            if self.peek().to_int() == 39 {
-                self.advance();
-            }
+            if self.peek().to_int() == 39 { self.advance(); }
             let lex: string = self.src.substring(start_pos, self.pos);
             return Token { kind: TOK_CHAR, lexeme: lex, line: start_line, column: start_col, doc: doc, lead: lead, trail: trail };
         }
@@ -606,156 +583,58 @@ impl Lexer {
 }
 
 pub fn is_keyword(s: string) -> bool {
-    if s.eq("fn") {
-        return true;
-    }
-    if s.eq("let") {
-        return true;
-    }
-    if s.eq("mut") {
-        return true;
-    }
-    if s.eq("const") {
-        return true;
-    }
-    if s.eq("struct") {
-        return true;
-    }
-    if s.eq("enum") {
-        return true;
-    }
-    if s.eq("impl") {
-        return true;
-    }
-    if s.eq("if") {
-        return true;
-    }
-    if s.eq("else") {
-        return true;
-    }
-    if s.eq("while") {
-        return true;
-    }
-    if s.eq("for") {
-        return true;
-    }
-    if s.eq("return") {
-        return true;
-    }
-    if s.eq("break") {
-        return true;
-    }
-    if s.eq("continue") {
-        return true;
-    }
-    if s.eq("match") {
-        return true;
-    }
-    if s.eq("true") {
-        return true;
-    }
-    if s.eq("false") {
-        return true;
-    }
-    if s.eq("null") {
-        return true;
-    }
-    if s.eq("as") {
-        return true;
-    }
-    if s.eq("sizeof") {
-        return true;
-    }
-    if s.eq("new") {
-        return true;
-    }
-    if s.eq("pub") {
-        return true;
-    }
-    if s.eq("import") {
-        return true;
-    }
-    if s.eq("interface") {
-        return true;
-    }
-    if s.eq("trait") {
-        return true;
-    }
-    if s.eq("dyn") {
-        return true;
-    }
-    if s.eq("defer") {
-        return true;
-    }
-    if s.eq("defer_err") {
-        return true;
-    }
-    if s.eq("type") {
-        return true;
-    }
-    if s.eq("move") {
-        return true;
-    }
-    if s.eq("extern") {
-        return true;
-    }
-    if s.eq("c_include") {
-        return true;
-    }
-    if s.eq("c_link") {
-        return true;
-    }
-    if s.eq("spawn") {
-        return true;
-    }
-    if s.eq("chan") {
-        return true;
-    }
-    if s.eq("macro") {
-        return true;
-    }
-    if s.eq("in") {
-        return true;
-    }
-    if s.eq("spawn_thread") {
-        return true;
-    }
-    if s.eq("asm") {
-        return true;
-    }
-    if s.eq("naked") {
-        return true;
-    }
-    if s.eq("volatile") {
-        return true;
-    }
+    if s.eq("fn") { return true; }
+    if s.eq("let") { return true; }
+    if s.eq("mut") { return true; }
+    if s.eq("const") { return true; }
+    if s.eq("struct") { return true; }
+    if s.eq("enum") { return true; }
+    if s.eq("impl") { return true; }
+    if s.eq("if") { return true; }
+    if s.eq("else") { return true; }
+    if s.eq("while") { return true; }
+    if s.eq("for") { return true; }
+    if s.eq("return") { return true; }
+    if s.eq("break") { return true; }
+    if s.eq("continue") { return true; }
+    if s.eq("match") { return true; }
+    if s.eq("true") { return true; }
+    if s.eq("false") { return true; }
+    if s.eq("null") { return true; }
+    if s.eq("as") { return true; }
+    if s.eq("sizeof") { return true; }
+    if s.eq("new") { return true; }
+    if s.eq("pub") { return true; }
+    if s.eq("import") { return true; }
+    if s.eq("interface") { return true; }
+    if s.eq("trait") { return true; }
+    if s.eq("dyn") { return true; }
+    if s.eq("defer") { return true; }
+    if s.eq("defer_err") { return true; }
+    if s.eq("type") { return true; }
+    if s.eq("move") { return true; }
+    if s.eq("extern") { return true; }
+    if s.eq("c_include") { return true; }
+    if s.eq("c_link") { return true; }
+    if s.eq("spawn") { return true; }
+    if s.eq("chan") { return true; }
+    if s.eq("macro") { return true; }
+    if s.eq("in") { return true; }
+    if s.eq("spawn_thread") { return true; }
+    if s.eq("asm") { return true; }
+    if s.eq("naked") { return true; }
+    if s.eq("volatile") { return true; }
     return false;
 }
 
 pub fn token_kind_name(k: i32) -> string {
-    if k == TOK_EOF {
-        return "EOF";
-    }
-    if k == TOK_IDENT {
-        return "IDENT";
-    }
-    if k == TOK_INT {
-        return "INT";
-    }
-    if k == TOK_FLOAT {
-        return "FLOAT";
-    }
-    if k == TOK_STRING {
-        return "STRING";
-    }
-    if k == TOK_CHAR {
-        return "CHAR";
-    }
-    if k == TOK_KEYWORD {
-        return "KEYWORD";
-    }
-    if k == TOK_OP {
-        return "OP";
-    }
+    if k == TOK_EOF { return "EOF"; }
+    if k == TOK_IDENT { return "IDENT"; }
+    if k == TOK_INT { return "INT"; }
+    if k == TOK_FLOAT { return "FLOAT"; }
+    if k == TOK_STRING { return "STRING"; }
+    if k == TOK_CHAR { return "CHAR"; }
+    if k == TOK_KEYWORD { return "KEYWORD"; }
+    if k == TOK_OP { return "OP"; }
     return "ERROR";
 }

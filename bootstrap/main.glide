@@ -67,27 +67,13 @@ fn print_type(t: *Type) {
 }
 
 fn op_name(op: i32) -> string {
-    if op == OP_ADD {
-        return "+";
-    }
-    if op == OP_SUB {
-        return "-";
-    }
-    if op == OP_MUL {
-        return "*";
-    }
-    if op == OP_DIV {
-        return "/";
-    }
-    if op == OP_MOD {
-        return "%";
-    }
-    if op == OP_LT {
-        return "<";
-    }
-    if op == OP_GT {
-        return ">";
-    }
+    if op == OP_ADD { return "+"; }
+    if op == OP_SUB { return "-"; }
+    if op == OP_MUL { return "*"; }
+    if op == OP_DIV { return "/"; }
+    if op == OP_MOD { return "%"; }
+    if op == OP_LT { return "<"; }
+    if op == OP_GT { return ">"; }
     return "?";
 }
 
@@ -144,9 +130,7 @@ fn print_stmt(s: *Stmt, indent: i32) {
     if s.kind == ST_FN {
         print!("Fn ", s.name, " (");
         for let i: i32 = 0; i < s.fn_params.len(); i++ {
-            if i > 0 {
-                print!(", ");
-            }
+            if i > 0 { print!(", "); }
             let prm: Param = s.fn_params.get(i);
             print!(prm.name, ": ");
             print_type(prm.ty);
@@ -164,16 +148,12 @@ fn print_stmt(s: *Stmt, indent: i32) {
         print!("Let ", s.name, ": ");
         print_type(s.let_ty);
         println!("");
-        if s.let_value != null {
-            print_expr(s.let_value, indent + 1);
-        }
+        if s.let_value != null { print_expr(s.let_value, indent + 1); }
         return;
     }
     if s.kind == ST_RETURN {
         println!("Return");
-        if s.expr_value != null {
-            print_expr(s.expr_value, indent + 1);
-        }
+        if s.expr_value != null { print_expr(s.expr_value, indent + 1); }
         return;
     }
     if s.kind == ST_EXPR {
@@ -241,7 +221,6 @@ const MODE_FMT: i32 = 4;
 // Bumped manually on release. `glide --version` reads it; same value
 // lives in glide.glide at the repo root (kept in sync by hand for now).
 const GLIDE_VERSION: string = "0.8.0";
-
 // The latest PUBLISHED release whose sysroot assets exist on GitHub. It lags
 // GLIDE_VERSION between releases: a source/dev build already carries the next
 // version, but that version's sysroots aren't uploaded until the release runs,
@@ -288,9 +267,7 @@ c_raw! {
 
 fn deny_codes() -> *Vector<string> {
     let p: *void = __glide_deny_get();
-    if p == null {
-        return null;
-    }
+    if p == null { return null; }
     return p as *Vector<string>;
 }
 
@@ -305,9 +282,7 @@ fn set_project_allow(v: *Vector<string>) {
 // Apply a manifest's lint config to the process-wide deny / allow
 // globals. Idempotent — re-applying with the same manifest is fine.
 fn apply_manifest_lint(m: *Manifest) {
-    if m == null {
-        return;
-    }
+    if m == null { return; }
     if m.lint_deny != null && m.lint_deny.len() > 0 {
         let existing: *Vector<string> = deny_codes();
         let merged: *Vector<string> = Vector::new();
@@ -321,9 +296,7 @@ fn apply_manifest_lint(m: *Manifest) {
         }
         set_deny_codes(merged);
     }
-    if m.lint_allow != null && m.lint_allow.len() > 0 {
-        set_project_allow(m.lint_allow);
-    }
+    if m.lint_allow != null && m.lint_allow.len() > 0 { set_project_allow(m.lint_allow); }
 }
 
 // Best-effort: walk up from `start_dir` looking for a manifest; if
@@ -332,13 +305,9 @@ fn apply_manifest_lint(m: *Manifest) {
 // up automatically without each command rewiring it.
 fn apply_lint_for(start_dir: string) {
     let root: string = find_manifest_root(start_dir);
-    if root.eq("") {
-        return;
-    }
+    if root.eq("") { return; }
     let m: *Manifest = read_manifest(root);
-    if m == null {
-        return;
-    }
+    if m == null { return; }
     apply_manifest_lint(m);
 }
 
@@ -349,51 +318,36 @@ fn apply_lint_for(start_dir: string) {
 // with `io`. `all` / `*` promote every warning.
 fn _is_lint_promoted(code: string) -> bool {
     let dl: *Vector<string> = deny_codes();
-    if dl == null {
-        return false;
-    }
+    if dl == null { return false; }
     for let i: i32 = 0; i < dl.len(); i++ {
-        if _code_matches_deny(dl.get(i), code) {
-            return true;
-        }
+        if _code_matches_deny(dl.get(i), code) { return true; }
     }
     return false;
 }
 
 fn _code_matches_deny(token: string, code: string) -> bool {
-    if token.eq(code) {
-        return true;
-    }
-    if token.eq("all") || token.eq("*") {
-        return true;
-    }
+    if token.eq(code) { return true; }
+    if token.eq("all") || token.eq("*") { return true; }
     if token.eq("alloc") {
-        if code.eq("unfreed-alloc") || code.eq("arena-not-freed") {
-            return true;
-        }
+        if code.eq("unfreed-alloc") || code.eq("arena-not-freed") { return true; }
     }
     if token.eq("unused") {
-        if code.eq("unused-var") || code.eq("unused-param") || code.eq("unused-fn") || code.eq("unnecessary-mut") {
+        if code.eq("unused-var") || code.eq("unused-param") || code.eq("unused-fn")
+            || code.eq("unnecessary-mut") {
             return true;
         }
     }
     if token.eq("experimental") {
-        if code.eq("unstable-fn") || code.eq("deprecated-fn") {
-            return true;
-        }
+        if code.eq("unstable-fn") || code.eq("deprecated-fn") { return true; }
     }
     if token.eq("lint") || token.eq("lint:*") {
-        if code.starts_with("lint:") {
-            return true;
-        }
+        if code.starts_with("lint:") { return true; }
     }
     if token.len() > 1 {
         let last: i32 = token.at(token.len() - 1).to_int();
         if last == 42 {
             let prefix: string = token.substring(0, token.len() - 1);
-            if code.starts_with(prefix) {
-                return true;
-            }
+            if code.starts_with(prefix) { return true; }
         }
     }
     return false;
@@ -406,14 +360,10 @@ fn _code_matches_deny(token: string, code: string) -> bool {
 // don't consult `_has_allow` on a per-item basis.
 fn _project_allow_drop(code: string) -> bool {
     let p: *void = __glide_proj_allow_get();
-    if p == null {
-        return false;
-    }
+    if p == null { return false; }
     let v: *Vector<string> = p as *Vector<string>;
     for let i: i32 = 0; i < v.len(); i++ {
-        if _code_matches_deny(v.get(i), code) {
-            return true;
-        }
+        if _code_matches_deny(v.get(i), code) { return true; }
     }
     return false;
 }
@@ -470,9 +420,7 @@ fn run_fetch(start: string) -> i32 {
     // manifest tree mentions. Populates the cache so pass 2 has
     // sub-manifests to inspect.
     let fetched: i32 = fetch_all(m);
-    if fetched == 0 {
-        println!("fetch: everything up to date");
-    }
+    if fetched == 0 { println!("fetch: everything up to date"); }
     // Pass 2: Go-MVS over the populated cache. Sets the global
     // override so the link + lockfile steps see the resolved rev.
     let mvs_errors: i32 = mvs_resolve(m);
@@ -481,9 +429,7 @@ fn run_fetch(start: string) -> i32 {
     link_all(m);
     let lf: *Lockfile = lockfile_from_manifest(m);
     write_lockfile(root, lf);
-    if mvs_errors > 0 {
-        return 1;
-    }
+    if mvs_errors > 0 { return 1; }
     return 0;
 }
 
@@ -494,13 +440,9 @@ fn run_fetch(start: string) -> i32 {
 fn auto_fetch_for(src_path: string) {
     let dir: string = parent_dir(src_path);
     let root: string = find_manifest_root(dir);
-    if root.eq("") {
-        return;
-    }
+    if root.eq("") { return; }
     let m: *Manifest = read_manifest(root);
-    if m == null {
-        return;
-    }
+    if m == null { return; }
     fetch_all(m);
 }
 
@@ -536,9 +478,7 @@ fn run_new(name: string, is_lib: bool, emit_ai: bool, init_vcs: bool) -> i32 {
         }
         target_dir = name;
         proj_name = _basename(dir);
-        if proj_name.eq("") {
-            proj_name = "project";
-        }
+        if proj_name.eq("") { proj_name = "project"; }
         // Already a Glide project? Don't clobber.
         if __glide_file_exists(target_dir.concat("/glide.glide")) {
             println!("new:", target_dir, "already contains a glide.glide");
@@ -592,15 +532,11 @@ fn run_new(name: string, is_lib: bool, emit_ai: bool, init_vcs: bool) -> i32 {
     }
     // .gitignore (only if missing — user may have curated their own)
     let gi_path: string = target_dir.concat("/.gitignore");
-    if !__glide_file_exists(gi_path) {
-        write_file(gi_path, _starter_gitignore());
-    }
+    if !__glide_file_exists(gi_path) { write_file(gi_path, _starter_gitignore()); }
     // AGENTS.md when `--ai` is on.
     if emit_ai {
         let agents_path: string = target_dir.concat("/AGENTS.md");
-        if !__glide_file_exists(agents_path) {
-            write_agents_md(agents_path);
-        }
+        if !__glide_file_exists(agents_path) { write_agents_md(agents_path); }
     }
     // git init by default; `--no-vcs` opts out. Silent on absent git
     // — no point pretending the scaffold failed because the user
@@ -608,9 +544,7 @@ fn run_new(name: string, is_lib: bool, emit_ai: bool, init_vcs: bool) -> i32 {
     if init_vcs && !__glide_file_exists(target_dir.concat("/.git")) {
         let cmd: string = "git -C \"".concat(target_dir).concat("\" init -q");
         let rc: i32 = __glide_shell(cmd);
-        if rc != 0 {
-            println!("(git init skipped — `git` not on PATH or init failed)");
-        }
+        if rc != 0 { println!("(git init skipped — `git` not on PATH or init failed)"); }
     }
     let kind: string = if is_lib { "library" } else { "binary" };
     if scaffold_in_place {
@@ -644,14 +578,10 @@ fn _basename(path: string) -> string {
     let mut i: i32 = 0;
     while i < end {
         let c: i32 = path.at(i).to_int();
-        if c == 47 || c == 92 {
-            start = i + 1;
-        }
+        if c == 47 || c == 92 { start = i + 1; }
         i = i + 1;
     }
-    if start >= end {
-        return "";
-    }
+    if start >= end { return ""; }
     return path.substring(start, end);
 }
 
@@ -748,25 +678,19 @@ fn run_add(argc: i32) -> i32 {
 // post-`@` segment or "main" when absent. Returns false when the shape
 // doesn't have at least two `/`-separated path parts.
 fn _expand_add_shorthand(raw: string, name: *string, url: *string, rev: *string) -> bool {
-    if raw == null || raw.eq("") {
-        return false;
-    }
+    if raw == null || raw.eq("") { return false; }
     // Split on '@' to peel the rev. Only the LAST '@' counts — git URLs
     // never contain one in the host/path part.
     let mut at_idx: i32 = -1;
     for let i: i32 = 0; i < raw.len(); i++ {
-        if raw.at(i).to_int() == 64 {
-            at_idx = i;
-        }
+        if raw.at(i).to_int() == 64 { at_idx = i; }
     }
     let mut body: string = raw;
     let mut rev_part: string = "main";
     if at_idx >= 0 {
         body = raw.substring(0, at_idx);
         let tail: string = raw.substring(at_idx + 1, raw.len()).trim();
-        if !tail.eq("") {
-            rev_part = tail;
-        }
+        if !tail.eq("") { rev_part = tail; }
     }
     // Strip a leading scheme so `https://github.com/u/r@v1` works.
     if body.starts_with("https://") {
@@ -775,17 +699,13 @@ fn _expand_add_shorthand(raw: string, name: *string, url: *string, rev: *string)
         if body.starts_with("http://") {
             body = body.substring(7, body.len());
         } else {
-            if body.starts_with("git@") {
-                body = body.substring(4, body.len());
-            }
+            if body.starts_with("git@") { body = body.substring(4, body.len()); }
         }
     }
     // Split on '/' once we know there's no scheme.
     let parts: *Vector<string> = body.split("/");
     let n: i32 = parts.len();
-    if n < 2 {
-        return false;
-    }
+    if n < 2 { return false; }
     let mut host: string = "github.com";
     let mut owner: string = "";
     let mut repo: string = "";
@@ -803,9 +723,7 @@ fn _expand_add_shorthand(raw: string, name: *string, url: *string, rev: *string)
         owner = owner_buf;
         repo = parts.get(n - 1);
     }
-    if owner.eq("") || repo.eq("") {
-        return false;
-    }
+    if owner.eq("") || repo.eq("") { return false; }
     // Trim a trailing `.git` so the dep alias is clean.
     if repo.len() > 4 && repo.substring(repo.len() - 4, repo.len()).eq(".git") {
         repo = repo.substring(0, repo.len() - 4);
@@ -828,9 +746,7 @@ fn run_remove(name: string) -> i32 {
     }
     // Drop the dep link too so a stale junction doesn't shadow a future re-add.
     let link: string = root.concat("/build/deps/").concat(name);
-    if fs_is_dir(link) {
-        fs_remove_dir_rec(link);
-    }
+    if fs_is_dir(link) { fs_remove_dir_rec(link); }
     println!("removed:", name);
     return 0;
 }
@@ -851,9 +767,7 @@ fn run_update() -> i32 {
     }
     for let i: i32 = 0; i < m.deps.len(); i++ {
         let d: ManifestDep = m.deps.get(i);
-        if d.kind != DEP_GIT {
-            continue;
-        }
+        if d.kind != DEP_GIT { continue; }
         let cache: string = dep_cache_dir(m, d);
         if !cache.eq("") && fs_is_dir(cache) {
             fs_remove_dir_rec(cache);
@@ -862,9 +776,7 @@ fn run_update() -> i32 {
     }
     fs_remove_file(root.concat("/glide.lock"));
     let fetched: i32 = fetch_all(m);
-    if fetched == 0 {
-        println!("update: nothing to fetch");
-    }
+    if fetched == 0 { println!("update: nothing to fetch"); }
     link_all(m);
     let lf: *Lockfile = lockfile_from_manifest(m);
     write_lockfile(root, lf);
@@ -906,22 +818,14 @@ fn _print_dep_tree(m: *Manifest, d: ManifestDep, prefix: string, is_last: bool, 
     let branch: string = if is_last { "\xe2\x94\x94\xe2\x94\x80 " } else { "\xe2\x94\x9c\xe2\x94\x80 " };
     let label: string = _dep_label(m, d);
     println!(prefix.concat(branch).concat(label));
-    if d.kind != DEP_GIT {
-        return;
-    }
+    if d.kind != DEP_GIT { return; }
     let key: string = d.path.concat("@").concat(d.rev);
-    if seen.contains(key) {
-        return;
-    }
+    if seen.contains(key) { return; }
     seen.insert(key, true);
     let cache: string = dep_cache_dir(m, d);
-    if cache.eq("") || !fs_is_dir(cache) {
-        return;
-    }
+    if cache.eq("") || !fs_is_dir(cache) { return; }
     let sub_m: *Manifest = read_manifest(cache);
-    if sub_m == null || sub_m.deps.len() == 0 {
-        return;
-    }
+    if sub_m == null || sub_m.deps.len() == 0 { return; }
     let child_prefix: string = prefix.concat(if is_last { "   " } else { "\xe2\x94\x82  " });
     for let i: i32 = 0; i < sub_m.deps.len(); i++ {
         let sd: ManifestDep = sub_m.deps.get(i);
@@ -931,21 +835,15 @@ fn _print_dep_tree(m: *Manifest, d: ManifestDep, prefix: string, is_last: bool, 
 }
 
 fn _dep_label(m: *Manifest, d: ManifestDep) -> string {
-    if d.kind == DEP_PATH {
-        return d.name.concat(" (path: ").concat(d.path).concat(")");
-    }
+    if d.kind == DEP_PATH { return d.name.concat(" (path: ").concat(d.path).concat(")"); }
     // Git: include the effective rev (post-MVS) and a [not fetched] tag
     // when the cache slot is missing on disk.
     let mut eff_rev: string = d.rev;
     let ov: *HashMap<string> = mvs_get_override();
-    if ov != null && ov.contains(d.path) {
-        eff_rev = ov.get(d.path);
-    }
+    if ov != null && ov.contains(d.path) { eff_rev = ov.get(d.path); }
     let mut tag: string = "";
     let cache: string = dep_cache_dir(m, d);
-    if cache.eq("") || !fs_is_dir(cache) {
-        tag = " [not fetched]";
-    }
+    if cache.eq("") || !fs_is_dir(cache) { tag = " [not fetched]"; }
     return d.name.concat(" (").concat(d.path).concat("@").concat(eff_rev).concat(")").concat(tag);
 }
 
@@ -967,9 +865,7 @@ fn run_info(name: string) -> i32 {
     let mut found: bool = false;
     for let i: i32 = 0; i < m.deps.len(); i++ {
         let d: ManifestDep = m.deps.get(i);
-        if !d.name.eq(name) {
-            continue;
-        }
+        if !d.name.eq(name) { continue; }
         found = true;
         println!("name:     ", d.name);
         if d.kind == DEP_PATH {
@@ -988,20 +884,12 @@ fn run_info(name: string) -> i32 {
             println!("fetched:  ", if cached { "yes" } else { "no" });
             if cached {
                 let hash: string = read_dep_hash(m, d);
-                if !hash.eq("") {
-                    println!("hash:     ", hash);
-                }
+                if !hash.eq("") { println!("hash:     ", hash); }
                 let sub_m: *Manifest = read_manifest(dir);
                 if sub_m != null {
-                    if !sub_m.description.eq("") {
-                        println!("desc:     ", sub_m.description);
-                    }
-                    if !sub_m.repository.eq("") {
-                        println!("repo:     ", sub_m.repository);
-                    }
-                    if !sub_m.license.eq("") {
-                        println!("license:  ", sub_m.license);
-                    }
+                    if !sub_m.description.eq("") { println!("desc:     ", sub_m.description); }
+                    if !sub_m.repository.eq("") { println!("repo:     ", sub_m.repository); }
+                    if !sub_m.license.eq("") { println!("license:  ", sub_m.license); }
                     println!("transitive deps:", int_to_str(sub_m.deps.len() as i64));
                 }
             } else {
@@ -1063,13 +951,9 @@ fn run_search(query: string) -> i32 {
     let mut idx: i32 = 0;
     while idx < body.len() && shown < 5 {
         let full: string = _extract_str_field(body, "full_name", idx);
-        if full.eq("") {
-            break;
-        }
+        if full.eq("") { break; }
         idx = _advance_after(body, "full_name", idx);
-        if seen_repos.contains(full) {
-            continue;
-        }
+        if seen_repos.contains(full) { continue; }
         seen_repos.insert(full, true);
         println!(full);
         println!("  glide add", full);
@@ -1107,13 +991,9 @@ fn _url_escape(s: string) -> string {
 
 fn _search_tmp_path() -> string {
     let tmp: string = __glide_getenv("TMP");
-    if !tmp.eq("") {
-        return tmp.concat("/glide_search.json");
-    }
+    if !tmp.eq("") { return tmp.concat("/glide_search.json"); }
     let tmp2: string = __glide_getenv("TMPDIR");
-    if !tmp2.eq("") {
-        return tmp2.concat("/glide_search.json");
-    }
+    if !tmp2.eq("") { return tmp2.concat("/glide_search.json"); }
     return "./.glide_search.json";
 }
 
@@ -1139,9 +1019,7 @@ fn _extract_str_field(body: string, key: string, from: i32) -> string {
             while k < body.len() && (body.at(k).to_int() == 32 || body.at(k).to_int() == 58) {
                 k = k + 1;
             }
-            if k >= body.len() || body.at(k).to_int() != 34 {
-                return "";
-            }
+            if k >= body.len() || body.at(k).to_int() != 34 { return ""; }
             k = k + 1;
             let mut end: i32 = k;
             while end < body.len() {
@@ -1150,9 +1028,7 @@ fn _extract_str_field(body: string, key: string, from: i32) -> string {
                     end = end + 2;
                     continue;
                 }
-                if c == 34 {
-                    break;
-                }
+                if c == 34 { break; }
                 end = end + 1;
             }
             return body.substring(k, end);
@@ -1173,9 +1049,7 @@ fn _advance_after(body: string, key: string, from: i32) -> i32 {
                 break;
             }
         }
-        if hit {
-            return i + needle.len();
-        }
+        if hit { return i + needle.len(); }
         i = i + 1;
     }
     return body.len();
@@ -1196,9 +1070,7 @@ fn _advance_after(body: string, key: string, from: i32) -> i32 {
 fn _parent_dir(p: string) -> string {
     let mut i: i32 = p.len() - 1;
     while i >= 0 {
-        if p.at(i).to_int() == 47 {
-            return p.substring(0, i);
-        }
+        if p.at(i).to_int() == 47 { return p.substring(0, i); }
         i = i - 1;
     }
     return ".";
@@ -1212,9 +1084,7 @@ fn _parent_dir(p: string) -> string {
 fn run_upgrade(argc: i32) -> i32 {
     let mut check_only: bool = false;
     for let i: i32 = 2; i < argc; i++ {
-        if args_at(i).eq("--check") {
-            check_only = true;
-        }
+        if args_at(i).eq("--check") { check_only = true; }
     }
     let os: string = __glide_os_name();
     let arch: string = __glide_os_arch();
@@ -1224,9 +1094,7 @@ fn run_upgrade(argc: i32) -> i32 {
         return 1;
     }
     let mut tmp: string = __glide_getenv("TMPDIR");
-    if tmp.eq("") {
-        tmp = "/tmp";
-    }
+    if tmp.eq("") { tmp = "/tmp"; }
     // Ask GitHub for the newest published tag.
     let meta: string = tmp.concat("/glide_upgrade_latest.json");
     let api: string = "https://api.github.com/repos/glide-lang/Glide/releases/latest";
@@ -1239,9 +1107,7 @@ fn run_upgrade(argc: i32) -> i32 {
     fs_remove_file(meta);
     let tag: string = _extract_str_field(body, "tag_name", 0);
     let mut latest: string = tag;
-    if tag.starts_with("v") {
-        latest = tag.substring(1, tag.len());
-    }
+    if tag.starts_with("v") { latest = tag.substring(1, tag.len()); }
     if latest.eq("") {
         println!("upgrade: could not read the latest version from GitHub.");
         return 1;
@@ -1327,9 +1193,7 @@ fn run_install(argc: i32) -> i32 {
         }
         let rev: string = args_at(3);
         project_root = _fetch_for_install(target, rev);
-        if project_root.eq("") {
-            return 1;
-        }
+        if project_root.eq("") { return 1; }
     } else {
         project_root = target;
         if !fs_is_dir(project_root) {
@@ -1348,9 +1212,7 @@ fn run_install(argc: i32) -> i32 {
     }
     let bin_src: string = project_root.concat("/").concat(m.bin);
     let mut bin_name: string = m.name;
-    if __glide_is_windows() != 0 {
-        bin_name = bin_name.concat(".exe");
-    }
+    if __glide_is_windows() != 0 { bin_name = bin_name.concat(".exe"); }
     let install_dir: string = _bin_root();
     if !fs_mkdir_p(install_dir) {
         println!("install: could not create", install_dir);
@@ -1360,9 +1222,7 @@ fn run_install(argc: i32) -> i32 {
     // Build straight to the install path. Saves a copy step and keeps
     // the spinner's progress output coherent.
     let rc: i32 = run_build(bin_src, final_path, "", false, false, false, false, "", "", "");
-    if rc != 0 {
-        return rc;
-    }
+    if rc != 0 { return rc; }
     // Compiler-style installs ship a `src/` tree alongside the binary
     // so the installed glide can find its own stdlib + builtins
     // wherever the user invokes it. Detected by the presence of
@@ -1405,9 +1265,7 @@ fn _bin_root() -> string {
     let home: !string = os_home_dir();
     if !home.is_ok() {
         let tmp: string = __glide_getenv("TMP");
-        if !tmp.eq("") {
-            return tmp.concat("/.glide/bin");
-        }
+        if !tmp.eq("") { return tmp.concat("/.glide/bin"); }
         return "./.glide_bin";
     }
     return home.unwrap().concat("/.glide/bin");
@@ -1417,24 +1275,12 @@ fn _bin_root() -> string {
 // looks like a hostname or http(s) URL goes through the fetcher;
 // everything else is a local path.
 fn _looks_like_url(s: string) -> bool {
-    if s.starts_with("http://") {
-        return true;
-    }
-    if s.starts_with("https://") {
-        return true;
-    }
-    if s.starts_with("git@") {
-        return true;
-    }
-    if s.starts_with("github.com/") {
-        return true;
-    }
-    if s.starts_with("gitlab.com/") {
-        return true;
-    }
-    if s.starts_with("bitbucket.org/") {
-        return true;
-    }
+    if s.starts_with("http://") { return true; }
+    if s.starts_with("https://") { return true; }
+    if s.starts_with("git@") { return true; }
+    if s.starts_with("github.com/") { return true; }
+    if s.starts_with("gitlab.com/") { return true; }
+    if s.starts_with("bitbucket.org/") { return true; }
     return false;
 }
 
@@ -1466,9 +1312,7 @@ fn _fetch_for_install(url: string, rev: string) -> string {
 // without trampling the user's setup is too noisy.
 fn _ensure_on_path(dir: string) {
     let path_env: string = __glide_getenv("PATH");
-    if !path_env.eq("") && _path_contains(path_env, dir) {
-        return;
-    }
+    if !path_env.eq("") && _path_contains(path_env, dir) { return; }
     if __glide_is_windows() != 0 {
         _add_to_user_path_win(dir);
     } else {
@@ -1515,23 +1359,17 @@ fn _to_backslashes(s: string) -> string {
 // case-sensitive on POSIX and case-insensitive on Windows.
 fn _path_contains(path_env: string, dir: string) -> bool {
     let mut sep_char: i32 = 58; // ':' POSIX
-    if __glide_is_windows() != 0 {
-        sep_char = 59;
-    } // ';'
+    if __glide_is_windows() != 0 { sep_char = 59; } // ';'
     let mut start: i32 = 0;
     let n: i32 = path_env.len();
     let win: bool = __glide_is_windows() != 0;
     for let i: i32 = 0; i <= n; i++ {
         let at_end: bool = i == n;
         let mut c: i32 = 0;
-        if !at_end {
-            c = path_env.at(i).to_int();
-        }
+        if !at_end { c = path_env.at(i).to_int(); }
         if at_end || c == sep_char {
             let seg: string = path_env.substring(start, i);
-            if _path_eq(seg, dir, win) {
-                return true;
-            }
+            if _path_eq(seg, dir, win) { return true; }
             start = i + 1;
         }
     }
@@ -1539,30 +1377,16 @@ fn _path_contains(path_env: string, dir: string) -> bool {
 }
 
 fn _path_eq(a: string, b: string, win: bool) -> bool {
-    if !win {
-        return a.eq(b);
-    }
-    if a.len() != b.len() {
-        return false;
-    }
+    if !win { return a.eq(b); }
+    if a.len() != b.len() { return false; }
     for let i: i32 = 0; i < a.len(); i++ {
         let mut ca: i32 = a.at(i).to_int();
         let mut cb: i32 = b.at(i).to_int();
-        if ca >= 65 && ca <= 90 {
-            ca = ca + 32;
-        }
-        if cb >= 65 && cb <= 90 {
-            cb = cb + 32;
-        }
-        if ca == 92 {
-            ca = 47;
-        }
-        if cb == 92 {
-            cb = 47;
-        }
-        if ca != cb {
-            return false;
-        }
+        if ca >= 65 && ca <= 90 { ca = ca + 32; }
+        if cb >= 65 && cb <= 90 { cb = cb + 32; }
+        if ca == 92 { ca = 47; }
+        if cb == 92 { cb = 47; }
+        if ca != cb { return false; }
     }
     return true;
 }
@@ -1580,25 +1404,17 @@ fn _default_out_path(project_root: string, project_name: string, then_run: bool,
         let build_dir: string = project_root.concat("/build");
         fs_mkdir_p(build_dir);
         let mut name: string = project_name;
-        if name.eq("") {
-            name = "app";
-        }
-        if want_exe {
-            name = name.concat(".exe");
-        }
+        if name.eq("") { name = "app"; }
+        if want_exe { name = name.concat(".exe"); }
         return build_dir.concat("/").concat(name);
     }
     if then_run {
         let tmp: string = _temp_dir();
         let mut name: string = "glide_run_tmp";
-        if want_exe {
-            name = name.concat(".exe");
-        }
+        if want_exe { name = name.concat(".exe"); }
         return tmp.concat("/").concat(name);
     }
-    if want_exe {
-        return "a.exe";
-    }
+    if want_exe { return "a.exe"; }
     return "a.out";
 }
 
@@ -1607,9 +1423,7 @@ fn _default_out_path(project_root: string, project_name: string, then_run: bool,
 fn _target_wants_exe(target: string) -> bool {
     if !target.eq("") {
         let os: string = _target_os(target);
-        if !os.eq("") {
-            return os.eq("windows");
-        }
+        if !os.eq("") { return os.eq("windows"); }
     }
     return __glide_is_windows() != 0;
 }
@@ -1638,13 +1452,9 @@ fn _temp_dir() -> string {
     let win: bool = __glide_is_windows() != 0;
     let env_name: string = if win { "TEMP" } else { "TMPDIR" };
     let mut t: string = __glide_getenv(env_name);
+    if t.eq("") { t = __glide_getenv("TMP"); }
     if t.eq("") {
-        t = __glide_getenv("TMP");
-    }
-    if t.eq("") {
-        if win {
-            return ".";
-        }
+        if win { return "."; }
         return "/tmp";
     }
     return t;
@@ -1652,19 +1462,13 @@ fn _temp_dir() -> string {
 
 // Parse a decimal port string. Returns 0 on any non-digit or overflow.
 fn _parse_port(s: string) -> i32 {
-    if s.eq("") {
-        return 0;
-    }
+    if s.eq("") { return 0; }
     let mut acc: i32 = 0;
     for let i: i32 = 0; i < s.len(); i++ {
         let c: i32 = s.at(i).to_int();
-        if c < 48 || c > 57 {
-            return 0;
-        }
+        if c < 48 || c > 57 { return 0; }
         acc = acc * 10 + (c - 48);
-        if acc > 65535 {
-            return 0;
-        }
+        if acc > 65535 { return 0; }
     }
     return acc;
 }
@@ -1675,16 +1479,12 @@ fn _parse_port(s: string) -> i32 {
 // file (relative path), line/col (1-based), end_line/end_col.
 fn _diag_to_jsonl(d: *DiagEntry, fallback_path: string) -> string {
     let mut path: string = d.origin;
-    if path == null || path.eq("") {
-        path = fallback_path;
-    }
+    if path == null || path.eq("") { path = fallback_path; }
     let mut sev: string = "info";
     if d.severity == 1 {
         sev = "error";
     } else {
-        if d.severity == 2 {
-            sev = "warning";
-        }
+        if d.severity == 2 { sev = "warning"; }
     }
     let mut out: string = "{";
     out = out.concat("\"severity\":\"").concat(sev).concat("\"");
@@ -1703,9 +1503,7 @@ fn _diag_to_jsonl(d: *DiagEntry, fallback_path: string) -> string {
 // control chars below 0x20, and newlines/tabs. JSON-spec compliant
 // for ASCII; non-ASCII bytes pass through unchanged (UTF-8).
 fn _json_esc(s: string) -> string {
-    if s == null {
-        return "";
-    }
+    if s == null { return ""; }
     let mut out: string = "";
     for let i: i32 = 0; i < s.len(); i++ {
         let c: i32 = s.at(i).to_int();
@@ -1740,9 +1538,7 @@ fn _json_esc(s: string) -> string {
 
 fn _wants_json(argc: i32) -> bool {
     for let i: i32 = 0; i < argc; i++ {
-        if args_at(i).eq("--json") {
-            return true;
-        }
+        if args_at(i).eq("--json") { return true; }
     }
     return false;
 }
@@ -1766,9 +1562,7 @@ fn run_lint(target: string, argc: i32) -> i32 {
     let json: bool = _wants_json(argc);
     let mut want_all: bool = false;
     for let k: i32 = 0; k < argc; k++ {
-        if args_at(k).eq("--all") {
-            want_all = true;
-        }
+        if args_at(k).eq("--all") { want_all = true; }
     }
     let mut files: *Vector<string> = Vector::new();
     if fs_is_dir(target) {
@@ -1781,9 +1575,7 @@ fn run_lint(target: string, argc: i32) -> i32 {
     let kept: *Vector<string> = Vector::new();
     for let i: i32 = 0; i < files.len(); i++ {
         let f: string = files.get(i);
-        if _ends_with_str(f, "/glide.glide") || _ends_with_str(f, "\\glide.glide") {
-            continue;
-        }
+        if _ends_with_str(f, "/glide.glide") || _ends_with_str(f, "\\glide.glide") { continue; }
         kept.push(f);
     }
     let mut total_errors: i32 = 0;
@@ -1796,20 +1588,14 @@ fn run_lint(target: string, argc: i32) -> i32 {
         total_errors = total_errors + r.errors;
         total_warnings = total_warnings + r.warnings;
         total_promoted = total_promoted + r.promoted;
-        if r.parse_failed {
-            bad_parses = bad_parses + 1;
-        }
+        if r.parse_failed { bad_parses = bad_parses + 1; }
     }
     if !json {
         println!("");
         let mut summary: string = "lint: ".concat(int_to_str(total_errors)).concat(" error");
-        if total_errors != 1 {
-            summary = summary.concat("s");
-        }
+        if total_errors != 1 { summary = summary.concat("s"); }
         summary = summary.concat(", ").concat(int_to_str(total_warnings)).concat(" warning");
-        if total_warnings != 1 {
-            summary = summary.concat("s");
-        }
+        if total_warnings != 1 { summary = summary.concat("s"); }
         if kept.len() > 1 {
             summary = summary.concat(" across ").concat(int_to_str(kept.len())).concat(" files");
         }
@@ -1818,9 +1604,7 @@ fn run_lint(target: string, argc: i32) -> i32 {
         }
         println!(summary);
     }
-    if total_errors > 0 || total_promoted > 0 || bad_parses > 0 {
-        return 1;
-    }
+    if total_errors > 0 || total_promoted > 0 || bad_parses > 0 { return 1; }
     return 0;
 }
 
@@ -1848,15 +1632,9 @@ fn _lint_one_file(src_path: string, want_all: bool, json: bool) -> LintCounts {
     for let i: i32 = 0; i < t.diagnostics.len(); i++ {
         let d: DiagEntry = t.diagnostics.get(i);
         let mut path: string = d.origin;
-        if path.eq("") {
-            path = src_path;
-        }
-        if !want_all && !path.eq(src_path) {
-            continue;
-        }
-        if d.severity == 2 && _project_allow_drop(d.code) {
-            continue;
-        }
+        if path.eq("") { path = src_path; }
+        if !want_all && !path.eq(src_path) { continue; }
+        if d.severity == 2 && _project_allow_drop(d.code) { continue; }
         let promote: bool = d.severity == 2 && _is_lint_promoted(d.code);
         if json {
             println!(_diag_to_jsonl(&d, src_path));
@@ -1876,9 +1654,7 @@ fn _lint_one_file(src_path: string, want_all: bool, json: bool) -> LintCounts {
         } else {
             if d.severity == 2 {
                 r.warnings = r.warnings + 1;
-                if promote {
-                    r.promoted = r.promoted + 1;
-                }
+                if promote { r.promoted = r.promoted + 1; }
             }
         }
     }
@@ -1902,9 +1678,7 @@ fn run_fix(target: string) -> i32 {
     let mut total_edits: i32 = 0;
     for let i: i32 = 0; i < files.len(); i++ {
         let f: string = files.get(i);
-        if _ends_with_str(f, "/glide.glide") || _ends_with_str(f, "\\glide.glide") {
-            continue;
-        }
+        if _ends_with_str(f, "/glide.glide") || _ends_with_str(f, "\\glide.glide") { continue; }
         let n: i32 = _fix_one_file(f);
         if n > 0 {
             total_changed = total_changed + 1;
@@ -1919,9 +1693,7 @@ fn _fix_one_file(src_path: string) -> i32 {
     apply_lint_for(parent_dir(src_path));
     let stmts: *Vector<Stmt> = Vector::new();
     let pdiags: *Vector<ParseDiag> = Vector::new();
-    if !parse_program_into(stmts, src_path, pdiags, false) {
-        return 0;
-    }
+    if !parse_program_into(stmts, src_path, pdiags, false) { return 0; }
     let t: *Typer = Typer::new();
     merge_parse_diags(t, pdiags);
     build_visibility(t, stmts);
@@ -1940,12 +1712,8 @@ fn _fix_one_file(src_path: string) -> i32 {
     for let i: i32 = 0; i < t.diagnostics.len(); i++ {
         let d: DiagEntry = t.diagnostics.get(i);
         let mut origin: string = d.origin;
-        if origin.eq("") {
-            origin = src_path;
-        }
-        if !origin.eq(src_path) {
-            continue;
-        }
+        if origin.eq("") { origin = src_path; }
+        if !origin.eq(src_path) { continue; }
         if !d.fix_replacement.eq("") || d.fix_line > 0 {
             starts.push(_offset_of(d.fix_line, d.fix_col, src_path));
             ends.push(_offset_of(d.fix_end_line, d.fix_end_col, src_path));
@@ -1960,9 +1728,7 @@ fn _fix_one_file(src_path: string) -> i32 {
         }
     }
     t.free();
-    if starts.len() == 0 {
-        return 0;
-    }
+    if starts.len() == 0 { return 0; }
     // Sort by descending start so each splice doesn't invalidate the
     // remaining offsets. Selection sort — N is small.
     _sort_fixes_desc(starts, ends, repls);
@@ -1976,26 +1742,18 @@ fn _fix_one_file(src_path: string) -> i32 {
         let rep: string = repls.get(i);
         // Dedupe identical offsets — happens when two analyses both
         // flag the same site.
-        if off == prev_start {
-            continue;
-        }
+        if off == prev_start { continue; }
         prev_start = off;
-        if off < 0 || off > buf.len() || endo < off || endo > buf.len() {
-            continue;
-        }
+        if off < 0 || off > buf.len() || endo < off || endo > buf.len() { continue; }
         // For insertion fixes (zero-width range) inserting `_`, skip if
         // the source already has `_` at that position.
-        if off == endo && rep.eq("_") && off < buf.len() && buf.at(off).to_int() == 95 {
-            continue;
-        }
+        if off == endo && rep.eq("_") && off < buf.len() && buf.at(off).to_int() == 95 { continue; }
         let head: string = buf.substring(0, off);
         let tail: string = buf.substring(endo, buf.len());
         buf = head.concat(rep).concat(tail);
         applied = applied + 1;
     }
-    if applied == 0 {
-        return 0;
-    }
+    if applied == 0 { return 0; }
     write_file(src_path, buf);
     println!("  fixed", int_to_str(applied), "→", src_path);
     return applied;
@@ -2007,25 +1765,17 @@ fn _fix_one_file(src_path: string) -> i32 {
 // to avoid re-scanning the source on every diagnostic — fix runs hit
 // `_offset_of` once per diagnostic but most files have one fix.
 fn _offset_of(line: i32, col: i32, src_path: string) -> i32 {
-    if line < 1 {
-        return -1;
-    }
+    if line < 1 { return -1; }
     let src: string = read_file(src_path);
     let mut cur_line: i32 = 1;
     let mut off: i32 = 0;
     while off < src.len() && cur_line < line {
-        if src.at(off).to_int() == 10 {
-            cur_line = cur_line + 1;
-        }
+        if src.at(off).to_int() == 10 { cur_line = cur_line + 1; }
         off = off + 1;
     }
-    if cur_line != line {
-        return -1;
-    }
+    if cur_line != line { return -1; }
     let result: i32 = off + col - 1;
-    if result < 0 || result > src.len() {
-        return -1;
-    }
+    if result < 0 || result > src.len() { return -1; }
     return result;
 }
 
@@ -2034,9 +1784,7 @@ fn _sort_fixes_desc(starts: *Vector<i32>, ends: *Vector<i32>, repls: *Vector<str
     for let i: i32 = 0; i < n - 1; i++ {
         let mut max_idx: i32 = i;
         for let j: i32 = i + 1; j < n; j++ {
-            if starts.get(j) > starts.get(max_idx) {
-                max_idx = j;
-            }
+            if starts.get(j) > starts.get(max_idx) { max_idx = j; }
         }
         if max_idx != i {
             let ts: i32 = starts.get(i);
@@ -2054,12 +1802,8 @@ fn _sort_fixes_desc(starts: *Vector<i32>, ends: *Vector<i32>, repls: *Vector<str
 
 // Plain ASCII suffix check, since stdlib::str is not in scope here.
 fn _ends_with_str(s: string, suffix: string) -> bool {
-    if s == null || suffix == null {
-        return false;
-    }
-    if suffix.len() > s.len() {
-        return false;
-    }
+    if s == null || suffix == null { return false; }
+    if suffix.len() > s.len() { return false; }
     return s.substring(s.len() - suffix.len(), s.len()).eq(suffix);
 }
 
@@ -2140,16 +1884,10 @@ fn parse_program_into(stmts: *Vector<Stmt>, path: string, pdiags: *Vector<ParseD
     let _bi_root: string = find_manifest_root(parent_dir(path));
     if !_bi_root.eq("") {
         let _bi_m: *Manifest = read_manifest(_bi_root);
-        if _bi_m != null {
-            _fs_skip_builtins = _bi_m.freestanding;
-        }
+        if _bi_m != null { _fs_skip_builtins = _bi_m.freestanding; }
     }
-    if force_no_std {
-        _fs_skip_builtins = true;
-    }
-    if !_fs_skip_builtins {
-        load_builtins_dir(stmts, builtins_dir, loaded, pdiags);
-    }
+    if force_no_std { _fs_skip_builtins = true; }
+    if !_fs_skip_builtins { load_builtins_dir(stmts, builtins_dir, loaded, pdiags); }
     load_into_str(stmts, src, path, loaded, pdiags);
     let expanded: *Vector<Stmt> = expand_macros(stmts);
     let lowered: *Vector<Stmt> = lower_program(expanded);
@@ -2167,18 +1905,10 @@ fn parse_program_into(stmts: *Vector<Stmt>, path: string, pdiags: *Vector<ParseD
 // targeted per-platform install hint.
 fn pick_cc_host(_needs_libs: bool) -> string {
     let env: string = __glide_getenv("CC");
-    if !env.eq("") {
-        return env;
-    }
-    if _have_on_path("cc") {
-        return "cc";
-    }
-    if _have_on_path("gcc") {
-        return "gcc";
-    }
-    if _have_on_path("clang") {
-        return "clang";
-    }
+    if !env.eq("") { return env; }
+    if _have_on_path("cc") { return "cc"; }
+    if _have_on_path("gcc") { return "gcc"; }
+    if _have_on_path("clang") { return "clang"; }
     return "";
 }
 
@@ -2214,9 +1944,7 @@ fn _mk_backend(cc: string, emit_target: bool, extra: string) -> *CrossBackend {
 // First segment of a triple (`x86_64-linux-musl` -> `x86_64`).
 fn _triple_arch(triple: string) -> string {
     let parts: *Vector<string> = triple.split("-");
-    if parts.len() < 1 {
-        return "";
-    }
+    if parts.len() < 1 { return ""; }
     return parts.get(0);
 }
 
@@ -2225,9 +1953,7 @@ fn _triple_arch(triple: string) -> string {
 // mingw trees keep include/lib at the top.
 fn _sysroot_has_libc(triple: string) -> bool {
     let dir: string = _target_dir(triple);
-    if fs_exists(dir.concat("/libc/usr/lib/libc.a")) {
-        return true;
-    }
+    if fs_exists(dir.concat("/libc/usr/lib/libc.a")) { return true; }
     return fs_exists(dir.concat("/libc/lib/libmingw32.a"));
 }
 
@@ -2251,9 +1977,7 @@ fn pick_cc_for_target(triple: string, needs_libs: bool) -> !*CrossBackend {
     // Tier 1: host-triple builds on Windows/macOS are native builds.
     if triple.eq(host) && (tos.eq("windows") || tos.eq("macos")) {
         let host_cc: string = pick_cc_host(needs_libs);
-        if !host_cc.eq("") {
-            return ok(_mk_backend(host_cc, false, ""));
-        }
+        if !host_cc.eq("") { return ok(_mk_backend(host_cc, false, "")); }
     }
     // Cross-compiling TO macOS needs Apple's SDK — native-only target.
     if tos.eq("macos") && !triple.eq(host) {
@@ -2289,34 +2013,24 @@ fn pick_cc_for_target(triple: string, needs_libs: bool) -> !*CrossBackend {
 // always reads the matching stdlib. No-op on non-bundle builds and on
 // repeat runs.
 fn _maybe_install_embedded_src() {
-    if !has_embedded_src() {
-        return;
-    }
+    if !has_embedded_src() { return; }
     let home: !string = os_home_dir();
-    if !home.is_ok() {
-        return;
-    }
+    if !home.is_ok() { return; }
     let dest_root: string = home.unwrap().concat("/.glide");
     let dest_src: string = dest_root.concat("/src");
     let marker: string = dest_src.concat("/.glide_src_version");
     // Marker already matches → nothing to do.
     if __glide_file_exists(marker) {
         let v: string = read_file(marker).trim();
-        if v.eq(GLIDE_VERSION) {
-            return;
-        }
+        if v.eq(GLIDE_VERSION) { return; }
     }
     let bytes_ptr: *void = embedded_src();
     let bytes_len: i32 = embedded_src_len();
-    if bytes_ptr == null || bytes_len <= 0 {
-        return;
-    }
+    if bytes_ptr == null || bytes_len <= 0 { return; }
     let archive_gz: string = __glide_string_from_buf(bytes_ptr, bytes_len);
     let mut decoded_len: i32 = 0;
     let raw: *void = gzip_decode(archive_gz, bytes_len, &decoded_len);
-    if raw == null || decoded_len <= 0 {
-        return;
-    }
+    if raw == null || decoded_len <= 0 { return; }
     let archive: string = __glide_string_from_buf(raw, decoded_len);
     fs_mkdir_p(dest_root);
     fs_remove_dir_rec(dest_src);
@@ -2342,9 +2056,7 @@ fn _maybe_install_embedded_src() {
 // cc/clang now.
 fn _cleanup_legacy_zig() {
     let home: !string = os_home_dir();
-    if !home.is_ok() {
-        return;
-    }
+    if !home.is_ok() { return; }
     let d1: string = home.unwrap().concat("/.glide/runtime/zig");
     if fs_is_dir(d1) {
         fs_remove_dir_rec(d1);
@@ -2352,9 +2064,7 @@ fn _cleanup_legacy_zig() {
         println!("      (the C backend is the system cc/clang now)");
     }
     let d2: string = home.unwrap().concat("/.glide/bin/runtime/zig");
-    if fs_is_dir(d2) {
-        fs_remove_dir_rec(d2);
-    }
+    if fs_is_dir(d2) { fs_remove_dir_rec(d2); }
 }
 
 // `command -v` / `where` thin wrapper. Returns true if the program
@@ -2370,9 +2080,7 @@ fn _target_root() -> string {
     let home: !string = os_home_dir();
     if !home.is_ok() {
         let tmp: string = __glide_getenv("TMP");
-        if !tmp.eq("") {
-            return tmp.concat("/.glide/targets");
-        }
+        if !tmp.eq("") { return tmp.concat("/.glide/targets"); }
         return "./.glide_targets";
     }
     return home.unwrap().concat("/.glide/targets");
@@ -2396,20 +2104,14 @@ fn _target_dir(triple: string) -> string {
 // system dynamic linkage.
 fn _host_lib_bundle_dir() -> string {
     let exe_dir: string = __glide_exe_dir();
-    if exe_dir.eq("") {
-        return "";
-    }
+    if exe_dir.eq("") { return ""; }
     // Install-style layout (~/.glide/bin/glide → ~/.glide/lib/) first;
     // inline layout (lib/ as a sibling of the binary in the dist
     // tarball) second.
     let install_lib: string = exe_dir.concat("/../lib");
-    if fs_exists(install_lib.concat("/libssl.a")) {
-        return install_lib;
-    }
+    if fs_exists(install_lib.concat("/libssl.a")) { return install_lib; }
     let inline_lib: string = exe_dir.concat("/lib");
-    if fs_exists(inline_lib.concat("/libssl.a")) {
-        return inline_lib;
-    }
+    if fs_exists(inline_lib.concat("/libssl.a")) { return inline_lib; }
     return "";
 }
 
@@ -2426,9 +2128,7 @@ fn _host_lib_bundle_dir() -> string {
 fn _host_triple() -> string {
     let arch: string = __glide_os_arch();
     let os: string = __glide_os_name();
-    if arch.eq("") || os.eq("") || os.eq("unknown") || arch.eq("unknown") {
-        return "";
-    }
+    if arch.eq("") || os.eq("") || os.eq("unknown") || arch.eq("unknown") { return ""; }
     // Pick the libc/runtime tag matching the sysroots Glide actually
     // ships. Linux → musl (fully static portable binary), Windows →
     // gnu (mingw-w64), macOS → none (Apple uses the system runtime
@@ -2458,9 +2158,7 @@ extern fn __glide_os_name() -> string;
 // by probing for the openssl ssl.h header which every TLS-aware
 // cross build needs.
 fn _has_target_sysroot(triple: string) -> bool {
-    if triple.eq("") {
-        return false;
-    }
+    if triple.eq("") { return false; }
     let probe: string = _target_dir(triple).concat("/include/openssl/ssl.h");
     return __glide_file_exists(probe);
 }
@@ -2472,15 +2170,14 @@ fn _has_target_sysroot(triple: string) -> bool {
 //   riscv64-linux-musl     -> "linux"
 // Returns "" if the triple isn't recognisable.
 fn _target_os(triple: string) -> string {
-    if triple.eq("") {
-        return "";
-    }
+    if triple.eq("") { return ""; }
     let parts: *Vector<string> = triple.split("-");
-    if parts.len() < 2 {
-        return "";
-    }
+    if parts.len() < 2 { return ""; }
     let os: string = parts.get(1);
-    if os.eq("linux") || os.eq("macos") || os.eq("darwin") || os.eq("windows") || os.eq("freebsd") || os.eq("netbsd") || os.eq("openbsd") || os.eq("wasi") {
+    if os.eq("linux") || os.eq("macos") || os.eq("darwin") || os.eq("windows") || os.eq("freebsd")
+        || os.eq("netbsd")
+        || os.eq("openbsd")
+        || os.eq("wasi") {
         return os;
     }
     return "";
@@ -2501,9 +2198,7 @@ fn _known_targets() -> *Vector<string> {
 fn _is_known_target(triple: string) -> bool {
     let v: *Vector<string> = _known_targets();
     for let i: i32 = 0; i < v.len(); i++ {
-        if v.get(i).eq(triple) {
-            return true;
-        }
+        if v.get(i).eq(triple) { return true; }
     }
     return false;
 }
@@ -2519,9 +2214,7 @@ fn run_target(argc: i32) -> i32 {
         return 1;
     }
     let sub: string = args_at(2);
-    if sub.eq("list") || sub.eq("ls") {
-        return _target_list();
-    }
+    if sub.eq("list") || sub.eq("ls") { return _target_list(); }
     if sub.eq("dir") {
         println!(_target_root());
         return 0;
@@ -2565,18 +2258,12 @@ fn _print_target_help() {
 // what it's good for. Drives the `glide target list` tips. Empty for
 // triples we don't have a blurb for.
 fn _target_desc(triple: string) -> string {
-    if triple.eq("x86_64-linux-musl") {
-        return "Linux on Intel/AMD 64-bit  (fully static musl)";
-    }
+    if triple.eq("x86_64-linux-musl") { return "Linux on Intel/AMD 64-bit  (fully static musl)"; }
     if triple.eq("aarch64-linux-musl") {
         return "Linux on ARM64 — Graviton, Ampere, Raspberry Pi, cloud ARM  (static musl)";
     }
-    if triple.eq("x86_64-windows-gnu") {
-        return "Windows on Intel/AMD 64-bit  (static mingw-w64)";
-    }
-    if triple.eq("aarch64-macos-none") {
-        return "macOS on Apple Silicon — M1, M2, M3, M4";
-    }
+    if triple.eq("x86_64-windows-gnu") { return "Windows on Intel/AMD 64-bit  (static mingw-w64)"; }
+    if triple.eq("aarch64-macos-none") { return "macOS on Apple Silicon — M1, M2, M3, M4"; }
     return "";
 }
 
@@ -2587,9 +2274,7 @@ fn _target_list() -> i32 {
     for let i: i32 = 0; i < known.len(); i++ {
         let t: string = known.get(i);
         let mut tag: string = "available";
-        if _has_target_sysroot(t) {
-            tag = "installed";
-        }
+        if _has_target_sysroot(t) { tag = "installed"; }
         // Pad the triple so the descriptions line up in a column.
         let mut label: string = t;
         while label.len() < 22 {
@@ -2615,15 +2300,11 @@ fn _target_list() -> i32 {
 fn _install_sysroot_from_embed(triple: string) -> i32 {
     let bytes_ptr: *void = embedded_sysroot(triple);
     let bytes_len: i32 = embedded_sysroot_len(triple);
-    if bytes_ptr == null || bytes_len <= 0 {
-        return 1;
-    }
+    if bytes_ptr == null || bytes_len <= 0 { return 1; }
     let archive_gz: string = __glide_string_from_buf(bytes_ptr, bytes_len);
     let mut decoded_len: i32 = 0;
     let raw: *void = gzip_decode(archive_gz, bytes_len, &decoded_len);
-    if raw == null || decoded_len <= 0 {
-        return 1;
-    }
+    if raw == null || decoded_len <= 0 { return 1; }
     let archive: string = __glide_string_from_buf(raw, decoded_len);
     let dest: string = _target_dir(triple);
     fs_remove_dir_rec(dest);
@@ -2748,20 +2429,14 @@ fn _target_remove(triple: string) -> i32 {
 // command never gets a stray/leading/double space. Used to accumulate user
 // cflags/ldflags from the CLI, $GLIDE_*FLAGS, and the manifest.
 fn _append_flag(acc: string, f: string) -> string {
-    if f.eq("") {
-        return acc;
-    }
-    if acc.eq("") {
-        return f;
-    }
+    if f.eq("") { return acc; }
+    if acc.eq("") { return f; }
     return acc.concat(" ").concat(f);
 }
 
 // Space-join a *Vector<string> of flags (null/empty tolerant) via _append_flag.
 fn _join_flags(v: *Vector<string>) -> string {
-    if v == null {
-        return "";
-    }
+    if v == null { return ""; }
     let mut out: string = "";
     for let i: i32 = 0; i < v.len(); i++ {
         out = _append_flag(out, v.get(i));
@@ -2804,12 +2479,8 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     if !_mroot.eq("") {
         let _m: *Manifest = read_manifest(_mroot);
         if _m != null {
-            if _m.freestanding {
-                freestanding = true;
-            }
-            if !_m.link_script.eq("") {
-                link_script = _mroot.concat("/").concat(_m.link_script);
-            }
+            if _m.freestanding { freestanding = true; }
+            if !_m.link_script.eq("") { link_script = _mroot.concat("/").concat(_m.link_script); }
             manifest_cflags = _join_flags(_m.cflags);
             manifest_ldflags = _join_flags(_m.ldflags);
         }
@@ -2826,23 +2497,17 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     // `--tiny` is a hosted minimal build; it always strips + GC-collects (like
     // --release) so the dropped scheduler/reactor actually leave the binary.
     let eff_release: bool = release || tiny;
-    if !quiet {
-        spinner_start("parsing ".concat(src_path));
-    }
+    if !quiet { spinner_start("parsing ".concat(src_path)); }
     // 1. Parse
     let stmts: *Vector<Stmt> = Vector::new();
     let pdiags: *Vector<ParseDiag> = Vector::new();
     if !parse_program_into(stmts, src_path, pdiags, no_std) {
-        if !quiet {
-            spinner_finish(false, "parse failed");
-        }
+        if !quiet { spinner_finish(false, "parse failed"); }
         return 1;
     }
     // 2. Type-check. Abort the build before codegen if the user file has
     //    errors (e.g. infinite-recursion, type mismatches).
-    if !quiet {
-        spinner_set("typechecking");
-    }
+    if !quiet { spinner_set("typechecking"); }
     let t: *Typer = Typer::new();
     t.freestanding = freestanding;
     merge_parse_diags(t, pdiags);
@@ -2860,22 +2525,16 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     for let i: i32 = 0; i < t.diagnostics.len(); i++ {
         let d: DiagEntry = t.diagnostics.get(i);
         let mut dpath: string = d.origin;
-        if dpath.eq("") {
-            dpath = src_path;
-        }
+        if dpath.eq("") { dpath = src_path; }
         // A build compiles the WHOLE program, so a hard error in ANY file it
         // pulls in must surface — dropping imported-file errors is what let a
         // type mismatch in an imported fn reach cc as a confusing C cascade,
         // and a broken `defer` in the TLS stack silently skip its cleanup.
         // Warnings stay entry-file-only so stdlib lints don't flood every
         // build. So skip only NON-error diagnostics from imported files.
-        if !dpath.eq(src_path) && d.severity != 1 {
-            continue;
-        }
+        if !dpath.eq(src_path) && d.severity != 1 { continue; }
         // Drop warnings the project's `lint.allow` covers (manifest-wide).
-        if d.severity == 2 && _project_allow_drop(d.code) {
-            continue;
-        }
+        if d.severity == 2 && _project_allow_drop(d.code) { continue; }
         // Promote warning → error when `--lint-as-error=<code>` matches.
         // We don't mutate the original entry (it stays in the typer's
         // diagnostic list at severity 2), but we count it against the
@@ -2883,22 +2542,16 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         let promoted: bool = d.severity == 2 && _is_lint_promoted(d.code);
         // Imported-file diagnostics need their OWN source text for the caret.
         let mut dsnip: string = src_text;
-        if !dpath.eq(src_path) {
-            dsnip = read_file(dpath);
-        }
+        if !dpath.eq(src_path) { dsnip = read_file(dpath); }
         print_pretty_diag(d, dsnip, dpath);
-        if d.severity == 1 || promoted {
-            errors = errors + 1;
-        }
+        if d.severity == 1 || promoted { errors = errors + 1; }
     }
     if errors > 0 {
         let mut tail: string = "could not compile due to 1 previous error";
         if errors > 1 {
             tail = "could not compile due to ".concat(int_to_str(errors)).concat(" previous errors");
         }
-        if !quiet {
-            spinner_finish(false, "");
-        }
+        if !quiet { spinner_finish(false, ""); }
         println!(col_red().concat("error").concat(col_reset()).concat(": ").concat(tail));
         return 1;
     }
@@ -2912,40 +2565,28 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     for let i: i32 = 0; i < pre.diagnostics.len(); i++ {
         let pd: DiagEntry = pre.diagnostics.get(i);
         let mut ppath: string = pd.origin;
-        if ppath.eq("") {
-            ppath = src_path;
-        }
+        if ppath.eq("") { ppath = src_path; }
         // Only surface diagnostics for the user's file; imported stdlib c_raw
         // blocks are trusted (they already compile) and stay suppressed.
-        if !ppath.eq(src_path) {
-            continue;
-        }
+        if !ppath.eq(src_path) { continue; }
         print_pretty_diag(pd, src_text, ppath);
-        if pd.severity == 1 {
-            pre_errors = pre_errors + 1;
-        }
+        if pd.severity == 1 { pre_errors = pre_errors + 1; }
     }
     if pre_errors > 0 {
         let mut ptail: string = "could not compile due to 1 previous error";
         if pre_errors > 1 {
             ptail = "could not compile due to ".concat(int_to_str(pre_errors)).concat(" previous errors");
         }
-        if !quiet {
-            spinner_finish(false, "");
-        }
+        if !quiet { spinner_finish(false, ""); }
         println!(col_red().concat("error").concat(col_reset()).concat(": ").concat(ptail));
         return 1;
     }
     // 3. Emit C to a temp file by saving stdout, redirecting, then restoring.
-    if !quiet {
-        spinner_set("emitting C");
-    }
+    if !quiet { spinner_set("emitting C"); }
     let tmp_c: string = out_path.concat(".__glide.c");
     let saved: i32 = __glide_redirect_to(tmp_c);
     if saved < 0 {
-        if !quiet {
-            spinner_finish(false, "could not open temp file: ".concat(tmp_c));
-        }
+        if !quiet { spinner_finish(false, "could not open temp file: ".concat(tmp_c)); }
         return 1;
     }
     // Drop proc-macro impl fns + their bootstrap/* AST helpers — the
@@ -3024,9 +2665,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
                 // Final say is the selector's: an old v1 sysroot without
                 // libc/ can't feed clang, so stay native.
                 let probe: !*CrossBackend = pick_cc_for_target(host_triple, needs_any_lib);
-                if probe.is_ok() {
-                    eff_target = host_triple;
-                }
+                if probe.is_ok() { eff_target = host_triple; }
             }
         }
     }
@@ -3040,11 +2679,9 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     if cross && _is_known_target(eff_target) && !_has_target_sysroot(eff_target) {
         let _tos: string = _target_os(eff_target);
         let _native_tier: bool = eff_target.eq(_host_triple()) && (_tos.eq("windows") || _tos.eq("macos"));
-        if needs_any_lib || (!_native_tier && !_tos.eq("macos")) {
+        if needs_any_lib || !_native_tier && !_tos.eq("macos") {
             if _target_add(eff_target) != 0 {
-                if !quiet {
-                    spinner_finish(false, "");
-                }
+                if !quiet { spinner_finish(false, ""); }
                 println!("could not auto-fetch the", eff_target, "sysroot.");
                 println!("check your connection, or pre-warm it with: glide target add", eff_target);
                 return 1;
@@ -3052,18 +2689,14 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         }
     }
     // 4. Build the cc command.
-    if !quiet {
-        spinner_set("compiling C -> ".concat(out_path));
-    }
+    if !quiet { spinner_set("compiling C -> ".concat(out_path)); }
     let mut cc: string = "";
     let mut cross_emit_target: bool = false;
     let mut cross_extra: string = "";
     if cross {
         let pick: !*CrossBackend = pick_cc_for_target(eff_target, needs_any_lib);
         if !pick.is_ok() {
-            if !quiet {
-                spinner_finish(false, "");
-            }
+            if !quiet { spinner_finish(false, ""); }
             println!(col_red().concat("error").concat(col_reset()).concat(": ").concat(pick.unwrap_err()));
             return 1;
         }
@@ -3074,9 +2707,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         // Host backend: any system cc.
         cc = pick_cc_host(needs_any_lib);
         if cc.eq("") {
-            if !quiet {
-                spinner_finish(false, "");
-            }
+            if !quiet { spinner_finish(false, ""); }
             println!(col_red().concat("error").concat(col_reset()).concat(": no C compiler found on PATH."));
             println!("install one and re-run:");
             println!("  Debian/Ubuntu: sudo apt install gcc");
@@ -3121,9 +2752,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         target_is_macos = _host_triple().contains("macos");
     }
     let wants_static: bool = !target_is_macos && __glide_want_dynamic() == 0;
-    if wants_static {
-        cmd = cmd.concat(" -static");
-    }
+    if wants_static { cmd = cmd.concat(" -static"); }
     // `-g` ships debug info so the runtime trap handler can resolve
     // each frame's instruction pointer back to a function name and
     // source line via dbghelp (Windows) / addr2line (POSIX). Cheap —
@@ -3145,18 +2774,14 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     }
     // User cflags go right after the defaults so e.g. a `-O3` / `--opt=3`
     // overrides the default `-O2` (cc/clang is last-flag-wins).
-    if !user_cflags.eq("") {
-        cmd = cmd.concat(" ").concat(user_cflags);
-    }
+    if !user_cflags.eq("") { cmd = cmd.concat(" ").concat(user_cflags); }
     // HTTP/3: ngtcp2 / nghttp3 headers default to __declspec(dllimport) on
     // Windows, so linking their STATIC archives makes lld-link hunt for
     // __imp_* symbols a `.a` never exports ("undefined symbol: __declspec(
     // dllimport) ngtcp2_crypto_ossl_init"). The *_STATICLIB macros turn the
     // decoration off. Harmless on other targets — the EXTERN collapses to
     // plain, which is the correct form for static linking everywhere.
-    if needs_h3 {
-        cmd = cmd.concat(" -DNGTCP2_STATICLIB -DNGHTTP3_STATICLIB");
-    }
+    if needs_h3 { cmd = cmd.concat(" -DNGTCP2_STATICLIB -DNGHTTP3_STATICLIB"); }
     let mut want_uring: bool = false;
     if !cross && __glide_is_windows() == 0 {
         if fs_exists("/usr/include/liburing.h") || fs_exists("/usr/local/include/liburing.h") {
@@ -3167,21 +2792,13 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
             let target_os: string = _target_os(eff_target);
             if target_os.eq("linux") && _has_target_sysroot(eff_target) {
                 let sysroot: string = _target_dir(eff_target);
-                if fs_exists(sysroot.concat("/include/liburing.h")) {
-                    want_uring = true;
-                }
+                if fs_exists(sysroot.concat("/include/liburing.h")) { want_uring = true; }
             }
         }
     }
-    if want_uring {
-        cmd = cmd.concat(" -luring");
-    }
-    if cross && cross_emit_target {
-        cmd = cmd.concat(" --target=").concat(eff_target);
-    }
-    if cross && !cross_extra.eq("") {
-        cmd = cmd.concat(cross_extra);
-    }
+    if want_uring { cmd = cmd.concat(" -luring"); }
+    if cross && cross_emit_target { cmd = cmd.concat(" --target=").concat(eff_target); }
+    if cross && !cross_extra.eq("") { cmd = cmd.concat(cross_extra); }
     // Pick platform-specific flags from the target when cross-compiling,
     // otherwise from the host. `--target=` selects the arch/OS; the
     // sysroot's libc/ tree (via --sysroot) supplies libc + crt; the rest
@@ -3189,9 +2806,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     let mut win_target: bool = __glide_is_windows() != 0;
     if cross {
         let os: string = _target_os(eff_target);
-        if !os.eq("") {
-            win_target = os.eq("windows");
-        }
+        if !os.eq("") { win_target = os.eq("windows"); }
     }
     if win_target {
         // The winsock/dbghelp import libs are appended AFTER the openssl/
@@ -3222,9 +2837,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         if mac_target {
             cmd = cmd.concat(" -Wl,-dead_strip");
         } else {
-            if win_target || cross {
-                cmd = cmd.concat(" -Wl,--gc-sections");
-            }
+            if win_target || cross { cmd = cmd.concat(" -Wl,--gc-sections"); }
         }
         // else: a lib-free host POSIX build — can't tell linux (ld accepts
         // --gc-sections) from macOS (ld rejects it, wants -dead_strip) from
@@ -3252,9 +2865,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
             if needs_h3 {
                 cmd = cmd.concat(" -l:libngtcp2_crypto_ossl.a -l:libngtcp2.a -l:libnghttp3.a");
             }
-            if needs_ssl {
-                cmd = cmd.concat(" -l:libssl.a -l:libcrypto.a");
-            }
+            if needs_ssl { cmd = cmd.concat(" -l:libssl.a -l:libcrypto.a"); }
         } else {
             // OpenSSL 3.5+ build of ngtcp2 (required for h3.glide's
             // `ngtcp2_crypto_ossl_*` syms) usually lives at /usr/local/lib
@@ -3265,12 +2876,8 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
             if needs_ssl && fs_exists("/opt/openssl35/lib/libssl.so") {
                 cmd = cmd.concat(" -I/opt/openssl35/include -L/opt/openssl35/lib -Wl,-rpath,/opt/openssl35/lib");
             }
-            if needs_h3 {
-                cmd = cmd.concat(" -lngtcp2_crypto_ossl -lngtcp2 -lnghttp3");
-            }
-            if needs_ssl {
-                cmd = cmd.concat(" -lssl -lcrypto");
-            }
+            if needs_h3 { cmd = cmd.concat(" -lngtcp2_crypto_ossl -lngtcp2 -lnghttp3"); }
+            if needs_ssl { cmd = cmd.concat(" -lssl -lcrypto"); }
         }
     } else {
         if needs_any_lib && _has_target_sysroot(eff_target) {
@@ -3286,15 +2893,11 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
             // libSystem/crt0, so `-static` dies with `ld: library 'crt0.o'
             // not found`. The sysroot's .a libs still link statically; only
             // libSystem stays dynamic (every Mac has it).
-            if !_target_os(eff_target).eq("macos") {
-                cmd = cmd.concat(" -static");
-            }
+            if !_target_os(eff_target).eq("macos") { cmd = cmd.concat(" -static"); }
             if needs_h3 && has_h3libs {
                 cmd = cmd.concat(" -lngtcp2_crypto_ossl -lngtcp2 -lnghttp3");
             }
-            if needs_ssl {
-                cmd = cmd.concat(" -lssl -lcrypto");
-            }
+            if needs_ssl { cmd = cmd.concat(" -lssl -lcrypto"); }
         } else {
             if cross && _target_os(eff_target).eq("linux") {
                 // Lib-free Linux cross build: still static-link libc so the binary
@@ -3313,15 +2916,11 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         // net::tls when SSL is in play — OpenSSL on MSYS2/mingw has an
         // empty default verify path, so every HTTPS verify falls back
         // to enumerating ROOT/CA via CertOpenSystemStoreW.
-        if needs_ssl {
-            cmd = cmd.concat(" -lcrypt32");
-        }
+        if needs_ssl { cmd = cmd.concat(" -lcrypt32"); }
     }
     // User ldflags go at the very end, after every auto-detected -L/-l (correct
     // one-pass static link order), and BEFORE the Windows quote-wrap below.
-    if !user_ldflags.eq("") {
-        cmd = cmd.concat(" ").concat(user_ldflags);
-    }
+    if !user_ldflags.eq("") { cmd = cmd.concat(" ").concat(user_ldflags); }
     // Capture cc's stdout+stderr to a log so we can re-render its diagnostics
     // as Glide errors. `> "log" 2>&1` parses the same in POSIX sh and cmd.exe;
     // the order matters (stdout to the file, then stderr onto stdout). This is
@@ -3335,14 +2934,10 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     // thing in an extra layer ONLY when the cc binary is itself quoted - the
     // outer wrap conflicts with cmd.exe's parsing when the inner paths are
     // also quoted, so skip it for the common case of an unquoted cc on PATH.
-    if __glide_is_windows() != 0 && cc.starts_with("\"") {
-        cmd = "\"".concat(cmd).concat("\"");
-    }
+    if __glide_is_windows() != 0 && cc.starts_with("\"") { cmd = "\"".concat(cmd).concat("\""); }
     let rc: i32 = __glide_shell(cmd);
     if rc != 0 {
-        if !quiet {
-            spinner_finish(false, "");
-        }
+        if !quiet { spinner_finish(false, ""); }
         // Re-render cc's diagnostics anchored at the Glide source (+ the
         // generated C). If nothing parseable came back (e.g. a linker error),
         // fall back to dumping the raw log so no information is lost.
@@ -3351,9 +2946,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         if shown == 0 {
             println!("compilation failed (cc exit", rc, ")");
             let raw: string = read_file(cc_log);
-            if !raw.eq("") {
-                println!(raw);
-            }
+            if !raw.eq("") { println!(raw); }
         } else {
             println!(col_red().concat("error").concat(col_reset()).concat(": generated C failed to compile (cc exit ").concat(int_to_str(rc)).concat(")"));
         }
@@ -3382,12 +2975,8 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     // tries to load it — silently, before any printf runs. Copy each
     // dependency DLL next to the .exe so it works regardless of the
     // caller's PATH (same approach as Cargo / Go on Windows).
-    if __glide_is_windows() != 0 && !cross {
-        _bundle_runtime_dlls_win(out_path, cc);
-    }
-    if !quiet {
-        spinner_finish(true, "built ".concat(out_path));
-    }
+    if __glide_is_windows() != 0 && !cross { _bundle_runtime_dlls_win(out_path, cc); }
+    if !quiet { spinner_finish(true, "built ".concat(out_path)); }
     if then_run {
         // A bare output name (a.exe / a.out) must be qualified with ./ or
         // .\ to be runnable from CWD. A path that already carries a
@@ -3407,12 +2996,8 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         let mut run_cmd: string = "\"".concat(run_target).concat("\"");
         // Forward `glide run … -- <args>` to the program, before the Windows
         // outer-quote wrap so the args stay inside the wrapped command.
-        if !prog_args.eq("") {
-            run_cmd = run_cmd.concat(" ").concat(prog_args);
-        }
-        if __glide_is_windows() != 0 {
-            run_cmd = "\"".concat(run_cmd).concat("\"");
-        }
+        if !prog_args.eq("") { run_cmd = run_cmd.concat(" ").concat(prog_args); }
+        if __glide_is_windows() != 0 { run_cmd = "\"".concat(run_cmd).concat("\""); }
         return __glide_shell(run_cmd);
     }
     return 0;
@@ -3427,9 +3012,7 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
 // toolchain).
 fn _bundle_runtime_dlls_win(out_path: string, cc: string) {
     let cc_dir: string = _resolve_cc_dir_win(cc);
-    if cc_dir.eq("") {
-        return;
-    }
+    if cc_dir.eq("") { return; }
     let dst_dir: string = parent_dir(out_path);
     let final_dst: string = if dst_dir.eq("") { "." } else { dst_dir };
     // Hard-coded prefixes match every shared lib the stdlib transitively
@@ -3445,14 +3028,10 @@ fn _bundle_runtime_dlls_win(out_path: string, cc: string) {
     prefixes.push("libnghttp2-");
     prefixes.push("libwinpthread-");
     let entries: *Vector<string> = fs_list(cc_dir, ".dll");
-    if entries == null {
-        return;
-    }
+    if entries == null { return; }
     for let i: i32 = 0; i < entries.len(); i++ {
         let name: string = entries.get(i);
-        if name.eq("") {
-            continue;
-        }
+        if name.eq("") { continue; }
         let mut matched: bool = false;
         for let j: i32 = 0; j < prefixes.len(); j++ {
             let p: string = prefixes.get(j);
@@ -3461,18 +3040,14 @@ fn _bundle_runtime_dlls_win(out_path: string, cc: string) {
                 break;
             }
         }
-        if !matched {
-            continue;
-        }
+        if !matched { continue; }
         let src: string = cc_dir.concat("/").concat(name);
         let dst: string = final_dst.concat("/").concat(name);
         // Skip if the target already has an up-to-date copy. We don't
         // checksum — same-name in the binary's dir means a previous
         // build already placed it. Cheap enough to overwrite blindly
         // (a few MB), but skipping keeps repeated builds fast.
-        if __glide_file_exists(dst) {
-            continue;
-        }
+        if __glide_file_exists(dst) { continue; }
         fs_copy_file(src, dst);
     }
 }
@@ -3483,9 +3058,7 @@ fn _bundle_runtime_dlls_win(out_path: string, cc: string) {
 // at the last separator. Returns "" when we can't tell — caller treats
 // that as "skip bundling, the user is on their own".
 fn _resolve_cc_dir_win(cc: string) -> string {
-    if cc.eq("") {
-        return "";
-    }
+    if cc.eq("") { return ""; }
     let raw: string = cc.trim();
     // Absolute / quoted path: take the dirname directly.
     if raw.len() > 1 && (raw.at(0).to_int() == 34 || raw.contains(":/") || raw.contains(":\\")) {
@@ -3511,16 +3084,12 @@ fn _resolve_cc_dir_win(cc: string) -> string {
     }
     let body: string = read_file(tmp);
     fs_remove_file(tmp);
-    if body.eq("") {
-        return "";
-    }
+    if body.eq("") { return ""; }
     // First non-empty line is the highest-priority hit.
     let lines: *Vector<string> = body.split("\n");
     for let i: i32 = 0; i < lines.len(); i++ {
         let line: string = lines.get(i).trim();
-        if !line.eq("") {
-            return parent_dir(line);
-        }
+        if !line.eq("") { return parent_dir(line); }
     }
     return "";
 }
@@ -3546,31 +3115,23 @@ fn _build_freestanding(tmp_c: string, out_path: string, link_script: string, qui
         }
     }
     if cc.eq("") {
-        if !quiet {
-            spinner_finish(false, "");
-        }
+        if !quiet { spinner_finish(false, ""); }
         println!(col_red().concat("error").concat(col_reset()).concat(": freestanding build needs a C compiler that can emit x86_64 ELF."));
         println!("  linux x86_64: any gcc/clang");
         println!("  other hosts:  clang + lld (e.g. `brew install llvm lld` / MSYS2 clang+lld)");
         return 1;
     }
     if link_script.eq("") {
-        if !quiet {
-            spinner_finish(false, "");
-        }
+        if !quiet { spinner_finish(false, ""); }
         println!(col_red().concat("error").concat(col_reset()).concat(": freestanding build needs a linker script — set `linker: \"linker.ld\"` in glide.glide."));
         return 1;
     }
     if !fs_exists(link_script) {
-        if !quiet {
-            spinner_finish(false, "");
-        }
+        if !quiet { spinner_finish(false, ""); }
         println!(col_red().concat("error").concat(col_reset()).concat(": linker script not found: ").concat(link_script));
         return 1;
     }
-    if !quiet {
-        spinner_set("linking freestanding ELF -> ".concat(out_path));
-    }
+    if !quiet { spinner_set("linking freestanding ELF -> ".concat(out_path)); }
     let mut cmd: string = cc;
     if tmp_c.contains(" ") {
         cmd = cmd.concat(" \"").concat(tmp_c).concat("\"");
@@ -3591,9 +3152,7 @@ fn _build_freestanding(tmp_c: string, out_path: string, link_script: string, qui
     // `-fwrapv` matches the hosted path: Glide integers wrap on overflow.
     cmd = cmd.concat(" -O2 -g -w -fwrapv");
     // User cflags after the defaults (so `-O3`/`-march=` override -O2).
-    if !user_cflags.eq("") {
-        cmd = cmd.concat(" ").concat(user_cflags);
-    }
+    if !user_cflags.eq("") { cmd = cmd.concat(" ").concat(user_cflags); }
     if link_script.contains(" ") {
         cmd = cmd.concat(" -Wl,-T,\"").concat(link_script).concat("\"");
     } else {
@@ -3606,9 +3165,7 @@ fn _build_freestanding(tmp_c: string, out_path: string, link_script: string, qui
     cmd = cmd.concat(" -Wl,-e,kmain");
     cmd = cmd.concat(" -Wl,--build-id=none");
     // User ldflags last (override / extend the link), before the Windows wrap.
-    if !user_ldflags.eq("") {
-        cmd = cmd.concat(" ").concat(user_ldflags);
-    }
+    if !user_ldflags.eq("") { cmd = cmd.concat(" ").concat(user_ldflags); }
     // Capture cc's output so freestanding link errors get the same
     // Glide-anchored rendering as the hosted path (see the hosted site for
     // the redirect-before-wrap rationale).
@@ -3616,22 +3173,16 @@ fn _build_freestanding(tmp_c: string, out_path: string, link_script: string, qui
     cmd = cmd.concat(" > \"").concat(cc_log).concat("\" 2>&1");
     // A quoted cc path on Windows needs the whole command re-wrapped for
     // cmd.exe (mirrors the hosted cc path's workaround).
-    if __glide_is_windows() != 0 && cc.starts_with("\"") {
-        cmd = "\"".concat(cmd).concat("\"");
-    }
+    if __glide_is_windows() != 0 && cc.starts_with("\"") { cmd = "\"".concat(cmd).concat("\""); }
     let rc: i32 = __glide_shell(cmd);
     if rc != 0 {
-        if !quiet {
-            spinner_finish(false, "");
-        }
+        if !quiet { spinner_finish(false, ""); }
         let craw: *Vector<CrawSpan> = collect_craw_spans(stmts);
         let shown: i32 = cc_render_log(cc_log, tmp_c, src_path, src_text, craw);
         if shown == 0 {
             println!("freestanding link failed (cc exit", rc, ")");
             let raw: string = read_file(cc_log);
-            if !raw.eq("") {
-                println!(raw);
-            }
+            if !raw.eq("") { println!(raw); }
         } else {
             println!(col_red().concat("error").concat(col_reset()).concat(": generated C failed to compile (cc exit ").concat(int_to_str(rc)).concat(")"));
         }
@@ -3641,9 +3192,7 @@ fn _build_freestanding(tmp_c: string, out_path: string, link_script: string, qui
     }
     fs_remove_file(tmp_c);
     fs_remove_file(cc_log);
-    if !quiet {
-        spinner_finish(true, "built ".concat(out_path));
-    }
+    if !quiet { spinner_finish(true, "built ".concat(out_path)); }
     return 0;
 }
 
@@ -3671,22 +3220,16 @@ fn scan_bench_fns(src: string) -> *Vector<string> {
             }
             body = body.substring(k, body.len());
         }
-        if !body.starts_with(prefix) {
-            continue;
-        }
+        if !body.starts_with(prefix) { continue; }
         let after: string = body.substring(3, body.len());
         let n: i32 = after.len();
         let mut end: i32 = 0;
         while end < n {
             let c: i32 = after.at(end).to_int();
-            if c == 40 || c == 32 || c == 9 {
-                break;
-            }
+            if c == 40 || c == 32 || c == 9 { break; }
             end = end + 1;
         }
-        if end == 0 {
-            continue;
-        }
+        if end == 0 { continue; }
         names.push(after.substring(0, end));
     }
     return names;
@@ -3710,24 +3253,16 @@ fn _test_jobs() -> i32 {
     let env: string = __glide_getenv("GLIDE_TEST_JOBS");
     if !env.eq("") {
         let n: i32 = env.parse_int();
-        if n >= 1 {
-            return n;
-        }
+        if n >= 1 { return n; }
     }
     let cc: !i32 = os_cpu_count();
-    if !cc.is_ok() {
-        return 1;
-    }
-    if cc.unwrap() <= 1 {
-        return 1;
-    }
+    if !cc.is_ok() { return 1; }
+    if cc.unwrap() <= 1 { return 1; }
     // Cap the default: past ~8 concurrent builds the shared scratch dir + the
     // C toolchain contend (more "file in use" retries) for little gain, since
     // the sequential run phase is the floor. Override with GLIDE_TEST_JOBS.
     let mut j: i32 = cc.unwrap() - 1;
-    if j > 8 {
-        j = 8;
-    }
+    if j > 8 { j = 8; }
     return j;
 }
 
@@ -3740,9 +3275,7 @@ fn _test_build_cmd(exe: string, tmp: string, out: string, log: string, fast: boo
     // Test/bench binaries are ephemeral and run on the build machine, so they
     // don't need the default static link — `--dynamic` keeps the link fast.
     let mut bc: string = q.concat(exe).concat(q).concat(" build ").concat(q).concat(tmp).concat(q).concat(" -o ").concat(q).concat(out).concat(q).concat(" --dynamic");
-    if fast {
-        bc = bc.concat(" --cflag=-O0 --cflag=-g0 --cflag=-pipe");
-    }
+    if fast { bc = bc.concat(" --cflag=-O0 --cflag=-g0 --cflag=-pipe"); }
     bc = bc.concat(" > ").concat(q).concat(log).concat(q).concat(" 2>&1");
     return bc;
 }
@@ -3773,9 +3306,7 @@ fn _run_built(out: string) -> i32 {
         }
     }
     let mut rc_cmd: string = q.concat(run_target).concat(q);
-    if __glide_is_windows() != 0 {
-        rc_cmd = q.concat(rc_cmd).concat(q);
-    }
+    if __glide_is_windows() != 0 { rc_cmd = q.concat(rc_cmd).concat(q); }
     return __glide_shell(rc_cmd);
 }
 
@@ -3791,19 +3322,13 @@ fn _isolated_build_run(tmp_path: string, out_path: string, fast: bool) -> i32 {
     // `--cflag` passthrough is last-wins, so these override the default -O2 -g
     // and cut ~1s+ of cc time per file. NOT used for benches (they must be
     // optimized or their numbers are meaningless).
-    if fast {
-        bc = bc.concat(" --cflag=-O0 --cflag=-g0 --cflag=-pipe");
-    }
+    if fast { bc = bc.concat(" --cflag=-O0 --cflag=-g0 --cflag=-pipe"); }
     bc = bc.concat(" > ").concat(q).concat(log).concat(q).concat(" 2>&1");
-    if __glide_is_windows() != 0 {
-        bc = q.concat(bc).concat(q);
-    }
+    if __glide_is_windows() != 0 { bc = q.concat(bc).concat(q); }
     let brc: i32 = __glide_shell(bc);
     if brc != 0 {
         let blog: string = read_file(log);
-        if !blog.eq("") {
-            println!(blog);
-        }
+        if !blog.eq("") { println!(blog); }
         fs_remove_file(log);
         return brc;
     }
@@ -3818,17 +3343,13 @@ fn _isolated_build_run(tmp_path: string, out_path: string, fast: bool) -> i32 {
         }
     }
     let mut rc_cmd: string = q.concat(run_target).concat(q);
-    if __glide_is_windows() != 0 {
-        rc_cmd = q.concat(rc_cmd).concat(q);
-    }
+    if __glide_is_windows() != 0 { rc_cmd = q.concat(rc_cmd).concat(q); }
     return __glide_shell(rc_cmd);
 }
 
 fn run_bench(path: string) -> i32 {
     let mut search_path: string = path;
-    if search_path.eq("") {
-        search_path = ".";
-    }
+    if search_path.eq("") { search_path = "."; }
     let files: *Vector<string> = Vector::new();
     // A directory is the common case (`glide test tests`). Detect it FIRST:
     // read_file() on a directory returns "" on some filesystems but NULL on
@@ -3848,9 +3369,7 @@ fn run_bench(path: string) -> i32 {
         let names: *Vector<string> = raw.split("\n");
         for let i: i32 = 0; i < names.len(); i++ {
             let nm: string = names.get(i);
-            if nm.eq("") {
-                continue;
-            }
+            if nm.eq("") { continue; }
             files.push(search_path.concat("/").concat(nm));
         }
     }
@@ -3859,15 +3378,11 @@ fn run_bench(path: string) -> i32 {
     let scratch: string = _scratch_dir();
     let tmp_path: string = scratch.concat("/__glide_bench_run.glide");
     let mut out_path: string = scratch.concat("/__glide_bench_run.exe");
-    if __glide_is_windows() == 0 {
-        out_path = scratch.concat("/__glide_bench_run");
-    }
+    if __glide_is_windows() == 0 { out_path = scratch.concat("/__glide_bench_run"); }
     for let i: i32 = 0; i < files.len(); i++ {
         let f: string = files.get(i);
         let src: string = read_file(f);
-        if src.eq("") {
-            continue;
-        }
+        if src.eq("") { continue; }
         let bench_fns: *Vector<string> = scan_bench_fns(src);
         if bench_fns.len() == 0 {
             println!("(no bench_* functions in", f, "—  skipping)");
@@ -3889,9 +3404,7 @@ fn run_bench(path: string) -> i32 {
         println!(col_blue().concat("benching").concat(col_reset()), f, "(", bench_fns.len(), "bench(es) )");
         let rc: i32 = _isolated_build_run(tmp_path, out_path, false);
         total_files = total_files + 1;
-        if rc != 0 {
-            failed_files = failed_files + 1;
-        }
+        if rc != 0 { failed_files = failed_files + 1; }
     }
     write_file(tmp_path, "");
     if failed_files > 0 {
@@ -3918,23 +3431,17 @@ fn scan_test_fns(src: string) -> *Vector<string> {
             }
             body = body.substring(k, body.len());
         }
-        if !body.starts_with(prefix) {
-            continue;
-        }
+        if !body.starts_with(prefix) { continue; }
         // Strip the `fn ` and read the identifier up to `(` or whitespace.
         let after: string = body.substring(3, body.len());
         let n: i32 = after.len();
         let mut end: i32 = 0;
         while end < n {
             let c: i32 = after.at(end).to_int();
-            if c == 40 || c == 32 || c == 9 {
-                break;
-            }
+            if c == 40 || c == 32 || c == 9 { break; }
             end = end + 1;
         }
-        if end == 0 {
-            continue;
-        }
+        if end == 0 { continue; }
         names.push(after.substring(0, end));
     }
     return names;
@@ -3946,9 +3453,7 @@ fn scan_test_fns(src: string) -> *Vector<string> {
 // codes; non-zero if any file's run reported failed assertions.
 fn run_test(path: string) -> i32 {
     let mut search_path: string = path;
-    if search_path.eq("") {
-        search_path = ".";
-    }
+    if search_path.eq("") { search_path = "."; }
     // Decide whether `search_path` is a single file or a directory of tests.
     let files: *Vector<string> = Vector::new();
     // A directory is the common case (`glide test tests`). Detect it FIRST:
@@ -3969,9 +3474,7 @@ fn run_test(path: string) -> i32 {
         let names: *Vector<string> = raw.split("\n");
         for let i: i32 = 0; i < names.len(); i++ {
             let nm: string = names.get(i);
-            if nm.eq("") {
-                continue;
-            }
+            if nm.eq("") { continue; }
             files.push(search_path.concat("/").concat(nm));
         }
     }
@@ -3980,9 +3483,7 @@ fn run_test(path: string) -> i32 {
     let jobs: i32 = _test_jobs();
     // Parallel builds need our own path to re-invoke as a child + at least 2
     // jobs; otherwise fall back to the serial path (also the single-file case).
-    if exe.eq("") || jobs <= 1 {
-        return _run_test_serial(files, scratch);
-    }
+    if exe.eq("") || jobs <= 1 { return _run_test_serial(files, scratch); }
     return _run_test_parallel(files, scratch, exe, jobs);
 }
 
@@ -4020,15 +3521,11 @@ fn _run_test_serial(files: *Vector<string>, scratch: string) -> i32 {
     let stem: string = scratch.concat("/__glide_test_run_").concat(int_to_str(__glide_pid()));
     let tmp_path: string = stem.concat(".glide");
     let mut out_path: string = stem.concat(".exe");
-    if __glide_is_windows() == 0 {
-        out_path = stem;
-    }
+    if __glide_is_windows() == 0 { out_path = stem; }
     for let i: i32 = 0; i < files.len(); i++ {
         let f: string = files.get(i);
         let src: string = read_file(f);
-        if src.eq("") {
-            continue;
-        }
+        if src.eq("") { continue; }
         let test_fns: *Vector<string> = scan_test_fns(src);
         if test_fns.len() == 0 {
             println!("(no test_* functions in", f, "—  skipping)");
@@ -4042,9 +3539,7 @@ fn _run_test_serial(files: *Vector<string>, scratch: string) -> i32 {
         println!(col_blue().concat("running").concat(col_reset()), f, "(", test_fns.len(), "tests )");
         let rc: i32 = _isolated_build_run(tmp_path, out_path, true);
         total_files = total_files + 1;
-        if rc != 0 {
-            failed_files = failed_files + 1;
-        }
+        if rc != 0 { failed_files = failed_files + 1; }
     }
     write_file(tmp_path, "");
     return _test_summary_print(total_files, failed_files);
@@ -4063,9 +3558,7 @@ fn _run_test_parallel(files: *Vector<string>, scratch: string, exe: string, jobs
     for let i: i32 = 0; i < files.len(); i++ {
         let f: string = files.get(i);
         let src: string = read_file(f);
-        if src.eq("") {
-            continue;
-        }
+        if src.eq("") { continue; }
         let test_fns: *Vector<string> = scan_test_fns(src);
         if test_fns.len() == 0 {
             println!("(no test_* functions in", f, "—  skipping)");
@@ -4076,9 +3569,7 @@ fn _run_test_parallel(files: *Vector<string>, scratch: string, exe: string, jobs
         let stem: string = scratch.concat("/__glide_test_run_").concat(int_to_str(idx));
         let tmp: string = stem.concat(".glide");
         let mut out: string = stem.concat(".exe");
-        if __glide_is_windows() == 0 {
-            out = stem;
-        }
+        if __glide_is_windows() == 0 { out = stem; }
         if !write_file(tmp, synth) {
             println!("could not write temp test file");
             return 1;
@@ -4111,9 +3602,7 @@ fn _run_test_parallel(files: *Vector<string>, scratch: string, exe: string, jobs
         win_child.push(ch.unwrap());
         win_idx.push(i);
         let mut cap: i32 = jobs;
-        if i == 0 {
-            cap = 1;
-        }
+        if i == 0 { cap = 1; }
         if win_child.len() >= cap {
             let c0: Child = win_child.get(0);
             let idx0: i32 = win_idx.get(0);
@@ -4151,14 +3640,10 @@ fn _run_test_parallel(files: *Vector<string>, scratch: string, exe: string, jobs
             // the shared scratch dir under concurrency. Retry serially (this
             // also runs it); a genuine build error surfaces there.
             let rc: i32 = _isolated_build_run(tmps.get(i), outs.get(i), true);
-            if rc != 0 {
-                failed = failed + 1;
-            }
+            if rc != 0 { failed = failed + 1; }
         } else {
             let rrc: i32 = _run_built(outs.get(i));
-            if rrc != 0 {
-                failed = failed + 1;
-            }
+            if rrc != 0 { failed = failed + 1; }
         }
         fs_remove_file(tmps.get(i));
         fs_remove_file(logs.get(i));
@@ -4175,18 +3660,12 @@ fn _run_test_parallel(files: *Vector<string>, scratch: string, exe: string, jobs
 fn _golden_build_and_run(src: string, out_txt: string) -> i32 {
     let scratch: string = _scratch_dir();
     let mut exe: string = scratch.concat("/__glide_golden.exe");
-    if __glide_is_windows() == 0 {
-        exe = scratch.concat("/__glide_golden");
-    }
+    if __glide_is_windows() == 0 { exe = scratch.concat("/__glide_golden"); }
     let rc_build: i32 = run_build_q(src, exe, "", false, true, false, false, false, "", "", "");
-    if rc_build != 0 {
-        return -1;
-    }
+    if rc_build != 0 { return -1; }
     let cmd: string = "\"".concat(exe).concat("\" > \"").concat(out_txt).concat("\"");
     let mut wrapped: string = cmd;
-    if __glide_is_windows() != 0 {
-        wrapped = "\"".concat(cmd).concat("\"");
-    }
+    if __glide_is_windows() != 0 { wrapped = "\"".concat(cmd).concat("\""); }
     return __glide_shell(wrapped);
 }
 
@@ -4198,9 +3677,7 @@ fn _golden_normalize(s: string) -> string {
     let mut out: string = "";
     for let i: i32 = 0; i < n; i++ {
         let c: i32 = s.at(i).to_int();
-        if c == 13 {
-            continue;
-        }
+        if c == 13 { continue; }
         out = out.concat(s.substring(i, i + 1));
     }
     return out;
@@ -4227,21 +3704,13 @@ fn _golden_show_diff(actual: string, expected: string) {
         }
     }
     let mut win_a_lo: i32 = 0;
-    if i > 30 {
-        win_a_lo = i - 30;
-    }
+    if i > 30 { win_a_lo = i - 30; }
     let mut win_a_hi: i32 = na;
-    if i + 30 < na {
-        win_a_hi = i + 30;
-    }
+    if i + 30 < na { win_a_hi = i + 30; }
     let mut win_e_lo: i32 = 0;
-    if i > 30 {
-        win_e_lo = i - 30;
-    }
+    if i > 30 { win_e_lo = i - 30; }
     let mut win_e_hi: i32 = ne;
-    if i + 30 < ne {
-        win_e_hi = i + 30;
-    }
+    if i + 30 < ne { win_e_hi = i + 30; }
     println!("        first diff at line", line, "col", col);
     println!("        actual:   ", actual.substring(win_a_lo, win_a_hi));
     println!("        expected: ", expected.substring(win_e_lo, win_e_hi));
@@ -4253,9 +3722,7 @@ fn _golden_show_diff(actual: string, expected: string) {
 // (they'd be examples that aren't yet pinned).
 fn run_golden(dir: string) -> i32 {
     let mut search_dir: string = dir;
-    if search_dir.eq("") {
-        search_dir = ".";
-    }
+    if search_dir.eq("") { search_dir = "."; }
     let raw: string = __glide_list_dir(search_dir, ".glide");
     if raw.eq("") {
         println!("no *.glide files under:", search_dir);
@@ -4268,13 +3735,9 @@ fn run_golden(dir: string) -> i32 {
     let mut skipped: i32 = 0;
     for let i: i32 = 0; i < names.len(); i++ {
         let nm: string = names.get(i);
-        if nm.eq("") {
-            continue;
-        }
+        if nm.eq("") { continue; }
         // Skip helper test files — those are L1, not goldens.
-        if nm.len() >= 12 && nm.substring(nm.len() - 12, nm.len()).eq("_test.glide") {
-            continue;
-        }
+        if nm.len() >= 12 && nm.substring(nm.len() - 12, nm.len()).eq("_test.glide") { continue; }
         let src: string = search_dir.concat("/").concat(nm);
         // Build expected path: strip ".glide", append ".expected".
         let expected_path: string = search_dir.concat("/").concat(nm.substring(0, nm.len() - 6)).concat(".expected");
@@ -4334,24 +3797,16 @@ fn main() -> i32 {
     let flag_len: i32 = flag_prefix.len();
     for let i: i32 = 0; i < argc; i++ {
         let a: string = args_at(i);
-        if a.len() <= flag_len {
-            continue;
-        }
-        if !a.substring(0, flag_len).eq(flag_prefix) {
-            continue;
-        }
+        if a.len() <= flag_len { continue; }
+        if !a.substring(0, flag_len).eq(flag_prefix) { continue; }
         let val: string = a.substring(flag_len, a.len());
         let toks: *Vector<string> = val.split(",");
         for let j: i32 = 0; j < toks.len(); j++ {
             let tk: string = toks.get(j).trim();
-            if !tk.eq("") {
-                deny.push(tk);
-            }
+            if !tk.eq("") { deny.push(tk); }
         }
     }
-    if deny.len() > 0 {
-        set_deny_codes(deny);
-    }
+    if deny.len() > 0 { set_deny_codes(deny); }
     let cmd: string = args_at(1);
     // `--version` / `-v` / `-V` / `--v` / `version` — print and exit.
     if cmd.eq("--version") || cmd.eq("--v") || cmd.eq("-v") || cmd.eq("-V") || cmd.eq("version") {
@@ -4393,9 +3848,7 @@ fn main() -> i32 {
     // and download every missing git dep. Default <path> = ".".
     if cmd.eq("fetch") {
         let mut start: string = ".";
-        if argc >= 3 {
-            start = args_at(2);
-        }
+        if argc >= 3 { start = args_at(2); }
         return run_fetch(start);
     }
     // `new <name> [--lib] [--ai] [--no-vcs]` — scaffold a fresh
@@ -4427,9 +3880,7 @@ fn main() -> i32 {
                 init_vcs = false;
                 continue;
             }
-            if new_name.eq("") {
-                new_name = a;
-            }
+            if new_name.eq("") { new_name = a; }
         }
         if new_name.eq("") {
             println!("usage: glide new <name> [--lib] [--ai] [--no-vcs]");
@@ -4440,9 +3891,7 @@ fn main() -> i32 {
     // `add` — write a new entry into the nearest glide.glide:
     //   glide add --local <name> <path>       path dep
     //   glide add <name> <git-url> <rev>      git dep
-    if cmd.eq("add") {
-        return run_add(argc);
-    }
+    if cmd.eq("add") { return run_add(argc); }
     // `remove <name>` — drop the matching dep entry.
     if cmd.eq("remove") {
         if argc < 3 {
@@ -4452,13 +3901,9 @@ fn main() -> i32 {
         return run_remove(args_at(2));
     }
     // `update` — wipe glide.lock + each git dep's cache dir, then refetch.
-    if cmd.eq("update") {
-        return run_update();
-    }
+    if cmd.eq("update") { return run_update(); }
     // `tree` — print the manifest's dep graph (direct + transitive).
-    if cmd.eq("tree") {
-        return run_tree();
-    }
+    if cmd.eq("tree") { return run_tree(); }
     // `info <name>` — metadata for a declared dep.
     if cmd.eq("info") {
         if argc < 3 {
@@ -4482,9 +3927,7 @@ fn main() -> i32 {
     }
     // `clean` — drop the per-project build/ (incl. build/deps/) + glide.lock. Global
     // cache (~/.glide/cache) is left alone since other projects share it.
-    if cmd.eq("clean") {
-        return run_clean();
-    }
+    if cmd.eq("clean") { return run_clean(); }
     // `fix [file]` — apply mechanical auto-fixes for the lints that
     // ship a known repair. Today: prefix `unused-{var,param,fn}` with
     // `_`. Reads each file, splices in the underscores at the
@@ -4494,9 +3937,7 @@ fn main() -> i32 {
         let mut target: string = "";
         for let i: i32 = 2; i < argc; i++ {
             let a: string = args_at(i);
-            if a.len() > 0 && a.at(0).to_int() == 45 {
-                continue;
-            }
+            if a.len() > 0 && a.at(0).to_int() == 45 { continue; }
             target = a;
             break;
         }
@@ -4524,9 +3965,7 @@ fn main() -> i32 {
         let mut target: string = "";
         for let i: i32 = 2; i < argc; i++ {
             let a: string = args_at(i);
-            if a.len() > 0 && a.at(0).to_int() == 45 {
-                continue;
-            } // skip flags
+            if a.len() > 0 && a.at(0).to_int() == 45 { continue; } // skip flags
             target = a;
             break;
         }
@@ -4551,26 +3990,18 @@ fn main() -> i32 {
     // + static libs that the target platform needs for openssl / zlib,
     // so `glide build --target=<triple>` produces a self-contained
     // binary instead of failing at link time.
-    if cmd.eq("target") {
-        return run_target(argc);
-    }
+    if cmd.eq("target") { return run_target(argc); }
     // `install <path>` / `install <git-url> <rev>` — build the target
     // and copy its binary into ~/.glide/bin.
-    if cmd.eq("install") {
-        return run_install(argc);
-    }
+    if cmd.eq("install") { return run_install(argc); }
     // `upgrade [--check]` — self-update the toolchain to the latest release.
-    if cmd.eq("upgrade") {
-        return run_upgrade(argc);
-    }
+    if cmd.eq("upgrade") { return run_upgrade(argc); }
     // `bench [path]` — run *_bench.glide microbenchmarks. Each
     // `bench_*` fn gets auto-tuned iterations until ≥500ms then
     // prints ns/op.
     if cmd.eq("bench") {
         let mut bpath: string = "";
-        if argc >= 3 {
-            bpath = args_at(2);
-        }
+        if argc >= 3 { bpath = args_at(2); }
         return run_bench(bpath);
     }
     // `doc [--open] [--serve[=<port>]]` — emit static HTML for every
@@ -4604,9 +4035,7 @@ fn main() -> i32 {
             if a.len() > 8 && a.substring(0, 8).eq("--serve=") {
                 let n: string = a.substring(8, a.len());
                 let parsed: i32 = _parse_port(n);
-                if parsed > 0 {
-                    serve_port = parsed;
-                }
+                if parsed > 0 { serve_port = parsed; }
                 continue;
             }
         }
@@ -4626,13 +4055,9 @@ fn main() -> i32 {
                 golden = true;
                 continue;
             }
-            if tpath.eq("") {
-                tpath = a;
-            }
+            if tpath.eq("") { tpath = a; }
         }
-        if golden {
-            return run_golden(tpath);
-        }
+        if golden { return run_golden(tpath); }
         return run_test(tpath);
     }
     // Default action when the user types `glide <file>` with no
@@ -4680,9 +4105,7 @@ fn main() -> i32 {
             arg_limit = i;
             for let j: i32 = i + 1; j < argc; j++ {
                 let mut pa: string = args_at(j);
-                if pa.contains(" ") {
-                    pa = "\"".concat(pa).concat("\"");
-                }
+                if pa.contains(" ") { pa = "\"".concat(pa).concat("\""); }
                 prog_args = _append_flag(prog_args, pa);
             }
             break;
@@ -4693,9 +4116,7 @@ fn main() -> i32 {
     // starts with `-`; `-o <out>` swallows its value too.
     while src_arg_idx < arg_limit {
         let a: string = args_at(src_arg_idx);
-        if a.len() == 0 || a.at(0).to_int() != 45 {
-            break;
-        }
+        if a.len() == 0 || a.at(0).to_int() != 45 { break; }
         if a.eq("-o") {
             src_arg_idx = src_arg_idx + 2;
             continue;
@@ -4790,39 +4211,19 @@ fn main() -> i32 {
     // binary) and the source path itself; the subcommand and other positionals
     // match no flag check, so scanning them is harmless.
     for let i: i32 = 1; i < arg_limit; i++ {
-        if i == src_arg_idx {
-            continue;
-        }
+        if i == src_arg_idx { continue; }
         let a: string = args_at(i);
-        if a.eq("-o") && i + 1 < argc {
-            out_path = args_at(i + 1);
-        }
-        if a.eq("--write") {
-            write_in_place = true;
-        }
-        if a.eq("--release") {
-            release = true;
-        }
-        if a.eq("--tiny") {
-            tiny = true;
-        }
-        if a.eq("--no-std") || a.eq("--freestanding") {
-            no_std = true;
-        }
-        if a.eq("--lto") {
-            want_lto = true;
-        }
-        if a.eq("--static") {
-            want_static = true;
-        }
-        if a.eq("--dynamic") {
-            __glide_set_dynamic(1);
-        }
+        if a.eq("-o") && i + 1 < argc { out_path = args_at(i + 1); }
+        if a.eq("--write") { write_in_place = true; }
+        if a.eq("--release") { release = true; }
+        if a.eq("--tiny") { tiny = true; }
+        if a.eq("--no-std") || a.eq("--freestanding") { no_std = true; }
+        if a.eq("--lto") { want_lto = true; }
+        if a.eq("--static") { want_static = true; }
+        if a.eq("--dynamic") { __glide_set_dynamic(1); }
         if a.len() > 9 {
             let prefix: string = a.substring(0, 9);
-            if prefix.eq("--target=") {
-                target = a.substring(9, a.len());
-            }
+            if prefix.eq("--target=") { target = a.substring(9, a.len()); }
             if prefix.eq("--ldflag=") {
                 cli_ldflags = _append_flag(cli_ldflags, a.substring(9, a.len()));
             }
@@ -4832,30 +4233,18 @@ fn main() -> i32 {
             if p8.eq("--cflag=") {
                 raw_cli_cflags = _append_flag(raw_cli_cflags, a.substring(8, a.len()));
             }
-            if p8.eq("--march=") {
-                march_val = a.substring(8, a.len());
-            }
+            if p8.eq("--march=") { march_val = a.substring(8, a.len()); }
         }
         if a.len() > 6 {
-            if a.substring(0, 6).eq("--opt=") {
-                opt_level = a.substring(6, a.len());
-            }
+            if a.substring(0, 6).eq("--opt=") { opt_level = a.substring(6, a.len()); }
         }
     }
     // Expand the first-class shortcuts into cflags, then the raw --cflag values
     // LAST so an explicit `--cflag=-O3` wins over `--opt=2` (cc is last-wins).
-    if !opt_level.eq("") {
-        cli_cflags = _append_flag(cli_cflags, "-O".concat(opt_level));
-    }
-    if want_lto {
-        cli_cflags = _append_flag(cli_cflags, "-flto");
-    }
-    if want_static {
-        cli_cflags = _append_flag(cli_cflags, "-static");
-    }
-    if !march_val.eq("") {
-        cli_cflags = _append_flag(cli_cflags, "-march=".concat(march_val));
-    }
+    if !opt_level.eq("") { cli_cflags = _append_flag(cli_cflags, "-O".concat(opt_level)); }
+    if want_lto { cli_cflags = _append_flag(cli_cflags, "-flto"); }
+    if want_static { cli_cflags = _append_flag(cli_cflags, "-static"); }
+    if !march_val.eq("") { cli_cflags = _append_flag(cli_cflags, "-march=".concat(march_val)); }
     cli_cflags = _append_flag(cli_cflags, raw_cli_cflags);
     // No `--target=` on the command line: fall back to the manifest's
     // default `target`. Build-only — `glide run` always targets the host
@@ -4915,9 +4304,7 @@ fn main() -> i32 {
     // emit / check / fallback
     let stmts: *Vector<Stmt> = Vector::new();
     let pdiags: *Vector<ParseDiag> = Vector::new();
-    if !parse_program_into(stmts, src_path, pdiags, false) {
-        return 1;
-    }
+    if !parse_program_into(stmts, src_path, pdiags, false) { return 1; }
     if mode == MODE_CHECK {
         apply_lint_for(parent_dir(src_path));
         let t: *Typer = Typer::new();
@@ -4942,35 +4329,23 @@ fn main() -> i32 {
         let json: bool = _wants_json(argc);
         let mut want_all: bool = false;
         for let k: i32 = 0; k < argc; k++ {
-            if args_at(k).eq("--all") {
-                want_all = true;
-            }
+            if args_at(k).eq("--all") { want_all = true; }
         }
         for let i: i32 = 0; i < t.diagnostics.len(); i++ {
             let d: DiagEntry = t.diagnostics.get(i);
             let mut path: string = d.origin;
-            if path.eq("") {
-                path = src_path;
-            }
-            if !want_all && !path.eq(src_path) {
-                continue;
-            }
-            if d.severity == 2 && _project_allow_drop(d.code) {
-                continue;
-            }
+            if path.eq("") { path = src_path; }
+            if !want_all && !path.eq(src_path) { continue; }
+            if d.severity == 2 && _project_allow_drop(d.code) { continue; }
             let promoted: bool = d.severity == 2 && _is_lint_promoted(d.code);
             if json {
                 println!(_diag_to_jsonl(&d, src_path));
             } else {
                 let mut snippet: string = src_text;
-                if !path.eq(src_path) {
-                    snippet = read_file(path);
-                }
+                if !path.eq(src_path) { snippet = read_file(path); }
                 print_pretty_diag(d, snippet, path);
             }
-            if d.severity == 1 || promoted {
-                user_errors = user_errors + 1;
-            }
+            if d.severity == 1 || promoted { user_errors = user_errors + 1; }
         }
         let mut check_exit: i32 = 0;
         if user_errors > 0 {
@@ -4983,9 +4358,7 @@ fn main() -> i32 {
             }
             check_exit = 1;
         } else {
-            if !json {
-                println!(col_blue().concat("ok").concat(col_reset()));
-            }
+            if !json { println!(col_blue().concat("ok").concat(col_reset())); }
         }
         t.free();
         return check_exit;

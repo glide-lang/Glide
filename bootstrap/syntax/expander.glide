@@ -87,28 +87,18 @@ pub fn expand_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
     let mut has_fn_ast: bool = false;
     for let i: i32 = 0; i < cleaned.len(); i++ {
         let s: Stmt = cleaned.get(i);
-        if s.kind != ST_FN || s.attrs == null {
-            continue;
-        }
+        if s.kind != ST_FN || s.attrs == null { continue; }
         for let j: i32 = 0; j < s.attrs.len(); j++ {
             let a: Attr = s.attrs.get(j);
             let kind: i32 = _proc_kind_for(a.name);
-            if kind < 0 {
-                continue;
-            }
+            if kind < 0 { continue; }
             // Only function-like macros are dispatched by `name!(…)`; an
             // attr/derive sharing the name (e.g. `@proc_attr(trace)` vs the
             // `trace!` macro) must NOT overwrite the fn entry here.
-            if kind != PMK_FN_AST && kind != PMK_FN_STR && kind != PMK_FN_EXPR {
-                continue;
-            }
-            if a.args == null || a.args.len() == 0 {
-                continue;
-            }
+            if kind != PMK_FN_AST && kind != PMK_FN_STR && kind != PMK_FN_EXPR { continue; }
+            if a.args == null || a.args.len() == 0 { continue; }
             let ne: Expr = a.args.get(0);
-            if ne.kind != EX_IDENT {
-                continue;
-            }
+            if ne.kind != EX_IDENT { continue; }
             let pmdef: ProcMacroDef = ProcMacroDef { kind: kind, fn_stmt: s };
             proc_registry.insert(ne.str_val, pmdef);
             // Also under `<module>::name` / `<leaf>::name` so a qualified
@@ -131,9 +121,7 @@ pub fn expand_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
             }
             // Both AST and EXPR fn-macros run in the interpreter at expand
             // time, so either one requires building the interp.
-            if kind == PMK_FN_AST || kind == PMK_FN_EXPR {
-                has_fn_ast = true;
-            }
+            if kind == PMK_FN_AST || kind == PMK_FN_EXPR { has_fn_ast = true; }
         }
     }
     // File -> imported modules, for collision-aware bare resolution. Keyed
@@ -141,13 +129,9 @@ pub fn expand_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
     let file_imports: *HashMap<bool> = HashMap::new();
     for let i: i32 = 0; i < cleaned.len(); i++ {
         let s: Stmt = cleaned.get(i);
-        if s.kind != ST_IMPORT || s.origin == null {
-            continue;
-        }
+        if s.kind != ST_IMPORT || s.origin == null { continue; }
         let leaf: string = _import_leaf(s.import_path);
-        if leaf.eq("") {
-            continue;
-        }
+        if leaf.eq("") { continue; }
         file_imports.insert(s.origin.concat("\n").concat(leaf), true);
     }
     let mut fn_ast_interp: *Interp = null;
@@ -197,55 +181,36 @@ pub fn rewrite_location_macros(program: *Vector<Stmt>) {
 }
 
 fn _rewrite_loc_stmt(s: *Stmt, file: string, in_fn: string) {
-    if s == null {
-        return;
-    }
+    if s == null { return; }
     let mut fn_name: string = in_fn;
-    if s.kind == ST_FN {
-        fn_name = s.name;
-    }
+    if s.kind == ST_FN { fn_name = s.name; }
     if s.kind == ST_IMPL && s.impl_methods != null {
         _rewrite_loc_block(s.impl_methods, file, in_fn);
         return;
     }
     // `assert!(cond[, msg]);` is a statement: rewrite it in place to
     // `if cond { } else { __glide_panic(msg, file, line); }`.
-    if s.kind == ST_EXPR && s.expr_value != null && s.expr_value.kind == EX_MACRO && s.expr_value.macro_recv == null && s.expr_value.str_val != null && s.expr_value.str_val.eq("assert") {
+    if s.kind == ST_EXPR && s.expr_value != null && s.expr_value.kind == EX_MACRO
+        && s.expr_value.macro_recv == null
+        && s.expr_value.str_val != null
+        && s.expr_value.str_val.eq("assert") {
         _lower_assert_stmt(s, file);
         return;
     }
-    if s.let_value != null {
-        _rewrite_loc_expr(s.let_value, file, fn_name);
-    }
-    if s.expr_value != null {
-        _rewrite_loc_expr(s.expr_value, file, fn_name);
-    }
-    if s.cond != null {
-        _rewrite_loc_expr(s.cond, file, fn_name);
-    }
-    if s.fn_body != null {
-        _rewrite_loc_block(s.fn_body, file, fn_name);
-    }
-    if s.then_body != null {
-        _rewrite_loc_block(s.then_body, file, fn_name);
-    }
-    if s.else_body != null {
-        _rewrite_loc_block(s.else_body, file, fn_name);
-    }
-    if s.for_init != null {
-        _rewrite_loc_stmt(s.for_init, file, fn_name);
-    }
+    if s.let_value != null { _rewrite_loc_expr(s.let_value, file, fn_name); }
+    if s.expr_value != null { _rewrite_loc_expr(s.expr_value, file, fn_name); }
+    if s.cond != null { _rewrite_loc_expr(s.cond, file, fn_name); }
+    if s.fn_body != null { _rewrite_loc_block(s.fn_body, file, fn_name); }
+    if s.then_body != null { _rewrite_loc_block(s.then_body, file, fn_name); }
+    if s.else_body != null { _rewrite_loc_block(s.else_body, file, fn_name); }
+    if s.for_init != null { _rewrite_loc_stmt(s.for_init, file, fn_name); }
     // `match` arms: the scrutinee and every arm body carry location macros
     // too — without this `println!(line!(), …)` inside an arm printed (nil).
-    if s.scrutinee != null {
-        _rewrite_loc_expr(s.scrutinee, file, fn_name);
-    }
+    if s.scrutinee != null { _rewrite_loc_expr(s.scrutinee, file, fn_name); }
     if s.arms != null {
         for let ai: i32 = 0; ai < s.arms.len(); ai++ {
             let arm: MatchArm = s.arms.get(ai);
-            if arm.body != null {
-                _rewrite_loc_block(arm.body, file, fn_name);
-            }
+            if arm.body != null { _rewrite_loc_block(arm.body, file, fn_name); }
         }
     }
 }
@@ -259,15 +224,11 @@ fn _rewrite_loc_block(stmts: *Vector<Stmt>, file: string, in_fn: string) {
 }
 
 fn _rewrite_loc_expr(e: *Expr, file: string, in_fn: string) {
-    if e == null {
-        return;
-    }
+    if e == null { return; }
     if e.match_arms != null {
         for let ai: i32 = 0; ai < e.match_arms.len(); ai++ {
             let arm: MatchArm = e.match_arms.get(ai);
-            if arm.body != null {
-                _rewrite_loc_block(arm.body, file, in_fn);
-            }
+            if arm.body != null { _rewrite_loc_block(arm.body, file, in_fn); }
         }
     }
     if e.kind == EX_MACRO && _is_location_macro_call(e) {
@@ -282,18 +243,13 @@ fn _rewrite_loc_expr(e: *Expr, file: string, in_fn: string) {
     }
     // dbg!(x): stash the escaped `file:line` in macro_owner for codegen to
     // print; the value + type stay in args[0]. Fall through to walk the arg.
-    if e.kind == EX_MACRO && e.macro_recv == null && e.str_val != null && e.str_val.eq("dbg") && (e.macro_owner == null || e.macro_owner.eq("")) {
+    if e.kind == EX_MACRO && e.macro_recv == null && e.str_val != null && e.str_val.eq("dbg")
+        && (e.macro_owner == null || e.macro_owner.eq("")) {
         e.macro_owner = _esc_str(file).concat(":").concat(e.line.to_string());
     }
-    if e.lhs != null {
-        _rewrite_loc_expr(e.lhs, file, in_fn);
-    }
-    if e.rhs != null {
-        _rewrite_loc_expr(e.rhs, file, in_fn);
-    }
-    if e.operand != null {
-        _rewrite_loc_expr(e.operand, file, in_fn);
-    }
+    if e.lhs != null { _rewrite_loc_expr(e.lhs, file, in_fn); }
+    if e.rhs != null { _rewrite_loc_expr(e.rhs, file, in_fn); }
+    if e.operand != null { _rewrite_loc_expr(e.operand, file, in_fn); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let mut a: Expr = e.args.get(i);
@@ -301,25 +257,15 @@ fn _rewrite_loc_expr(e: *Expr, file: string, in_fn: string) {
             e.args.set(i, a);
         }
     }
-    if e.fn_expr_body != null {
-        _rewrite_loc_block(e.fn_expr_body, file, in_fn);
-    }
+    if e.fn_expr_body != null { _rewrite_loc_block(e.fn_expr_body, file, in_fn); }
 }
 
 fn _is_location_macro_call(e: *Expr) -> bool {
-    if e.macro_recv != null {
-        return false;
-    }
-    if e.macro_owner != null && !e.macro_owner.eq("") {
-        return false;
-    }
-    if e.args != null && e.args.len() != 0 {
-        return false;
-    }
+    if e.macro_recv != null { return false; }
+    if e.macro_owner != null && !e.macro_owner.eq("") { return false; }
+    if e.args != null && e.args.len() != 0 { return false; }
     let n: string = e.str_val;
-    if n.eq("file") || n.eq("line") || n.eq("column") || n.eq("function") {
-        return true;
-    }
+    if n.eq("file") || n.eq("line") || n.eq("column") || n.eq("function") { return true; }
     return false;
 }
 
@@ -359,9 +305,7 @@ pub fn rewrite_pkg_macros(program: *Vector<Stmt>) {
     // codegen would emit as garbage).
     let root: string = find_manifest_root(".");
     let mut m: *Manifest = null;
-    if !root.eq("") {
-        m = read_manifest(root);
-    }
+    if !root.eq("") { m = read_manifest(root); }
     for let i: i32 = 0; i < program.len(); i++ {
         let mut s: Stmt = program.get(i);
         _rewrite_pkg_stmt(&s, m);
@@ -370,43 +314,23 @@ pub fn rewrite_pkg_macros(program: *Vector<Stmt>) {
 }
 
 fn _rewrite_pkg_stmt(s: *Stmt, m: *Manifest) {
-    if s == null {
-        return;
-    }
+    if s == null { return; }
     if s.kind == ST_IMPL && s.impl_methods != null {
         _rewrite_pkg_block(s.impl_methods, m);
         return;
     }
-    if s.let_value != null {
-        _rewrite_pkg_expr(s.let_value, m);
-    }
-    if s.expr_value != null {
-        _rewrite_pkg_expr(s.expr_value, m);
-    }
-    if s.cond != null {
-        _rewrite_pkg_expr(s.cond, m);
-    }
-    if s.fn_body != null {
-        _rewrite_pkg_block(s.fn_body, m);
-    }
-    if s.then_body != null {
-        _rewrite_pkg_block(s.then_body, m);
-    }
-    if s.else_body != null {
-        _rewrite_pkg_block(s.else_body, m);
-    }
-    if s.for_init != null {
-        _rewrite_pkg_stmt(s.for_init, m);
-    }
-    if s.scrutinee != null {
-        _rewrite_pkg_expr(s.scrutinee, m);
-    }
+    if s.let_value != null { _rewrite_pkg_expr(s.let_value, m); }
+    if s.expr_value != null { _rewrite_pkg_expr(s.expr_value, m); }
+    if s.cond != null { _rewrite_pkg_expr(s.cond, m); }
+    if s.fn_body != null { _rewrite_pkg_block(s.fn_body, m); }
+    if s.then_body != null { _rewrite_pkg_block(s.then_body, m); }
+    if s.else_body != null { _rewrite_pkg_block(s.else_body, m); }
+    if s.for_init != null { _rewrite_pkg_stmt(s.for_init, m); }
+    if s.scrutinee != null { _rewrite_pkg_expr(s.scrutinee, m); }
     if s.arms != null {
         for let ai: i32 = 0; ai < s.arms.len(); ai++ {
             let arm: MatchArm = s.arms.get(ai);
-            if arm.body != null {
-                _rewrite_pkg_block(arm.body, m);
-            }
+            if arm.body != null { _rewrite_pkg_block(arm.body, m); }
         }
     }
 }
@@ -423,15 +347,13 @@ fn _rewrite_pkg_expr(e: *Expr, m: *Manifest) {
     if e != null && e.match_arms != null {
         for let ai: i32 = 0; ai < e.match_arms.len(); ai++ {
             let arm: MatchArm = e.match_arms.get(ai);
-            if arm.body != null {
-                _rewrite_pkg_block(arm.body, m);
-            }
+            if arm.body != null { _rewrite_pkg_block(arm.body, m); }
         }
     }
-    if e == null {
-        return;
-    }
-    if e.kind == EX_MACRO && e.str_val != null && e.str_val.eq("pkg") && e.macro_recv == null && e.args != null && e.args.len() == 1 {
+    if e == null { return; }
+    if e.kind == EX_MACRO && e.str_val != null && e.str_val.eq("pkg") && e.macro_recv == null
+        && e.args != null
+        && e.args.len() == 1 {
         let a: Expr = e.args.get(0);
         if a.kind == EX_STRING {
             if !_pkg_field_known(a.str_val) {
@@ -445,7 +367,9 @@ fn _rewrite_pkg_expr(e: *Expr, m: *Manifest) {
     }
     // `cfg!("windows")` → the `__glide_cfg_windows` flag (a compile-time bool
     // the C preprocessor decides). Unknown condition → false + a diagnostic.
-    if e.kind == EX_MACRO && e.str_val != null && e.str_val.eq("cfg") && e.macro_recv == null && e.args != null && e.args.len() == 1 {
+    if e.kind == EX_MACRO && e.str_val != null && e.str_val.eq("cfg") && e.macro_recv == null
+        && e.args != null
+        && e.args.len() == 1 {
         let a: Expr = e.args.get(0);
         if a.kind == EX_STRING {
             if _cfg_cond_known(a.str_val) {
@@ -464,7 +388,9 @@ fn _rewrite_pkg_expr(e: *Expr, m: *Manifest) {
     // `env!("VAR")` → the build-time value of the environment variable as a
     // string literal (empty when unset). Raw getenv output, so escape it for
     // verbatim emission (a path may carry `\`, etc.).
-    if e.kind == EX_MACRO && e.str_val != null && e.str_val.eq("env") && e.macro_recv == null && e.args != null && e.args.len() == 1 {
+    if e.kind == EX_MACRO && e.str_val != null && e.str_val.eq("env") && e.macro_recv == null
+        && e.args != null
+        && e.args.len() == 1 {
         let a: Expr = e.args.get(0);
         if a.kind == EX_STRING {
             e.str_val = _esc_str(__glide_getenv(a.str_val));
@@ -473,15 +399,9 @@ fn _rewrite_pkg_expr(e: *Expr, m: *Manifest) {
             return;
         }
     }
-    if e.lhs != null {
-        _rewrite_pkg_expr(e.lhs, m);
-    }
-    if e.rhs != null {
-        _rewrite_pkg_expr(e.rhs, m);
-    }
-    if e.operand != null {
-        _rewrite_pkg_expr(e.operand, m);
-    }
+    if e.lhs != null { _rewrite_pkg_expr(e.lhs, m); }
+    if e.rhs != null { _rewrite_pkg_expr(e.rhs, m); }
+    if e.operand != null { _rewrite_pkg_expr(e.operand, m); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let mut a: Expr = e.args.get(i);
@@ -489,9 +409,7 @@ fn _rewrite_pkg_expr(e: *Expr, m: *Manifest) {
             e.args.set(i, a);
         }
     }
-    if e.fn_expr_body != null {
-        _rewrite_pkg_block(e.fn_expr_body, m);
-    }
+    if e.fn_expr_body != null { _rewrite_pkg_block(e.fn_expr_body, m); }
 }
 
 extern fn __glide_getenv(name: string) -> string;
@@ -529,48 +447,33 @@ fn _esc_str(raw: string) -> string {
 }
 
 fn _cfg_cond_known(c: string) -> bool {
-    return c.eq("windows") || c.eq("posix") || c.eq("linux") || c.eq("macos") || c.eq("x86_64") || c.eq("aarch64");
+    return c.eq("windows") || c.eq("posix") || c.eq("linux") || c.eq("macos") || c.eq("x86_64")
+        || c.eq("aarch64");
 }
 
 fn _pkg_field_known(field: string) -> bool {
-    return field.eq("name") || field.eq("version") || field.eq("author") || field.eq("license") || field.eq("description") || field.eq("repository") || field.eq("bin") || field.eq("target");
+    return field.eq("name") || field.eq("version") || field.eq("author") || field.eq("license")
+        || field.eq("description")
+        || field.eq("repository")
+        || field.eq("bin")
+        || field.eq("target");
 }
 
 fn _pkg_field(m: *Manifest, field: string) -> string {
-    if m == null {
-        return "";
-    }
-    if field.eq("name") {
-        return m.name;
-    }
-    if field.eq("version") {
-        return m.version;
-    }
-    if field.eq("author") {
-        return m.author;
-    }
-    if field.eq("license") {
-        return m.license;
-    }
-    if field.eq("description") {
-        return m.description;
-    }
-    if field.eq("repository") {
-        return m.repository;
-    }
-    if field.eq("bin") {
-        return m.bin;
-    }
-    if field.eq("target") {
-        return m.target;
-    }
+    if m == null { return ""; }
+    if field.eq("name") { return m.name; }
+    if field.eq("version") { return m.version; }
+    if field.eq("author") { return m.author; }
+    if field.eq("license") { return m.license; }
+    if field.eq("description") { return m.description; }
+    if field.eq("repository") { return m.repository; }
+    if field.eq("bin") { return m.bin; }
+    if field.eq("target") { return m.target; }
     return "";
 }
 
 fn _is_panic_family(n: string) -> bool {
-    if n == null {
-        return false;
-    }
+    if n == null { return false; }
     return n.eq("panic") || n.eq("todo") || n.eq("unimplemented") || n.eq("unreachable");
 }
 
@@ -615,9 +518,7 @@ fn _lower_panic_family(e: *Expr, file: string) {
 // dance a runtime __glide_assert(bool,...) would need.
 fn _lower_assert_stmt(s: *Stmt, file: string) {
     let e: *Expr = s.expr_value;
-    if e.args == null || e.args.len() == 0 {
-        return;
-    } // malformed; leave as-is
+    if e.args == null || e.args.len() == 0 { return; } // malformed; leave as-is
     let ln: i32 = e.line;
     let col: i32 = e.column;
     let cond: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
@@ -663,32 +564,20 @@ fn expand_proc_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
     let registry: *HashMap<ProcMacroDef> = HashMap::new();
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind != ST_FN {
-            continue;
-        }
-        if s.attrs == null || s.attrs.len() == 0 {
-            continue;
-        }
+        if s.kind != ST_FN { continue; }
+        if s.attrs == null || s.attrs.len() == 0 { continue; }
         for let j: i32 = 0; j < s.attrs.len(); j++ {
             let a: Attr = s.attrs.get(j);
             let kind: i32 = _proc_kind_for(a.name);
-            if kind < 0 {
-                continue;
-            }
+            if kind < 0 { continue; }
             // First arg of @proc_<kind>(Name) is the registered name.
-            if a.args == null || a.args.len() == 0 {
-                continue;
-            }
+            if a.args == null || a.args.len() == 0 { continue; }
             let name_expr: Expr = a.args.get(0);
-            if name_expr.kind != EX_IDENT {
-                continue;
-            }
+            if name_expr.kind != EX_IDENT { continue; }
             registry.insert(_pm_key(kind, name_expr.str_val), ProcMacroDef { kind: kind, fn_stmt: s });
         }
     }
-    if registry.len() == 0 {
-        return program;
-    }
+    if registry.len() == 0 { return program; }
     // Macro execution allocates Stmts/Exprs/strings via the same
     // helpers the parser uses, all of which route through the palloc
     // arena. The arena is short-lived (it can be popped between
@@ -710,25 +599,17 @@ fn expand_proc_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         out.push(s);
-        if s.attrs == null || s.attrs.len() == 0 {
-            continue;
-        }
+        if s.attrs == null || s.attrs.len() == 0 { continue; }
         for let j: i32 = 0; j < s.attrs.len(); j++ {
             let a: Attr = s.attrs.get(j);
             // @derive(A, B, C) — fan out one dispatch per arg.
             if a.name.eq("derive") {
-                if a.args == null {
-                    continue;
-                }
+                if a.args == null { continue; }
                 for let k: i32 = 0; k < a.args.len(); k++ {
                     let ne: Expr = a.args.get(k);
-                    if ne.kind != EX_IDENT {
-                        continue;
-                    }
+                    if ne.kind != EX_IDENT { continue; }
                     let dkey: string = _pm_key(PMK_DERIVE, ne.str_val);
-                    if !registry.contains(dkey) {
-                        continue;
-                    }
+                    if !registry.contains(dkey) { continue; }
                     let pm: ProcMacroDef = registry.get(dkey);
                     _run_derive(it, &pm.fn_stmt, &s, out);
                 }
@@ -758,9 +639,7 @@ fn expand_proc_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
 // see the proc-fn carrying its `@proc_<kind>(Name)` attribute, so we
 // can't strip inside `expand_macros`.
 pub fn strip_compile_time_only(program: *Vector<Stmt>) -> *Vector<Stmt> {
-    if program == null {
-        return program;
-    }
+    if program == null { return program; }
     // First pass: collect origins that contain `fn main`. Those are user
     // programs (or test-runner synth files) — even if they also define a
     // `@proc_<kind>` fn, the rest of their stmts (struct decls, helper
@@ -770,12 +649,8 @@ pub fn strip_compile_time_only(program: *Vector<Stmt>) -> *Vector<Stmt> {
     let main_origins: *HashMap<bool> = HashMap::new();
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind != ST_FN || s.origin == null {
-            continue;
-        }
-        if s.name != null && s.name.eq("main") {
-            main_origins.insert(s.origin, true);
-        }
+        if s.kind != ST_FN || s.origin == null { continue; }
+        if s.name != null && s.name.eq("main") { main_origins.insert(s.origin, true); }
     }
     // Pre-pass: any origin containing at least one `@proc_<kind>` fn is
     // a compile-time-only file — its private helpers (`_emit_from_json`,
@@ -785,18 +660,15 @@ pub fn strip_compile_time_only(program: *Vector<Stmt>) -> *Vector<Stmt> {
     let pm_origins: *HashMap<bool> = HashMap::new();
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind != ST_FN || s.attrs == null || s.origin == null {
-            continue;
-        }
-        if main_origins.contains(s.origin) {
-            continue;
-        }
+        if s.kind != ST_FN || s.attrs == null || s.origin == null { continue; }
+        if main_origins.contains(s.origin) { continue; }
         for let j: i32 = 0; j < s.attrs.len(); j++ {
             let a: Attr = s.attrs.get(j);
-            if a.name == null {
-                continue;
-            }
-            if a.name.eq("proc_attr") || a.name.eq("proc_derive") || a.name.eq("proc_macro") || a.name.eq("proc_macro_str") || a.name.eq("proc_macro_expr") || a.name.eq("proc_pass") {
+            if a.name == null { continue; }
+            if a.name.eq("proc_attr") || a.name.eq("proc_derive") || a.name.eq("proc_macro")
+                || a.name.eq("proc_macro_str")
+                || a.name.eq("proc_macro_expr")
+                || a.name.eq("proc_pass") {
                 pm_origins.insert(s.origin, true);
                 break;
             }
@@ -806,18 +678,12 @@ pub fn strip_compile_time_only(program: *Vector<Stmt>) -> *Vector<Stmt> {
     // self-build hits this path (it doesn't use proc-derives), and we
     // must NOT drop bootstrap/* origins there since bootstrap IS the
     // user code in that context.
-    if pm_origins.len() == 0 {
-        return program;
-    }
+    if pm_origins.len() == 0 { return program; }
     let out: *Vector<Stmt> = Vector::new();
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.origin != null && pm_origins.contains(s.origin) {
-            continue;
-        }
-        if _is_compile_time_only(&s) {
-            continue;
-        }
+        if s.origin != null && pm_origins.contains(s.origin) { continue; }
+        if _is_compile_time_only(&s) { continue; }
         out.push(s);
     }
     return out;
@@ -832,9 +698,7 @@ pub fn strip_compile_time_only(program: *Vector<Stmt>) -> *Vector<Stmt> {
 // `Stmt`/`Expr`/`Type`/`Param` carriers that aren't shipped with
 // `~/.glide/bin/src/` (the installed tree only has builtins + stdlib).
 fn _is_compile_time_only(s: *Stmt) -> bool {
-    if s == null {
-        return false;
-    }
+    if s == null { return false; }
     // Anything from `bootstrap/*` (the compiler's own source tree) is
     // only used to back the proc-macro interpreter at compile time.
     if s.origin != null {
@@ -844,7 +708,14 @@ fn _is_compile_time_only(s: *Stmt) -> bool {
         while i + 9 < n {
             let c0: i32 = o.at(i).to_int();
             let prev_ok: bool = i == 0 || o.at(i - 1).to_int() == 47 || o.at(i - 1).to_int() == 92;
-            if prev_ok && c0 == 98 && o.at(i + 1).to_int() == 111 && o.at(i + 2).to_int() == 111 && o.at(i + 3).to_int() == 116 && o.at(i + 4).to_int() == 115 && o.at(i + 5).to_int() == 116 && o.at(i + 6).to_int() == 114 && o.at(i + 7).to_int() == 97 && o.at(i + 8).to_int() == 112 && o.at(i + 9).to_int() == 47 {
+            if prev_ok && c0 == 98 && o.at(i + 1).to_int() == 111 && o.at(i + 2).to_int() == 111
+                && o.at(i + 3).to_int() == 116
+                && o.at(i + 4).to_int() == 115
+                && o.at(i + 5).to_int() == 116
+                && o.at(i + 6).to_int() == 114
+                && o.at(i + 7).to_int() == 97
+                && o.at(i + 8).to_int() == 112
+                && o.at(i + 9).to_int() == 47 {
                 return true;
             }
             i = i + 1;
@@ -854,10 +725,11 @@ fn _is_compile_time_only(s: *Stmt) -> bool {
     if s.kind == ST_FN && s.attrs != null {
         for let j: i32 = 0; j < s.attrs.len(); j++ {
             let a: Attr = s.attrs.get(j);
-            if a.name == null {
-                continue;
-            }
-            if a.name.eq("proc_attr") || a.name.eq("proc_derive") || a.name.eq("proc_macro") || a.name.eq("proc_macro_str") || a.name.eq("proc_macro_expr") || a.name.eq("proc_pass") {
+            if a.name == null { continue; }
+            if a.name.eq("proc_attr") || a.name.eq("proc_derive") || a.name.eq("proc_macro")
+                || a.name.eq("proc_macro_str")
+                || a.name.eq("proc_macro_expr")
+                || a.name.eq("proc_pass") {
                 return true;
             }
         }
@@ -866,21 +738,11 @@ fn _is_compile_time_only(s: *Stmt) -> bool {
 }
 
 fn _proc_kind_for(name: string) -> i32 {
-    if name.eq("proc_derive") {
-        return PMK_DERIVE;
-    }
-    if name.eq("proc_attr") {
-        return PMK_ATTR;
-    }
-    if name.eq("proc_macro") {
-        return PMK_FN_AST;
-    }
-    if name.eq("proc_macro_str") {
-        return PMK_FN_STR;
-    }
-    if name.eq("proc_macro_expr") {
-        return PMK_FN_EXPR;
-    }
+    if name.eq("proc_derive") { return PMK_DERIVE; }
+    if name.eq("proc_attr") { return PMK_ATTR; }
+    if name.eq("proc_macro") { return PMK_FN_AST; }
+    if name.eq("proc_macro_str") { return PMK_FN_STR; }
+    if name.eq("proc_macro_expr") { return PMK_FN_EXPR; }
     return -1;
 }
 
@@ -889,18 +751,10 @@ fn _proc_kind_for(name: string) -> i32 {
 // and `@proc_macro(trace)` (the `trace!(…)` logging macro) coexist instead
 // of one silently overwriting the other in the by-name map.
 fn _pm_key(kind: i32, name: string) -> string {
-    if kind == PMK_DERIVE {
-        return "d:".concat(name);
-    }
-    if kind == PMK_ATTR {
-        return "a:".concat(name);
-    }
-    if kind == PMK_FN_AST {
-        return "f:".concat(name);
-    }
-    if kind == PMK_FN_STR {
-        return "s:".concat(name);
-    }
+    if kind == PMK_DERIVE { return "d:".concat(name); }
+    if kind == PMK_ATTR { return "a:".concat(name); }
+    if kind == PMK_FN_AST { return "f:".concat(name); }
+    if kind == PMK_FN_STR { return "s:".concat(name); }
     return name;
 }
 
@@ -910,16 +764,12 @@ fn _pm_key(kind: i32, name: string) -> string {
 // under module-qualified keys so `dep::name!` resolves to a SPECIFIC dep's
 // macro even when another dep defines the same bare name.
 fn _macro_module_of(origin: string) -> string {
-    if origin == null || origin.eq("") {
-        return "";
-    }
+    if origin == null || origin.eq("") { return ""; }
     let mut s: string = origin;
     let n: i32 = s.len();
     if n > 6 {
         let tail: string = s.substring(n - 6, n);
-        if tail.eq(".glide") {
-            s = s.substring(0, n - 6);
-        }
+        if tail.eq(".glide") { s = s.substring(0, n - 6); }
     }
     let len0: i32 = s.len();
     let mut cut: i32 = -1;
@@ -928,15 +778,11 @@ fn _macro_module_of(origin: string) -> string {
         if s.at(k).to_int() == 115 && s.at(k + 1).to_int() == 114 && s.at(k + 2).to_int() == 99 {
             let after: i32 = s.at(k + 3).to_int();
             let before_ok: bool = k == 0 || s.at(k - 1).to_int() == 47 || s.at(k - 1).to_int() == 92;
-            if before_ok && (after == 47 || after == 92) {
-                cut = k + 4;
-            }
+            if before_ok && (after == 47 || after == 92) { cut = k + 4; }
         }
         k = k + 1;
     }
-    if cut >= 0 {
-        s = s.substring(cut, len0);
-    }
+    if cut >= 0 { s = s.substring(cut, len0); }
     let mut out: string = "";
     let mut i: i32 = 0;
     let len: i32 = s.len();
@@ -956,9 +802,7 @@ fn _macro_module_of(origin: string) -> string {
 fn _joined_has(joined: string, item: string) -> bool {
     let parts: *Vector<string> = joined.split("\n");
     for let i: i32 = 0; i < parts.len(); i++ {
-        if parts.get(i).eq(item) {
-            return true;
-        }
+        if parts.get(i).eq(item) { return true; }
     }
     return false;
 }
@@ -968,43 +812,29 @@ fn _joined_has(joined: string, item: string) -> bool {
 // `import stdlib::log;`, and `import a/b/logger.glide` all yield the leaf
 // the user would qualify with.
 fn _import_leaf(ip: string) -> string {
-    if ip == null || ip.eq("") {
-        return "";
-    }
+    if ip == null || ip.eq("") { return ""; }
     let mut s: string = ip;
     let n: i32 = s.len();
-    if n > 6 && s.substring(n - 6, n).eq(".glide") {
-        s = s.substring(0, n - 6);
-    }
+    if n > 6 && s.substring(n - 6, n).eq(".glide") { s = s.substring(0, n - 6); }
     let m: i32 = s.len();
     let mut last: i32 = 0;
     for let i: i32 = 0; i < m; i++ {
         let c: i32 = s.at(i).to_int();
-        if c == 47 || c == 92 {
-            last = i + 1;
-        }
-        if c == 58 && i + 1 < m && s.at(i + 1).to_int() == 58 {
-            last = i + 2;
-        }
+        if c == 47 || c == 92 { last = i + 1; }
+        if c == 58 && i + 1 < m && s.at(i + 1).to_int() == 58 { last = i + 2; }
     }
     return s.substring(last, m);
 }
 
 // Leaf of a `::`-path ("stdlib::log" -> "log").
 fn _module_leaf(mp: string) -> string {
-    if mp == null {
-        return "";
-    }
+    if mp == null { return ""; }
     let n: i32 = mp.len();
     let mut last: i32 = -1;
     for let i: i32 = 0; i + 1 < n; i++ {
-        if mp.at(i).to_int() == 58 && mp.at(i + 1).to_int() == 58 {
-            last = i + 2;
-        }
+        if mp.at(i).to_int() == 58 && mp.at(i + 1).to_int() == 58 { last = i + 2; }
     }
-    if last < 0 {
-        return mp;
-    }
+    if last < 0 { return mp; }
     return mp.substring(last, n);
 }
 
@@ -1014,14 +844,10 @@ fn _module_leaf(mp: string) -> string {
 fn _register_qualified(pr: *HashMap<ProcMacroDef>, name: string, def: ProcMacroDef) {
     let origin: string = def.fn_stmt.origin;
     let mp: string = _macro_module_of(origin);
-    if mp.eq("") {
-        return;
-    }
+    if mp.eq("") { return; }
     pr.insert(mp.concat("::").concat(name), def);
     let leaf: string = _module_leaf(mp);
-    if !leaf.eq("") && !leaf.eq(mp) {
-        pr.insert(leaf.concat("::").concat(name), def);
-    }
+    if !leaf.eq("") && !leaf.eq(mp) { pr.insert(leaf.concat("::").concat(name), def); }
 }
 
 // Invoke a derive proc fn with the @derive'd Stmt as input. Expected
@@ -1035,17 +861,11 @@ fn _run_derive(it: *Interp, fn_stmt: *Stmt, target: *Stmt, out: *Vector<Stmt>) {
     let args: *Vector<IValue> = Vector::new();
     args.push(iv_ptr(target as *void, "Stmt"));
     let r: IValue = interp_call(it, fn_stmt, args);
-    if r.kind != IV_VECTOR {
-        return;
-    }
+    if r.kind != IV_VECTOR { return; }
     for let i: i32 = 0; i < r.vec.len(); i++ {
         let elem: IValue = r.vec.get(i);
-        if elem.kind != IV_PTR {
-            continue;
-        }
-        if !elem.ty_tag.eq("Stmt") {
-            continue;
-        }
+        if elem.kind != IV_PTR { continue; }
+        if !elem.ty_tag.eq("Stmt") { continue; }
         let ps: *Stmt = elem.p as *Stmt;
         if ps != null {
             // Inherit origin from the use site so the typer's visibility
@@ -1076,14 +896,10 @@ fn _run_attr(it: *Interp, fn_stmt: *Stmt, target: *Stmt, out: *Vector<Stmt>) {
     args.push(iv_ptr(target as *void, "Stmt"));
     let r: IValue = interp_call(it, fn_stmt, args);
     let last: i32 = out.len() - 1;
-    if last < 0 {
-        return;
-    }
+    if last < 0 { return; }
     if r.kind == IV_PTR && r.ty_tag.eq("Stmt") {
         let ps: *Stmt = r.p as *Stmt;
-        if ps == null {
-            return;
-        }
+        if ps == null { return; }
         ast_fill_defaults(ps);
         ps.origin = target.origin;
         ps.is_pub = target.is_pub;
@@ -1096,12 +912,8 @@ fn _run_attr(it: *Interp, fn_stmt: *Stmt, target: *Stmt, out: *Vector<Stmt>) {
         let _: Stmt = out.pop();
         for let i: i32 = 0; i < r.vec.len(); i++ {
             let elem: IValue = r.vec.get(i);
-            if elem.kind != IV_PTR {
-                continue;
-            }
-            if !elem.ty_tag.eq("Stmt") {
-                continue;
-            }
+            if elem.kind != IV_PTR { continue; }
+            if !elem.ty_tag.eq("Stmt") { continue; }
             let ps: *Stmt = elem.p as *Stmt;
             if ps != null {
                 ast_fill_defaults(ps);
@@ -1114,15 +926,9 @@ fn _run_attr(it: *Interp, fn_stmt: *Stmt, target: *Stmt, out: *Vector<Stmt>) {
 }
 
 fn type_owner_name(t: *Type) -> string {
-    if t == null {
-        return "";
-    }
-    if t.kind == TY_NAMED {
-        return t.name;
-    }
-    if t.kind == TY_GENERIC {
-        return t.name;
-    }
+    if t == null { return ""; }
+    if t.kind == TY_NAMED { return t.name; }
+    if t.kind == TY_GENERIC { return t.name; }
     return "";
 }
 
@@ -1132,77 +938,39 @@ fn type_owner_name(t: *Type) -> string {
 // straight to matchers. Instance macros keep the existing semantics:
 // `v.name!(args)` and `Type::name!(v, args)`.
 pub fn body_references_self(stmts: *Vector<Stmt>) -> bool {
-    if stmts == null {
-        return false;
-    }
+    if stmts == null { return false; }
     for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
-        if stmt_references_self(&s) {
-            return true;
-        }
+        if stmt_references_self(&s) { return true; }
     }
     return false;
 }
 
 fn stmt_references_self(s: *Stmt) -> bool {
-    if s == null {
-        return false;
-    }
-    if s.let_value != null && expr_references_self(s.let_value) {
-        return true;
-    }
-    if s.expr_value != null && expr_references_self(s.expr_value) {
-        return true;
-    }
-    if s.cond != null && expr_references_self(s.cond) {
-        return true;
-    }
-    if s.for_step != null && expr_references_self(s.for_step) {
-        return true;
-    }
-    if s.scrutinee != null && expr_references_self(s.scrutinee) {
-        return true;
-    }
-    if s.then_body != null && body_references_self(s.then_body) {
-        return true;
-    }
-    if s.else_body != null && body_references_self(s.else_body) {
-        return true;
-    }
-    if s.fn_body != null && body_references_self(s.fn_body) {
-        return true;
-    }
-    if s.for_init != null && stmt_references_self(s.for_init) {
-        return true;
-    }
+    if s == null { return false; }
+    if s.let_value != null && expr_references_self(s.let_value) { return true; }
+    if s.expr_value != null && expr_references_self(s.expr_value) { return true; }
+    if s.cond != null && expr_references_self(s.cond) { return true; }
+    if s.for_step != null && expr_references_self(s.for_step) { return true; }
+    if s.scrutinee != null && expr_references_self(s.scrutinee) { return true; }
+    if s.then_body != null && body_references_self(s.then_body) { return true; }
+    if s.else_body != null && body_references_self(s.else_body) { return true; }
+    if s.fn_body != null && body_references_self(s.fn_body) { return true; }
+    if s.for_init != null && stmt_references_self(s.for_init) { return true; }
     return false;
 }
 
 fn expr_references_self(e: *Expr) -> bool {
-    if e == null {
-        return false;
-    }
-    if e.kind == EX_IDENT && e.str_val.eq("self") {
-        return true;
-    }
-    if e.lhs != null && expr_references_self(e.lhs) {
-        return true;
-    }
-    if e.rhs != null && expr_references_self(e.rhs) {
-        return true;
-    }
-    if e.operand != null && expr_references_self(e.operand) {
-        return true;
-    }
-    if e.macro_recv != null && expr_references_self(e.macro_recv) {
-        return true;
-    }
+    if e == null { return false; }
+    if e.kind == EX_IDENT && e.str_val.eq("self") { return true; }
+    if e.lhs != null && expr_references_self(e.lhs) { return true; }
+    if e.rhs != null && expr_references_self(e.rhs) { return true; }
+    if e.operand != null && expr_references_self(e.operand) { return true; }
+    if e.macro_recv != null && expr_references_self(e.macro_recv) { return true; }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
-            if expr_references_self(&a) {
-                return true;
-            }
+            if expr_references_self(&a) { return true; }
         }
     }
     return false;
@@ -1215,9 +983,7 @@ fn expand_in_program(program: *Vector<Stmt>, sm: *HashMap<Stmt>, tm: *Vector<Typ
         let mut s: Stmt = program.get(i);
         // Tell bare-macro resolution which file this stmt came from, so a
         // collision is disambiguated against THAT file's imports.
-        if it != null && s.origin != null {
-            it.macro_cur_origin = s.origin;
-        }
+        if it != null && s.origin != null { it.macro_cur_origin = s.origin; }
         if s.kind == ST_FN && s.fn_body != null {
             s.fn_body = expand_in_block(s.fn_body, sm, tm, pr, it, 0);
             program.set(i, s);
@@ -1284,9 +1050,7 @@ fn expand_in_block(stmts: *Vector<Stmt>, sm: *HashMap<Stmt>, tm: *Vector<TypeMac
         if s.else_body != null {
             s.else_body = expand_in_block(s.else_body, sm, tm, pr, it, depth);
         }
-        if s.fn_body != null {
-            s.fn_body = expand_in_block(s.fn_body, sm, tm, pr, it, depth);
-        }
+        if s.fn_body != null { s.fn_body = expand_in_block(s.fn_body, sm, tm, pr, it, depth); }
         if s.for_init != null && s.for_init.then_body != null {
             s.for_init.then_body = expand_in_block(s.for_init.then_body, sm, tm, pr, it, depth);
         }
@@ -1320,9 +1084,7 @@ fn expand_in_block(stmts: *Vector<Stmt>, sm: *HashMap<Stmt>, tm: *Vector<TypeMac
 // Returns the expansion stmts on success, or null if `call` doesn't name a
 // known user macro (e.g. it's a builtin like `println!`).
 fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>, pr: *HashMap<ProcMacroDef>, it: *Interp) -> *Vector<Stmt> {
-    if call == null || call.kind != EX_MACRO {
-        return null;
-    }
+    if call == null || call.kind != EX_MACRO { return null; }
     // `Type::name!(args)` — qualified type-attached.
     //   * Instance form (body uses `self`): the first arg is the receiver,
     //     the rest match against the macro's matchers
@@ -1333,17 +1095,13 @@ fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>, pr: 
         for let i: i32 = 0; i < tm.len(); i++ {
             let entry: TypeMacro = tm.get(i);
             if entry.owner.eq(call.macro_owner) && entry.name.eq(call.str_val) {
-                if entry.def.then_body == null {
-                    return null;
-                }
+                if entry.def.then_body == null { return null; }
                 let uses_self: bool = body_references_self(entry.def.then_body);
                 if !uses_self {
                     let no_recv: *Expr = null;
                     return expand_with_def_recv(call, &entry.def, no_recv);
                 }
-                if call.args == null || call.args.len() == 0 {
-                    return null;
-                }
+                if call.args == null || call.args.len() == 0 { return null; }
                 let recv_arg: Expr = call.args.get(0);
                 let recv_p: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
                 *recv_p = recv_arg;
@@ -1367,15 +1125,11 @@ fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>, pr: 
             let qkey: string = call.macro_owner.concat("::").concat(call.str_val);
             if pr.contains(qkey) {
                 let pmq: ProcMacroDef = pr.get(qkey);
-                if pmq.kind == PMK_FN_AST {
-                    return _run_fn_ast(it, &pmq.fn_stmt, call);
-                }
+                if pmq.kind == PMK_FN_AST { return _run_fn_ast(it, &pmq.fn_stmt, call); }
             }
             if pr.contains(call.str_val) {
                 let pm: ProcMacroDef = pr.get(call.str_val);
-                if pm.kind == PMK_FN_AST {
-                    return _run_fn_ast(it, &pm.fn_stmt, call);
-                }
+                if pm.kind == PMK_FN_AST { return _run_fn_ast(it, &pm.fn_stmt, call); }
             }
         }
         return null;
@@ -1388,14 +1142,10 @@ fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>, pr: 
         for let i: i32 = 0; i < tm.len(); i++ {
             let entry: TypeMacro = tm.get(i);
             if entry.name.eq(call.str_val) {
-                if entry.def.then_body == null {
-                    return null;
-                }
+                if entry.def.then_body == null { return null; }
                 let uses_self: bool = body_references_self(entry.def.then_body);
                 let mut recv_for: *Expr = null;
-                if uses_self {
-                    recv_for = call.macro_recv;
-                }
+                if uses_self { recv_for = call.macro_recv; }
                 return expand_with_def_recv(call, &entry.def, recv_for);
             }
         }
@@ -1405,9 +1155,7 @@ fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>, pr: 
         let def: Stmt = sm.get(call.str_val);
         // Body-less stub (`macro name!(matchers);`) — declared for docs / LSP
         // only. Skip expansion so codegen's native handling can fire.
-        if def.then_body == null {
-            return null;
-        }
+        if def.then_body == null { return null; }
         let no_recv: *Expr = null;
         return expand_with_def_recv(call, &def, no_recv);
     }
@@ -1415,7 +1163,8 @@ fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>, pr: 
     // disambiguate by the imports of the file this call lives in: resolve to
     // the one imported dep, or error if none / more than one is imported.
     // A single-definition name keeps the permissive path (no import needed).
-    if pr != null && it != null && it.macro_name_mods != null && it.macro_name_mods.contains(call.str_val) {
+    if pr != null && it != null && it.macro_name_mods != null
+        && it.macro_name_mods.contains(call.str_val) {
         let joined: string = it.macro_name_mods.get(call.str_val);
         let mods: *Vector<string> = joined.split("\n");
         if mods.len() > 1 {
@@ -1427,9 +1176,7 @@ fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>, pr: 
                 let mut imp: bool = m.eq(cur_mod); // defined in the same file
                 if !imp && it.macro_file_imports != null {
                     let key: string = it.macro_cur_origin.concat("\n").concat(_module_leaf(m));
-                    if it.macro_file_imports.contains(key) {
-                        imp = true;
-                    }
+                    if it.macro_file_imports.contains(key) { imp = true; }
                 }
                 if imp {
                     chosen = m;
@@ -1440,9 +1187,7 @@ fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>, pr: 
                 let qk: string = chosen.concat("::").concat(call.str_val);
                 if pr.contains(qk) {
                     let pmc: ProcMacroDef = pr.get(qk);
-                    if pmc.kind == PMK_FN_AST {
-                        return _run_fn_ast(it, &pmc.fn_stmt, call);
-                    }
+                    if pmc.kind == PMK_FN_AST { return _run_fn_ast(it, &pmc.fn_stmt, call); }
                 }
             } else {
                 // 0 imported (none in scope) or >1 imported (genuinely
@@ -1451,9 +1196,7 @@ fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>, pr: 
                 // fails hard instead of silently dropping the call.
                 let mut listed: string = "";
                 for let mi: i32 = 0; mi < mods.len(); mi++ {
-                    if mi > 0 {
-                        listed = listed.concat(", ");
-                    }
+                    if mi > 0 { listed = listed.concat(", "); }
                     listed = listed.concat(mods.get(mi));
                 }
                 it.diagnostics.push("ambiguous macro `".concat(call.str_val).concat("!`: defined in ").concat(listed).concat(" — qualify it, e.g. `").concat(_module_leaf(mods.get(0))).concat("::").concat(call.str_val).concat("!(...)`"));
@@ -1469,9 +1212,7 @@ fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>, pr: 
     // through the interp with the call's args as a Vector<Expr>.
     if pr != null && it != null && pr.contains(call.str_val) {
         let pm: ProcMacroDef = pr.get(call.str_val);
-        if pm.kind == PMK_FN_AST {
-            return _run_fn_ast(it, &pm.fn_stmt, call);
-        }
+        if pm.kind == PMK_FN_AST { return _run_fn_ast(it, &pm.fn_stmt, call); }
     }
     return null;
 }
@@ -1498,17 +1239,11 @@ fn _run_fn_ast(it: *Interp, fn_stmt: *Stmt, call: *Expr) -> *Vector<Stmt> {
     let r: IValue = interp_call(it, fn_stmt, invoke_args);
     __glide_palloc_set(saved_arena);
     let out: *Vector<Stmt> = Vector::new();
-    if r.kind != IV_VECTOR {
-        return out;
-    }
+    if r.kind != IV_VECTOR { return out; }
     for let i: i32 = 0; i < r.vec.len(); i++ {
         let elem: IValue = r.vec.get(i);
-        if elem.kind != IV_PTR {
-            continue;
-        }
-        if !elem.ty_tag.eq("Stmt") {
-            continue;
-        }
+        if elem.kind != IV_PTR { continue; }
+        if !elem.ty_tag.eq("Stmt") { continue; }
         let ps: *Stmt = elem.p as *Stmt;
         if ps != null {
             ast_fill_defaults(ps);
@@ -1541,12 +1276,8 @@ fn _run_fn_expr(it: *Interp, fn_stmt: *Stmt, call: *Expr) -> *Expr {
     invoke_args.push(iv_vector(elem_args));
     let r: IValue = interp_call(it, fn_stmt, invoke_args);
     __glide_palloc_set(saved_arena);
-    if r.kind != IV_PTR {
-        return null;
-    }
-    if !r.ty_tag.eq("Expr") {
-        return null;
-    }
+    if r.kind != IV_PTR { return null; }
+    if !r.ty_tag.eq("Expr") { return null; }
     let pe: *Expr = r.p as *Expr;
     return pe;
 }
@@ -1565,9 +1296,7 @@ fn rewrite_expr_macros(e: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>, pr:
             }
         }
     }
-    if e == null {
-        return e;
-    }
+    if e == null { return e; }
     // Recurse children first (bottom-up): inner macros expand before the
     // outer node is examined, so a macro can be fed an already-expanded arg.
     e.lhs = rewrite_expr_macros(e.lhs, sm, tm, pr, it);
@@ -1580,9 +1309,7 @@ fn rewrite_expr_macros(e: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>, pr:
             let pa: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
             *pa = a;
             let na: *Expr = rewrite_expr_macros(pa, sm, tm, pr, it);
-            if na != null {
-                e.args.set(i, *na);
-            }
+            if na != null { e.args.set(i, *na); }
         }
     }
     // A macro used in EXPRESSION position whose body ends with `return <expr>;`
@@ -1594,17 +1321,13 @@ fn rewrite_expr_macros(e: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>, pr:
     // isn't a value macro (no trailing return) or isn't user-defined.
     if e.kind == EX_MACRO && e.str_val != null {
         let blk: *Expr = _macro_call_as_block(e, sm, tm, pr, it);
-        if blk != null {
-            return blk;
-        }
+        if blk != null { return blk; }
     }
     if pr != null && it != null && e.kind == EX_MACRO && e.str_val != null && pr.contains(e.str_val) {
         let pm: ProcMacroDef = pr.get(e.str_val);
         if pm.kind == PMK_FN_EXPR {
             let rep: *Expr = _run_fn_expr(it, &pm.fn_stmt, e);
-            if rep != null {
-                return rep;
-            }
+            if rep != null { return rep; }
         }
     }
     return e;
@@ -1618,9 +1341,7 @@ fn rewrite_expr_macros(e: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>, pr:
 // macro) or the name isn't a user macro, leaving the node for other handling.
 fn _macro_call_as_block(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>, pr: *HashMap<ProcMacroDef>, it: *Interp) -> *Expr {
     let stmts: *Vector<Stmt> = try_expand_call(call, sm, tm, pr, it);
-    if stmts == null || stmts.len() == 0 {
-        return null;
-    }
+    if stmts == null || stmts.len() == 0 { return null; }
     // The statement form wraps the body in a single ST_BLOCK for scoping; the
     // real statements (including the trailing `return`) live in its then_body.
     // The GCC stmt-expr the block-expression lowers to is its own C scope, so
@@ -1628,17 +1349,11 @@ fn _macro_call_as_block(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>,
     let mut body: *Vector<Stmt> = stmts;
     if stmts.len() == 1 {
         let only: Stmt = stmts.get(0);
-        if only.kind == ST_BLOCK && only.then_body != null {
-            body = only.then_body;
-        }
+        if only.kind == ST_BLOCK && only.then_body != null { body = only.then_body; }
     }
-    if body.len() == 0 {
-        return null;
-    }
+    if body.len() == 0 { return null; }
     let last: Stmt = body.get(body.len() - 1);
-    if last.kind != ST_RETURN || last.expr_value == null {
-        return null;
-    }
+    if last.kind != ST_RETURN || last.expr_value == null { return null; }
     let value: *Expr = last.expr_value;
     body.pop();
     return expr_block(body, value, call.line, call.column);
@@ -1662,18 +1377,12 @@ fn _run_pass(it: *Interp, fn_stmt: *Stmt, program: *Vector<Stmt>) -> *Vector<Stm
     invoke.push(iv_vector(elems));
     let r: IValue = interp_call(it, fn_stmt, invoke);
     __glide_palloc_set(saved);
-    if r.kind != IV_VECTOR {
-        return program;
-    }
+    if r.kind != IV_VECTOR { return program; }
     let out: *Vector<Stmt> = Vector::new();
     for let i: i32 = 0; i < r.vec.len(); i++ {
         let elem: IValue = r.vec.get(i);
-        if elem.kind != IV_PTR {
-            continue;
-        }
-        if !elem.ty_tag.eq("Stmt") {
-            continue;
-        }
+        if elem.kind != IV_PTR { continue; }
+        if !elem.ty_tag.eq("Stmt") { continue; }
         let ps: *Stmt = elem.p as *Stmt;
         if ps != null {
             if ps.origin != null && !ps.origin.eq("") {
@@ -1708,9 +1417,7 @@ fn run_proc_passes(program: *Vector<Stmt>) -> *Vector<Stmt> {
     let passes: *Vector<Stmt> = Vector::new();
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
-        if s.kind != ST_FN || s.attrs == null {
-            continue;
-        }
+        if s.kind != ST_FN || s.attrs == null { continue; }
         for let j: i32 = 0; j < s.attrs.len(); j++ {
             let a: Attr = s.attrs.get(j);
             if a.name != null && a.name.eq("proc_pass") {
@@ -1719,9 +1426,7 @@ fn run_proc_passes(program: *Vector<Stmt>) -> *Vector<Stmt> {
             }
         }
     }
-    if passes.len() == 0 {
-        return program;
-    }
+    if passes.len() == 0 { return program; }
     let saved: *void = __glide_palloc_get();
     __glide_palloc_set(null);
     let it: *Interp = Interp::new();
@@ -1748,30 +1453,22 @@ fn run_proc_passes(program: *Vector<Stmt>) -> *Vector<Stmt> {
 // placeholders are EX_MACRO_VAR (not idents) and the caller's argument
 // subtrees are spliced verbatim, so neither is ever collected or renamed.
 fn _collect_macro_locals(stmts: *Vector<Stmt>, out: *HashMap<string>, suffix: string) {
-    if stmts == null {
-        return;
-    }
+    if stmts == null { return; }
     for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
         if (s.kind == ST_LET || s.kind == ST_CONST) && s.name != null && !s.name.eq("") {
-            if !out.contains(s.name) {
-                out.insert(s.name, s.name.concat(suffix));
-            }
+            if !out.contains(s.name) { out.insert(s.name, s.name.concat(suffix)); }
         }
-        if s.for_init != null && (s.for_init.kind == ST_LET || s.for_init.kind == ST_CONST) && s.for_init.name != null && !s.for_init.name.eq("") {
+        if s.for_init != null && (s.for_init.kind == ST_LET || s.for_init.kind == ST_CONST)
+            && s.for_init.name != null
+            && !s.for_init.name.eq("") {
             if !out.contains(s.for_init.name) {
                 out.insert(s.for_init.name, s.for_init.name.concat(suffix));
             }
         }
-        if s.then_body != null {
-            _collect_macro_locals(s.then_body, out, suffix);
-        }
-        if s.else_body != null {
-            _collect_macro_locals(s.else_body, out, suffix);
-        }
-        if s.fn_body != null {
-            _collect_macro_locals(s.fn_body, out, suffix);
-        }
+        if s.then_body != null { _collect_macro_locals(s.then_body, out, suffix); }
+        if s.else_body != null { _collect_macro_locals(s.else_body, out, suffix); }
+        if s.fn_body != null { _collect_macro_locals(s.fn_body, out, suffix); }
     }
 }
 
@@ -1786,17 +1483,13 @@ fn recv_name_for(call: *Expr) -> string {
 fn expand_with_def_recv(call: *Expr, def: *Stmt, recv: *Expr) -> *Vector<Stmt> {
     let bindings: *Vector<MacroBinding> = bind_args(call, def);
     let mut self_name: string = "";
-    if recv != null {
-        self_name = recv_name_for(call);
-    }
+    if recv != null { self_name = recv_name_for(call); }
     // Hygiene map: every name the macro body declares (`let`/`const`/for-init)
     // gets a per-call-site unique alias, so a macro local can't collide with a
     // caller name passed in as an argument (the classic `let tmp = $x` capture).
     let hyg: *HashMap<string> = HashMap::new();
     let suffix: string = "__mh".concat(int_to_str(call.line)).concat("_").concat(int_to_str(call.column));
-    if def.then_body != null {
-        _collect_macro_locals(def.then_body, hyg, suffix);
-    }
+    if def.then_body != null { _collect_macro_locals(def.then_body, hyg, suffix); }
     let body: *Vector<Stmt> = Vector::new();
     if def.then_body != null {
         for let i: i32 = 0; i < def.then_body.len(); i++ {
@@ -1841,14 +1534,10 @@ fn expand_with_def_recv(call: *Expr, def: *Stmt, recv: *Expr) -> *Vector<Stmt> {
 // `$($x:expr),*` that swallows the rest.
 fn bind_args(call: *Expr, def: *Stmt) -> *Vector<MacroBinding> {
     let out: *Vector<MacroBinding> = Vector::new();
-    if def.macro_params == null {
-        return out;
-    }
+    if def.macro_params == null { return out; }
     let mut idx: i32 = 0;
     let mut total: i32 = 0;
-    if call.args != null {
-        total = call.args.len();
-    }
+    if call.args != null { total = call.args.len(); }
     // Arity check. Binding is positional, so without this a surplus arg was
     // silently dropped and a missing one bound EMPTY — which materialized as
     // `(nil)` garbage at runtime from a cleanly-compiled program. A variadic
@@ -1864,7 +1553,7 @@ fn bind_args(call: *Expr, def: *Stmt) -> *Vector<MacroBinding> {
             fixed = fixed + 1;
         }
     }
-    if total < fixed || (!has_variadic && total > fixed) {
+    if total < fixed || !has_variadic && total > fixed {
         let unit: string = if fixed == 1 { " argument, got " } else { " arguments, got " };
         let floor: string = if has_variadic { "at least " } else { "" };
         pass_diag(call.line, call.column, 1, "macro-arity", "macro `".concat(def.name).concat("!` expects ").concat(floor).concat(int_to_str(fixed)).concat(unit).concat(int_to_str(total)));
@@ -1896,9 +1585,7 @@ fn bind_args(call: *Expr, def: *Stmt) -> *Vector<MacroBinding> {
 // for the enclosing `$(...);*` block (or -1 if none).
 fn macro_subst_stmt(s: *Stmt, bindings: *Vector<MacroBinding>, rep_idx: i32, self_name: string, hyg: *HashMap<string>) -> *Vector<Stmt> {
     let out: *Vector<Stmt> = Vector::new();
-    if s == null {
-        return out;
-    }
+    if s == null { return out; }
     if s.kind == ST_MACRO_REP {
         // Find the variadic binding driving the repetition.
         let n: i32 = variadic_len(bindings);
@@ -1907,9 +1594,7 @@ fn macro_subst_stmt(s: *Stmt, bindings: *Vector<MacroBinding>, rep_idx: i32, sel
             return out;
         }
         for let i: i32 = 0; i < n; i++ {
-            if s.then_body == null {
-                continue;
-            }
+            if s.then_body == null { continue; }
             for let j: i32 = 0; j < s.then_body.len(); j++ {
                 let inner: Stmt = s.then_body.get(j);
                 let expanded: *Vector<Stmt> = macro_subst_stmt(&inner, bindings, i, self_name, hyg);
@@ -1926,7 +1611,8 @@ fn macro_subst_stmt(s: *Stmt, bindings: *Vector<MacroBinding>, rep_idx: i32, sel
     *cloned = *s;
     // Hygiene: rename a macro-introduced binding (`let`/`const`/for-init) to
     // its per-expansion unique name; references are renamed in macro_subst_expr.
-    if (cloned.kind == ST_LET || cloned.kind == ST_CONST) && hyg != null && cloned.name != null && hyg.contains(cloned.name) {
+    if (cloned.kind == ST_LET || cloned.kind == ST_CONST) && hyg != null && cloned.name != null
+        && hyg.contains(cloned.name) {
         cloned.name = hyg.get(cloned.name);
     }
     if cloned.let_value != null {
@@ -1980,18 +1666,14 @@ fn macro_subst_block(stmts: *Vector<Stmt>, bindings: *Vector<MacroBinding>, rep_
 }
 
 fn macro_subst_expr(e: *Expr, bindings: *Vector<MacroBinding>, rep_idx: i32, self_name: string, hyg: *HashMap<string>) -> *Expr {
-    if e == null {
-        return null;
-    }
+    if e == null { return null; }
     if e.kind == EX_MACRO_VAR {
         // A `$x` placeholder is replaced by the caller's argument subtree
         // verbatim — we do NOT descend into it, so hygiene renaming never
         // touches the caller's identifiers (that's what keeps a caller var
         // named like a macro local from being clobbered).
         let chosen: *Expr = lookup_var(e.str_val, bindings, rep_idx);
-        if chosen != null {
-            return chosen;
-        }
+        if chosen != null { return chosen; }
         return e;
     }
     // `self` inside a type-attached macro body refers to the receiver. We bind
@@ -2025,9 +1707,7 @@ fn macro_subst_expr(e: *Expr, bindings: *Vector<MacroBinding>, rep_idx: i32, sel
         for let i: i32 = 0; i < cloned.args.len(); i++ {
             let a: Expr = cloned.args.get(i);
             let na: *Expr = macro_subst_expr(&a, bindings, rep_idx, self_name, hyg);
-            if na != null {
-                new_args.push(*na);
-            }
+            if na != null { new_args.push(*na); }
         }
         cloned.args = new_args;
     }
@@ -2037,17 +1717,11 @@ fn macro_subst_expr(e: *Expr, bindings: *Vector<MacroBinding>, rep_idx: i32, sel
 fn lookup_var(name: string, bindings: *Vector<MacroBinding>, rep_idx: i32) -> *Expr {
     for let i: i32 = 0; i < bindings.len(); i++ {
         let b: MacroBinding = bindings.get(i);
-        if !b.name.eq(name) {
-            continue;
-        }
-        if b.args.len() == 0 {
-            return null;
-        }
+        if !b.name.eq(name) { continue; }
+        if b.args.len() == 0 { return null; }
         let mut idx: i32 = 0;
         if b.is_variadic {
-            if rep_idx < 0 || rep_idx >= b.args.len() {
-                return null;
-            }
+            if rep_idx < 0 || rep_idx >= b.args.len() { return null; }
             idx = rep_idx;
         }
         let chosen: Expr = b.args.get(idx);
@@ -2061,9 +1735,7 @@ fn lookup_var(name: string, bindings: *Vector<MacroBinding>, rep_idx: i32) -> *E
 fn variadic_len(bindings: *Vector<MacroBinding>) -> i32 {
     for let i: i32 = 0; i < bindings.len(); i++ {
         let b: MacroBinding = bindings.get(i);
-        if b.is_variadic {
-            return b.args.len();
-        }
+        if b.is_variadic { return b.args.len(); }
     }
     return -1;
 }

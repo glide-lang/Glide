@@ -40,13 +40,9 @@ pub fn parse_semver(s: string) -> SemVer {
     v.prerelease = "";
     v.raw = s;
     v.is_semver = false;
-    if s.eq("") {
-        return v;
-    }
+    if s.eq("") { return v; }
     let mut i: i32 = 0;
-    if s.at(0).to_int() == 118 {
-        i = 1;
-    } // skip leading 'v'
+    if s.at(0).to_int() == 118 { i = 1; } // skip leading 'v'
     let n: i32 = s.len();
     let mut major: i32 = -1;
     let mut minor: i32 = -1;
@@ -63,13 +59,9 @@ pub fn parse_semver(s: string) -> SemVer {
         }
         break;
     }
-    if !have {
-        return v;
-    }
+    if !have { return v; }
     major = tmp;
-    if i >= n || s.at(i).to_int() != 46 {
-        return v;
-    } // expect '.'
+    if i >= n || s.at(i).to_int() != 46 { return v; } // expect '.'
     i = i + 1;
     tmp = 0;
     have = false;
@@ -83,13 +75,9 @@ pub fn parse_semver(s: string) -> SemVer {
         }
         break;
     }
-    if !have {
-        return v;
-    }
+    if !have { return v; }
     minor = tmp;
-    if i >= n || s.at(i).to_int() != 46 {
-        return v;
-    }
+    if i >= n || s.at(i).to_int() != 46 { return v; }
     i = i + 1;
     tmp = 0;
     have = false;
@@ -103,9 +91,7 @@ pub fn parse_semver(s: string) -> SemVer {
         }
         break;
     }
-    if !have {
-        return v;
-    }
+    if !have { return v; }
     patch = tmp;
     // Optional prerelease (`-foo`) and build (`+bar`).
     let mut pre_start: i32 = -1;
@@ -125,15 +111,11 @@ pub fn parse_semver(s: string) -> SemVer {
             i = i + 1;
         }
     }
-    if i != n && pre_start < 0 {
-        return v;
-    }
+    if i != n && pre_start < 0 { return v; }
     v.major = major;
     v.minor = minor;
     v.patch = patch;
-    if pre_start >= 0 && pre_end > pre_start {
-        v.prerelease = s.substring(pre_start, pre_end);
-    }
+    if pre_start >= 0 && pre_end > pre_start { v.prerelease = s.substring(pre_start, pre_end); }
     v.is_semver = true;
     return v;
 }
@@ -147,42 +129,24 @@ pub fn parse_semver(s: string) -> SemVer {
 // semver_cmp(parse_semver("1.0.0"), parse_semver("1.0.0-rc"))//    1
 // ```
 pub fn semver_cmp(a: SemVer, b: SemVer) -> i32 {
-    if !a.is_semver && !b.is_semver {
-        return _strcmp(a.raw, b.raw);
-    }
-    if !a.is_semver {
-        return -1;
-    }
-    if !b.is_semver {
-        return 1;
-    }
+    if !a.is_semver && !b.is_semver { return _strcmp(a.raw, b.raw); }
+    if !a.is_semver { return -1; }
+    if !b.is_semver { return 1; }
     if a.major != b.major {
-        if a.major < b.major {
-            return -1;
-        }
+        if a.major < b.major { return -1; }
         return 1;
     }
     if a.minor != b.minor {
-        if a.minor < b.minor {
-            return -1;
-        }
+        if a.minor < b.minor { return -1; }
         return 1;
     }
     if a.patch != b.patch {
-        if a.patch < b.patch {
-            return -1;
-        }
+        if a.patch < b.patch { return -1; }
         return 1;
     }
-    if a.prerelease.eq(b.prerelease) {
-        return 0;
-    }
-    if a.prerelease.eq("") {
-        return 1;
-    }
-    if b.prerelease.eq("") {
-        return -1;
-    }
+    if a.prerelease.eq(b.prerelease) { return 0; }
+    if a.prerelease.eq("") { return 1; }
+    if b.prerelease.eq("") { return -1; }
     return _strcmp(a.prerelease, b.prerelease);
 }
 
@@ -190,9 +154,7 @@ pub fn semver_cmp(a: SemVer, b: SemVer) -> i32 {
 // contract: only major bumps may break the API, so versions across
 // the same major line are mutually substitutable.
 pub fn semver_compatible(a: SemVer, b: SemVer) -> bool {
-    if !a.is_semver || !b.is_semver {
-        return false;
-    }
+    if !a.is_semver || !b.is_semver { return false; }
     return a.major == b.major;
 }
 
@@ -203,19 +165,11 @@ fn _strcmp(a: string, b: string) -> i32 {
     for let i: i32 = 0; i < lim; i++ {
         let ca: i32 = a.at(i).to_int();
         let cb: i32 = b.at(i).to_int();
-        if ca < cb {
-            return -1;
-        }
-        if ca > cb {
-            return 1;
-        }
+        if ca < cb { return -1; }
+        if ca > cb { return 1; }
     }
-    if n < m {
-        return -1;
-    }
-    if n > m {
-        return 1;
-    }
+    if n < m { return -1; }
+    if n > m { return 1; }
     return 0;
 }
 
@@ -223,12 +177,8 @@ fn _strcmp(a: string, b: string) -> i32 {
 // plus `-prerelease` when present). Falls back to the raw input for
 // non-semver values.
 pub fn semver_format(v: SemVer) -> string {
-    if !v.is_semver {
-        return v.raw;
-    }
+    if !v.is_semver { return v.raw; }
     let mut out: string = int_to_str(v.major).concat(".").concat(int_to_str(v.minor)).concat(".").concat(int_to_str(v.patch));
-    if !v.prerelease.eq("") {
-        out = out.concat("-").concat(v.prerelease);
-    }
+    if !v.prerelease.eq("") { out = out.concat("-").concat(v.prerelease); }
     return out;
 }

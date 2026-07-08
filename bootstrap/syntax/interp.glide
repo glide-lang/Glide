@@ -231,7 +231,7 @@ impl Interp {
     // Register every fn in `program` so the interpreter can call them.
     // Macro fn bodies typically reach helpers in the same module via
     // plain ident calls.
-    pub fn register_fns(self: *Interp, program: *Vector<Stmt>) {
+    pub fn register_fns(self, program: *Vector<Stmt>) {
         for let i: i32 = 0; i < program.len(); i++ {
             let s: Stmt = program.get(i);
             if s.kind == ST_FN && s.name != null && !s.name.eq("") {
@@ -240,7 +240,7 @@ impl Interp {
         }
     }
 
-    pub fn err(self: *Interp, msg: string) {
+    pub fn err(self, msg: string) {
         // Two-site format: macro-fn body location (where the
         // intrinsic / unsupported node was hit) + the use site
         // (where the @derive / @<name> annotation lives). Either
@@ -259,7 +259,7 @@ impl Interp {
 
     // Called by the expander before each interp_call so error
     // messages can blame the @derive / @<name> use site too.
-    pub fn set_use_site(self: *Interp, line: i32, col: i32, origin: string) {
+    pub fn set_use_site(self, line: i32, col: i32, origin: string) {
         self.current_use_line = line;
         self.current_use_col = col;
         self.current_use_origin = origin;
@@ -279,15 +279,11 @@ fn scope_get(it: *Interp, name: string) -> IValue {
     let mut i: i32 = it.scopes.len() - 1;
     while i >= 0 {
         let sc: *HashMap<IValue> = it.scopes.get(i);
-        if sc.contains(name) {
-            return sc.get(name);
-        }
+        if sc.contains(name) { return sc.get(name); }
         i = i - 1;
     }
     let k: i32 = _well_known_const(name);
-    if k >= 0 {
-        return iv_int(k);
-    }
+    if k >= 0 { return iv_int(k); }
     it.err("undefined name: ".concat(name));
     return iv_null();
 }
@@ -296,168 +292,60 @@ fn scope_get(it: *Interp, name: string) -> IValue {
 // scope_get O(1) (linear in the number of well-known names) without
 // having to crawl every `pub const` in the program.
 fn _well_known_const(name: string) -> i32 {
-    if name.eq("ST_LET") {
-        return ST_LET;
-    }
-    if name.eq("ST_RETURN") {
-        return ST_RETURN;
-    }
-    if name.eq("ST_EXPR") {
-        return ST_EXPR;
-    }
-    if name.eq("ST_IF") {
-        return ST_IF;
-    }
-    if name.eq("ST_WHILE") {
-        return ST_WHILE;
-    }
-    if name.eq("ST_BLOCK") {
-        return ST_BLOCK;
-    }
-    if name.eq("ST_FN") {
-        return ST_FN;
-    }
-    if name.eq("ST_BREAK") {
-        return ST_BREAK;
-    }
-    if name.eq("ST_CONTINUE") {
-        return ST_CONTINUE;
-    }
-    if name.eq("ST_STRUCT") {
-        return ST_STRUCT;
-    }
-    if name.eq("ST_IMPL") {
-        return ST_IMPL;
-    }
-    if name.eq("ST_CONST") {
-        return ST_CONST;
-    }
-    if name.eq("ST_FOR") {
-        return ST_FOR;
-    }
-    if name.eq("ST_ENUM") {
-        return ST_ENUM;
-    }
-    if name.eq("ST_TRAIT") {
-        return ST_TRAIT;
-    }
-    if name.eq("EX_INT") {
-        return EX_INT;
-    }
-    if name.eq("EX_STRING") {
-        return EX_STRING;
-    }
-    if name.eq("EX_BOOL") {
-        return EX_BOOL;
-    }
-    if name.eq("EX_IDENT") {
-        return EX_IDENT;
-    }
-    if name.eq("EX_BINARY") {
-        return EX_BINARY;
-    }
-    if name.eq("EX_UNARY") {
-        return EX_UNARY;
-    }
-    if name.eq("EX_CALL") {
-        return EX_CALL;
-    }
-    if name.eq("EX_MEMBER") {
-        return EX_MEMBER;
-    }
-    if name.eq("EX_PATH") {
-        return EX_PATH;
-    }
-    if name.eq("TY_NAMED") {
-        return TY_NAMED;
-    }
-    if name.eq("TY_POINTER") {
-        return TY_POINTER;
-    }
-    if name.eq("TY_BORROW") {
-        return TY_BORROW;
-    }
-    if name.eq("TY_BORROW_MUT") {
-        return TY_BORROW_MUT;
-    }
-    if name.eq("TY_GENERIC") {
-        return TY_GENERIC;
-    }
-    if name.eq("TY_RESULT") {
-        return TY_RESULT;
-    }
-    if name.eq("TY_OPTION") {
-        return TY_OPTION;
-    }
-    if name.eq("TY_OPT_RESULT") {
-        return TY_OPT_RESULT;
-    }
-    if name.eq("OP_ADD") {
-        return OP_ADD;
-    }
-    if name.eq("OP_SUB") {
-        return OP_SUB;
-    }
-    if name.eq("OP_MUL") {
-        return OP_MUL;
-    }
-    if name.eq("OP_EQ") {
-        return OP_EQ;
-    }
-    if name.eq("OP_NE") {
-        return OP_NE;
-    }
-    if name.eq("OP_LT") {
-        return OP_LT;
-    }
-    if name.eq("OP_GT") {
-        return OP_GT;
-    }
-    if name.eq("OP_AND") {
-        return OP_AND;
-    }
-    if name.eq("OP_OR") {
-        return OP_OR;
-    }
-    if name.eq("UN_NEG") {
-        return UN_NEG;
-    }
-    if name.eq("UN_NOT") {
-        return UN_NOT;
-    }
-    if name.eq("UN_DEREF") {
-        return UN_DEREF;
-    }
-    if name.eq("UN_ADDR") {
-        return UN_ADDR;
-    }
-    if name.eq("UN_ADDR_MUT") {
-        return UN_ADDR_MUT;
-    }
-    if name.eq("UN_BIT_NOT") {
-        return UN_BIT_NOT;
-    }
-    if name.eq("UN_TRY") {
-        return UN_TRY;
-    }
-    if name.eq("OP_LE") {
-        return OP_LE;
-    }
-    if name.eq("OP_GE") {
-        return OP_GE;
-    }
-    if name.eq("OP_DIV") {
-        return OP_DIV;
-    }
-    if name.eq("OP_MOD") {
-        return OP_MOD;
-    }
-    if name.eq("OP_COALESCE") {
-        return OP_COALESCE;
-    }
-    if name.eq("EX_STRUCT_LIT") {
-        return EX_STRUCT_LIT;
-    }
+    if name.eq("ST_LET") { return ST_LET; }
+    if name.eq("ST_RETURN") { return ST_RETURN; }
+    if name.eq("ST_EXPR") { return ST_EXPR; }
+    if name.eq("ST_IF") { return ST_IF; }
+    if name.eq("ST_WHILE") { return ST_WHILE; }
+    if name.eq("ST_BLOCK") { return ST_BLOCK; }
+    if name.eq("ST_FN") { return ST_FN; }
+    if name.eq("ST_BREAK") { return ST_BREAK; }
+    if name.eq("ST_CONTINUE") { return ST_CONTINUE; }
+    if name.eq("ST_STRUCT") { return ST_STRUCT; }
+    if name.eq("ST_IMPL") { return ST_IMPL; }
+    if name.eq("ST_CONST") { return ST_CONST; }
+    if name.eq("ST_FOR") { return ST_FOR; }
+    if name.eq("ST_ENUM") { return ST_ENUM; }
+    if name.eq("ST_TRAIT") { return ST_TRAIT; }
+    if name.eq("EX_INT") { return EX_INT; }
+    if name.eq("EX_STRING") { return EX_STRING; }
+    if name.eq("EX_BOOL") { return EX_BOOL; }
+    if name.eq("EX_IDENT") { return EX_IDENT; }
+    if name.eq("EX_BINARY") { return EX_BINARY; }
+    if name.eq("EX_UNARY") { return EX_UNARY; }
+    if name.eq("EX_CALL") { return EX_CALL; }
+    if name.eq("EX_MEMBER") { return EX_MEMBER; }
+    if name.eq("EX_PATH") { return EX_PATH; }
+    if name.eq("TY_NAMED") { return TY_NAMED; }
+    if name.eq("TY_POINTER") { return TY_POINTER; }
+    if name.eq("TY_BORROW") { return TY_BORROW; }
+    if name.eq("TY_BORROW_MUT") { return TY_BORROW_MUT; }
+    if name.eq("TY_GENERIC") { return TY_GENERIC; }
+    if name.eq("TY_RESULT") { return TY_RESULT; }
+    if name.eq("TY_OPTION") { return TY_OPTION; }
+    if name.eq("TY_OPT_RESULT") { return TY_OPT_RESULT; }
+    if name.eq("OP_ADD") { return OP_ADD; }
+    if name.eq("OP_SUB") { return OP_SUB; }
+    if name.eq("OP_MUL") { return OP_MUL; }
+    if name.eq("OP_EQ") { return OP_EQ; }
+    if name.eq("OP_NE") { return OP_NE; }
+    if name.eq("OP_LT") { return OP_LT; }
+    if name.eq("OP_GT") { return OP_GT; }
+    if name.eq("OP_AND") { return OP_AND; }
+    if name.eq("OP_OR") { return OP_OR; }
+    if name.eq("UN_NEG") { return UN_NEG; }
+    if name.eq("UN_NOT") { return UN_NOT; }
+    if name.eq("UN_DEREF") { return UN_DEREF; }
+    if name.eq("UN_ADDR") { return UN_ADDR; }
+    if name.eq("UN_ADDR_MUT") { return UN_ADDR_MUT; }
+    if name.eq("UN_BIT_NOT") { return UN_BIT_NOT; }
+    if name.eq("UN_TRY") { return UN_TRY; }
+    if name.eq("OP_LE") { return OP_LE; }
+    if name.eq("OP_GE") { return OP_GE; }
+    if name.eq("OP_DIV") { return OP_DIV; }
+    if name.eq("OP_MOD") { return OP_MOD; }
+    if name.eq("OP_COALESCE") { return OP_COALESCE; }
+    if name.eq("EX_STRUCT_LIT") { return EX_STRUCT_LIT; }
     return -1;
 }
 
@@ -531,12 +419,8 @@ pub fn interp_call(it: *Interp, fn_stmt: *Stmt, args: *Vector<IValue>) -> IValue
         for let i: i32 = 0; i < fn_stmt.fn_body.len(); i++ {
             let stmt: Stmt = fn_stmt.fn_body.get(i);
             interp_stmt(it, &stmt);
-            if it.control == CF_RETURN {
-                break;
-            }
-            if it.control == CF_ERROR {
-                break;
-            }
+            if it.control == CF_RETURN { break; }
+            if it.control == CF_ERROR { break; }
         }
     }
     let _: *HashMap<IValue> = it.scopes.pop();
@@ -552,32 +436,22 @@ pub fn interp_call(it: *Interp, fn_stmt: *Stmt, args: *Vector<IValue>) -> IValue
 
 // ---- stmt interpretation ---------------------------------------------
 pub fn interp_stmt(it: *Interp, s: *Stmt) {
-    if s == null {
-        return;
-    }
+    if s == null { return; }
     if s.line > 0 {
         it.current_macro_line = s.line;
         it.current_macro_col = s.column;
     }
     if s.kind == ST_LET || s.kind == ST_CONST {
         let mut v: IValue = iv_null();
-        if s.let_value != null {
-            v = interp_expr(it, s.let_value);
-        }
-        if it.control == CF_ERROR {
-            return;
-        }
+        if s.let_value != null { v = interp_expr(it, s.let_value); }
+        if it.control == CF_ERROR { return; }
         scope_define(it, s.name, v);
         return;
     }
     if s.kind == ST_RETURN {
         let mut v: IValue = iv_null();
-        if s.expr_value != null {
-            v = interp_expr(it, s.expr_value);
-        }
-        if it.control == CF_ERROR {
-            return;
-        }
+        if s.expr_value != null { v = interp_expr(it, s.expr_value); }
+        if it.control == CF_ERROR { return; }
         it.return_val = v;
         it.control = CF_RETURN;
         return;
@@ -594,9 +468,7 @@ pub fn interp_stmt(it: *Interp, s: *Stmt) {
     }
     if s.kind == ST_IF {
         let cond: IValue = interp_expr(it, s.cond);
-        if it.control == CF_ERROR {
-            return;
-        }
+        if it.control == CF_ERROR { return; }
         if cond.kind != IV_BOOL {
             it.err("if condition is not bool");
             return;
@@ -604,77 +476,53 @@ pub fn interp_stmt(it: *Interp, s: *Stmt) {
         if cond.b {
             interp_block(it, s.then_body);
         } else {
-            if s.else_body != null {
-                interp_block(it, s.else_body);
-            }
+            if s.else_body != null { interp_block(it, s.else_body); }
         }
         return;
     }
     if s.kind == ST_WHILE {
         while true {
             let cond: IValue = interp_expr(it, s.cond);
-            if it.control == CF_ERROR {
-                return;
-            }
+            if it.control == CF_ERROR { return; }
             if cond.kind != IV_BOOL {
                 it.err("while condition is not bool");
                 return;
             }
-            if !cond.b {
-                break;
-            }
+            if !cond.b { break; }
             interp_block(it, s.then_body);
-            if it.control == CF_RETURN || it.control == CF_ERROR {
-                return;
-            }
+            if it.control == CF_RETURN || it.control == CF_ERROR { return; }
             if it.control == CF_BREAK {
                 it.control = CF_NORMAL;
                 break;
             }
-            if it.control == CF_CONTINUE {
-                it.control = CF_NORMAL;
-            }
+            if it.control == CF_CONTINUE { it.control = CF_NORMAL; }
         }
         return;
     }
     if s.kind == ST_FOR {
-        if s.for_init != null {
-            interp_stmt(it, s.for_init);
-        }
-        if it.control == CF_ERROR {
-            return;
-        }
+        if s.for_init != null { interp_stmt(it, s.for_init); }
+        if it.control == CF_ERROR { return; }
         while true {
             if s.cond != null {
                 let cond: IValue = interp_expr(it, s.cond);
-                if it.control == CF_ERROR {
-                    return;
-                }
+                if it.control == CF_ERROR { return; }
                 if cond.kind != IV_BOOL {
                     it.err("for condition is not bool");
                     return;
                 }
-                if !cond.b {
-                    break;
-                }
+                if !cond.b { break; }
             }
             interp_block(it, s.then_body);
-            if it.control == CF_RETURN || it.control == CF_ERROR {
-                return;
-            }
+            if it.control == CF_RETURN || it.control == CF_ERROR { return; }
             if it.control == CF_BREAK {
                 it.control = CF_NORMAL;
                 break;
             }
-            if it.control == CF_CONTINUE {
-                it.control = CF_NORMAL;
-            }
+            if it.control == CF_CONTINUE { it.control = CF_NORMAL; }
             if s.for_step != null {
                 let _: IValue = interp_expr(it, s.for_step);
             }
-            if it.control == CF_ERROR {
-                return;
-            }
+            if it.control == CF_ERROR { return; }
         }
         return;
     }
@@ -690,69 +538,37 @@ pub fn interp_stmt(it: *Interp, s: *Stmt) {
 }
 
 fn interp_block(it: *Interp, body: *Vector<Stmt>) {
-    if body == null {
-        return;
-    }
+    if body == null { return; }
     let block_scope: *HashMap<IValue> = HashMap::new();
     it.scopes.push(block_scope);
     for let i: i32 = 0; i < body.len(); i++ {
         let s: Stmt = body.get(i);
         interp_stmt(it, &s);
-        if it.control != CF_NORMAL {
-            break;
-        }
+        if it.control != CF_NORMAL { break; }
     }
     let _: *HashMap<IValue> = it.scopes.pop();
 }
 
 // ---- expr interpretation ---------------------------------------------
 pub fn interp_expr(it: *Interp, e: *Expr) -> IValue {
-    if e == null {
-        return iv_null();
-    }
+    if e == null { return iv_null(); }
     if e.line > 0 {
         it.current_macro_line = e.line;
         it.current_macro_col = e.column;
     }
-    if e.kind == EX_INT {
-        return iv_int(e.int_val as i32);
-    }
-    if e.kind == EX_BOOL {
-        return iv_bool(e.bool_val);
-    }
-    if e.kind == EX_STRING {
-        return iv_string(e.str_val);
-    }
-    if e.kind == EX_NULL {
-        return iv_null();
-    }
-    if e.kind == EX_IDENT {
-        return scope_get(it, e.str_val);
-    }
-    if e.kind == EX_BINARY {
-        return interp_binop(it, e);
-    }
-    if e.kind == EX_UNARY {
-        return interp_unop(it, e);
-    }
-    if e.kind == EX_CALL {
-        return interp_call_expr(it, e);
-    }
-    if e.kind == EX_MEMBER {
-        return interp_member_read(it, e);
-    }
-    if e.kind == EX_INDEX {
-        return interp_index(it, e);
-    }
-    if e.kind == EX_ASSIGN {
-        return interp_assign(it, e);
-    }
-    if e.kind == EX_CAST {
-        return interp_cast(it, e);
-    }
-    if e.kind == EX_PATH {
-        return interp_path(it, e);
-    }
+    if e.kind == EX_INT { return iv_int(e.int_val as i32); }
+    if e.kind == EX_BOOL { return iv_bool(e.bool_val); }
+    if e.kind == EX_STRING { return iv_string(e.str_val); }
+    if e.kind == EX_NULL { return iv_null(); }
+    if e.kind == EX_IDENT { return scope_get(it, e.str_val); }
+    if e.kind == EX_BINARY { return interp_binop(it, e); }
+    if e.kind == EX_UNARY { return interp_unop(it, e); }
+    if e.kind == EX_CALL { return interp_call_expr(it, e); }
+    if e.kind == EX_MEMBER { return interp_member_read(it, e); }
+    if e.kind == EX_INDEX { return interp_index(it, e); }
+    if e.kind == EX_ASSIGN { return interp_assign(it, e); }
+    if e.kind == EX_CAST { return interp_cast(it, e); }
+    if e.kind == EX_PATH { return interp_path(it, e); }
     if e.kind == EX_MACRO {
         // Diagnostic-only println!/print!/format! invoked from a macro
         // body. Route through builtin_call which sinks them into
@@ -778,9 +594,7 @@ pub fn interp_expr(it: *Interp, e: *Expr) -> IValue {
             return iv_null();
         }
         let mut delta: i32 = 1;
-        if e.kind == EX_POSTDEC {
-            delta = -1;
-        }
+        if e.kind == EX_POSTDEC { delta = -1; }
         scope_assign(it, e.lhs.str_val, iv_int(old.i + delta));
         return old;
     }
@@ -792,52 +606,30 @@ fn interp_binop(it: *Interp, e: *Expr) -> IValue {
     // Short-circuit logical ops first.
     if e.op_code == OP_AND {
         let l: IValue = interp_expr(it, e.lhs);
-        if it.control == CF_ERROR {
-            return iv_null();
-        }
-        if l.kind != IV_BOOL || !l.b {
-            return iv_bool(false);
-        }
+        if it.control == CF_ERROR { return iv_null(); }
+        if l.kind != IV_BOOL || !l.b { return iv_bool(false); }
         let r: IValue = interp_expr(it, e.rhs);
-        if it.control == CF_ERROR {
-            return iv_null();
-        }
+        if it.control == CF_ERROR { return iv_null(); }
         return iv_bool(r.kind == IV_BOOL && r.b);
     }
     if e.op_code == OP_OR {
         let l: IValue = interp_expr(it, e.lhs);
-        if it.control == CF_ERROR {
-            return iv_null();
-        }
-        if l.kind == IV_BOOL && l.b {
-            return iv_bool(true);
-        }
+        if it.control == CF_ERROR { return iv_null(); }
+        if l.kind == IV_BOOL && l.b { return iv_bool(true); }
         let r: IValue = interp_expr(it, e.rhs);
-        if it.control == CF_ERROR {
-            return iv_null();
-        }
+        if it.control == CF_ERROR { return iv_null(); }
         return iv_bool(r.kind == IV_BOOL && r.b);
     }
     let l: IValue = interp_expr(it, e.lhs);
-    if it.control == CF_ERROR {
-        return iv_null();
-    }
+    if it.control == CF_ERROR { return iv_null(); }
     let r: IValue = interp_expr(it, e.rhs);
-    if it.control == CF_ERROR {
-        return iv_null();
-    }
+    if it.control == CF_ERROR { return iv_null(); }
     // String concat via `+` is NOT supported — Glide uses `.concat()`.
     // Comparison on strings via `eq` method, not `==`. So binary ops
     // here are int/bool only.
-    if e.op_code == OP_ADD {
-        return iv_int(l.i + r.i);
-    }
-    if e.op_code == OP_SUB {
-        return iv_int(l.i - r.i);
-    }
-    if e.op_code == OP_MUL {
-        return iv_int(l.i * r.i);
-    }
+    if e.op_code == OP_ADD { return iv_int(l.i + r.i); }
+    if e.op_code == OP_SUB { return iv_int(l.i - r.i); }
+    if e.op_code == OP_MUL { return iv_int(l.i * r.i); }
     if e.op_code == OP_DIV {
         if r.i == 0 {
             it.err("division by zero");
@@ -853,67 +645,37 @@ fn interp_binop(it: *Interp, e: *Expr) -> IValue {
         return iv_int(l.i % r.i);
     }
     if e.op_code == OP_EQ {
-        if l.kind == IV_INT && r.kind == IV_INT {
-            return iv_bool(l.i == r.i);
-        }
-        if l.kind == IV_BOOL && r.kind == IV_BOOL {
-            return iv_bool(l.b == r.b);
-        }
-        if l.kind == IV_NULL && r.kind == IV_NULL {
-            return iv_bool(true);
-        }
-        if l.kind == IV_NULL || r.kind == IV_NULL {
-            return iv_bool(l.kind == r.kind);
-        }
-        if l.kind == IV_PTR && r.kind == IV_PTR {
-            return iv_bool(l.p == r.p);
-        }
+        if l.kind == IV_INT && r.kind == IV_INT { return iv_bool(l.i == r.i); }
+        if l.kind == IV_BOOL && r.kind == IV_BOOL { return iv_bool(l.b == r.b); }
+        if l.kind == IV_NULL && r.kind == IV_NULL { return iv_bool(true); }
+        if l.kind == IV_NULL || r.kind == IV_NULL { return iv_bool(l.kind == r.kind); }
+        if l.kind == IV_PTR && r.kind == IV_PTR { return iv_bool(l.p == r.p); }
         return iv_bool(false);
     }
     if e.op_code == OP_NE {
         let eq: IValue = _eq_helper(l, r);
         return iv_bool(!eq.b);
     }
-    if e.op_code == OP_LT {
-        return iv_bool(l.i < r.i);
-    }
-    if e.op_code == OP_LE {
-        return iv_bool(l.i <= r.i);
-    }
-    if e.op_code == OP_GT {
-        return iv_bool(l.i > r.i);
-    }
-    if e.op_code == OP_GE {
-        return iv_bool(l.i >= r.i);
-    }
+    if e.op_code == OP_LT { return iv_bool(l.i < r.i); }
+    if e.op_code == OP_LE { return iv_bool(l.i <= r.i); }
+    if e.op_code == OP_GT { return iv_bool(l.i > r.i); }
+    if e.op_code == OP_GE { return iv_bool(l.i >= r.i); }
     it.err("unsupported binary op");
     return iv_null();
 }
 
 fn _eq_helper(l: IValue, r: IValue) -> IValue {
-    if l.kind == IV_INT && r.kind == IV_INT {
-        return iv_bool(l.i == r.i);
-    }
-    if l.kind == IV_BOOL && r.kind == IV_BOOL {
-        return iv_bool(l.b == r.b);
-    }
-    if l.kind == IV_NULL && r.kind == IV_NULL {
-        return iv_bool(true);
-    }
-    if l.kind == IV_NULL || r.kind == IV_NULL {
-        return iv_bool(l.kind == r.kind);
-    }
-    if l.kind == IV_PTR && r.kind == IV_PTR {
-        return iv_bool(l.p == r.p);
-    }
+    if l.kind == IV_INT && r.kind == IV_INT { return iv_bool(l.i == r.i); }
+    if l.kind == IV_BOOL && r.kind == IV_BOOL { return iv_bool(l.b == r.b); }
+    if l.kind == IV_NULL && r.kind == IV_NULL { return iv_bool(true); }
+    if l.kind == IV_NULL || r.kind == IV_NULL { return iv_bool(l.kind == r.kind); }
+    if l.kind == IV_PTR && r.kind == IV_PTR { return iv_bool(l.p == r.p); }
     return iv_bool(false);
 }
 
 fn interp_unop(it: *Interp, e: *Expr) -> IValue {
     let v: IValue = interp_expr(it, e.operand);
-    if it.control == CF_ERROR {
-        return iv_null();
-    }
+    if it.control == CF_ERROR { return iv_null(); }
     if e.op_code == UN_NEG {
         if v.kind != IV_INT {
             it.err("unary `-` requires int");
@@ -933,55 +695,35 @@ fn interp_unop(it: *Interp, e: *Expr) -> IValue {
     // there's nothing to deref/addr at runtime. Macro authors still
     // write them in source so AST-construction code reads cleanly
     // (e.g. `out.push(*stmt_fn(...))` or `body.push(*stmt_return(...))`).
-    if e.op_code == UN_DEREF || e.op_code == UN_ADDR || e.op_code == UN_ADDR_MUT {
-        return v;
-    }
+    if e.op_code == UN_DEREF || e.op_code == UN_ADDR || e.op_code == UN_ADDR_MUT { return v; }
     it.err("unsupported unary op: ".concat(e.op_code.to_string()));
     return iv_null();
 }
 
 fn interp_cast(it: *Interp, e: *Expr) -> IValue {
     let v: IValue = interp_expr(it, e.lhs);
-    if it.control == CF_ERROR {
-        return iv_null();
-    }
-    if e.cast_to == null {
-        return v;
-    }
-    if e.cast_to.kind != TY_NAMED {
-        return v;
-    }
+    if it.control == CF_ERROR { return iv_null(); }
+    if e.cast_to == null { return v; }
+    if e.cast_to.kind != TY_NAMED { return v; }
     let n: string = e.cast_to.name;
     if n.eq("int") || n.eq("i32") || n.eq("i64") {
-        if v.kind == IV_CHAR {
-            return iv_int(v.c.to_int());
-        }
+        if v.kind == IV_CHAR { return iv_int(v.c.to_int()); }
         return v;
     }
     if n.eq("char") {
-        if v.kind == IV_INT {
-            return iv_char(v.i as char);
-        }
+        if v.kind == IV_INT { return iv_char(v.i as char); }
         return v;
     }
-    if n.eq("bool") {
-        return v;
-    }
-    if n.eq("string") {
-        return v;
-    }
+    if n.eq("bool") { return v; }
+    if n.eq("string") { return v; }
     return v;
 }
 
 fn interp_index(it: *Interp, e: *Expr) -> IValue {
     let coll: IValue = interp_expr(it, e.lhs);
-    if it.control == CF_ERROR {
-        return iv_null();
-    }
+    if it.control == CF_ERROR { return iv_null(); }
     let idx: IValue = interp_expr(it, e.rhs);
-    if it.control == CF_ERROR {
-        return iv_null();
-    }
+    if it.control == CF_ERROR { return iv_null(); }
     if coll.kind != IV_VECTOR {
         it.err("index target is not a Vector");
         return iv_null();
@@ -999,9 +741,7 @@ fn interp_index(it: *Interp, e: *Expr) -> IValue {
 
 fn interp_assign(it: *Interp, e: *Expr) -> IValue {
     let rhs: IValue = interp_expr(it, e.rhs);
-    if it.control == CF_ERROR {
-        return iv_null();
-    }
+    if it.control == CF_ERROR { return iv_null(); }
     if e.lhs.kind == EX_IDENT {
         scope_assign(it, e.lhs.str_val, rhs);
         return rhs;
@@ -1038,9 +778,7 @@ fn interp_call_expr(it: *Interp, e: *Expr) -> IValue {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
             let v: IValue = interp_expr(it, &a);
-            if it.control == CF_ERROR {
-                return iv_null();
-            }
+            if it.control == CF_ERROR { return iv_null(); }
             args.push(v);
         }
     }
@@ -1048,9 +786,7 @@ fn interp_call_expr(it: *Interp, e: *Expr) -> IValue {
     if callee.kind == EX_IDENT {
         let name: string = callee.str_val;
         let ret: IValue = builtin_call(it, name, args);
-        if it.control != CF_ERROR {
-            return ret;
-        }
+        if it.control != CF_ERROR { return ret; }
         // builtin_call set CF_ERROR if name was unknown — try user fn.
         if it.user_fns.contains(name) {
             it.control = CF_NORMAL;
@@ -1070,9 +806,7 @@ fn interp_call_expr(it: *Interp, e: *Expr) -> IValue {
     // dispatch on its kind.
     if callee.kind == EX_MEMBER {
         let recv: IValue = interp_expr(it, callee.lhs);
-        if it.control == CF_ERROR {
-            return iv_null();
-        }
+        if it.control == CF_ERROR { return iv_null(); }
         return method_call(it, recv, callee.field, args);
     }
     it.err("unsupported call shape");
@@ -1081,9 +815,7 @@ fn interp_call_expr(it: *Interp, e: *Expr) -> IValue {
 
 fn interp_member_read(it: *Interp, e: *Expr) -> IValue {
     let recv: IValue = interp_expr(it, e.lhs);
-    if it.control == CF_ERROR {
-        return iv_null();
-    }
+    if it.control == CF_ERROR { return iv_null(); }
     return member_read(it, recv, e.field);
 }
 
@@ -1133,9 +865,7 @@ fn builtin_call(it: *Interp, name: string, args: *Vector<IValue>) -> IValue {
         let b: bool = _arg_bool(it, args, 0);
         return iv_ptr(expr_bool(b, 0, 0) as *void, "Expr");
     }
-    if name.eq("expr_null") {
-        return iv_ptr(expr_null(0, 0) as *void, "Expr");
-    }
+    if name.eq("expr_null") { return iv_ptr(expr_null(0, 0) as *void, "Expr"); }
     if name.eq("expr_ident") {
         // Hygiene: idents synthesised inside a macro get a per-call
         // suffix injected so they can't collide with caller-side
@@ -1277,9 +1007,7 @@ fn builtin_call(it: *Interp, name: string, args: *Vector<IValue>) -> IValue {
         let mut else_b: *Vector<Stmt> = null;
         if args.len() > 2 {
             let else_iv: IValue = args.get(2);
-            if else_iv.kind == IV_VECTOR {
-                else_b = _vec_to_stmt_vec(it, else_iv);
-            }
+            if else_iv.kind == IV_VECTOR { else_b = _vec_to_stmt_vec(it, else_iv); }
         }
         return iv_ptr(stmt_if(cond, then_b, else_b, 0, 0) as *void, "Stmt");
     }
@@ -1331,15 +1059,9 @@ fn builtin_call(it: *Interp, name: string, args: *Vector<IValue>) -> IValue {
         // the compiled malloc-and-copy path. Used by @handler to set
         // let-tys for `Json<C<T>>`-style nested-generic params.
         let t: *Type = _arg_ptr(it, args, 0, "Type") as *Type;
-        if t == null {
-            return iv_ptr(null as *void, "Type");
-        }
-        if t.kind != TY_GENERIC {
-            return iv_ptr(null as *void, "Type");
-        }
-        if t.args == null || t.args.len() == 0 {
-            return iv_ptr(null as *void, "Type");
-        }
+        if t == null { return iv_ptr(null as *void, "Type"); }
+        if t.kind != TY_GENERIC { return iv_ptr(null as *void, "Type"); }
+        if t.args == null || t.args.len() == 0 { return iv_ptr(null as *void, "Type"); }
         let inner: Type = t.args.get(0);
         let p: *Type = malloc(sizeof(Type)) as *Type;
         *p = inner;
@@ -1353,9 +1075,7 @@ fn builtin_call(it: *Interp, name: string, args: *Vector<IValue>) -> IValue {
         // interpreter's diagnostic channel, not to stdout.
         let mut out: string = "";
         for let i: i32 = 0; i < args.len(); i++ {
-            if i > 0 {
-                out = out.concat(" ");
-            }
+            if i > 0 { out = out.concat(" "); }
             out = out.concat(_iv_to_display(args.get(i)));
         }
         it.diagnostics.push(out);
@@ -1367,88 +1087,46 @@ fn builtin_call(it: *Interp, name: string, args: *Vector<IValue>) -> IValue {
 
 // ---- method dispatch on receiver kind --------------------------------
 fn method_call(it: *Interp, recv: IValue, name: string, args: *Vector<IValue>) -> IValue {
-    if recv.kind == IV_STRING {
-        return string_method(it, recv.s, name, args);
-    }
-    if recv.kind == IV_VECTOR {
-        return vector_method(it, recv.vec, name, args);
-    }
-    if recv.kind == IV_HASHMAP {
-        return hashmap_method(it, recv.map, name, args);
-    }
-    if recv.kind == IV_CHAR && name.eq("to_int") {
-        return iv_int(recv.c.to_int());
-    }
-    if recv.kind == IV_CHAR && name.eq("to_string") {
-        return iv_string(recv.c.to_string());
-    }
-    if recv.kind == IV_INT && name.eq("to_string") {
-        return iv_string(recv.i.to_string());
-    }
-    if recv.kind == IV_PTR {
-        return ptr_method(it, recv, name, args);
-    }
+    if recv.kind == IV_STRING { return string_method(it, recv.s, name, args); }
+    if recv.kind == IV_VECTOR { return vector_method(it, recv.vec, name, args); }
+    if recv.kind == IV_HASHMAP { return hashmap_method(it, recv.map, name, args); }
+    if recv.kind == IV_CHAR && name.eq("to_int") { return iv_int(recv.c.to_int()); }
+    if recv.kind == IV_CHAR && name.eq("to_string") { return iv_string(recv.c.to_string()); }
+    if recv.kind == IV_INT && name.eq("to_string") { return iv_string(recv.i.to_string()); }
+    if recv.kind == IV_PTR { return ptr_method(it, recv, name, args); }
     it.err("method `".concat(name).concat("` on unsupported receiver"));
     return iv_null();
 }
 
 fn string_method(it: *Interp, s: string, name: string, args: *Vector<IValue>) -> IValue {
-    if name.eq("len") {
-        return iv_int(s.len());
-    }
-    if name.eq("is_empty") {
-        return iv_bool(s.len() == 0);
-    }
-    if name.eq("eq") {
-        return iv_bool(s.eq(_arg_string(it, args, 0)));
-    }
-    if name.eq("concat") {
-        return iv_string(s.concat(_arg_string(it, args, 0)));
-    }
-    if name.eq("starts_with") {
-        return iv_bool(s.starts_with(_arg_string(it, args, 0)));
-    }
-    if name.eq("ends_with") {
-        return iv_bool(s.ends_with(_arg_string(it, args, 0)));
-    }
-    if name.eq("contains") {
-        return iv_bool(s.contains(_arg_string(it, args, 0)));
-    }
-    if name.eq("index_of") {
-        return iv_int(s.index_of(_arg_string(it, args, 0)));
-    }
+    if name.eq("len") { return iv_int(s.len()); }
+    if name.eq("is_empty") { return iv_bool(s.len() == 0); }
+    if name.eq("eq") { return iv_bool(s.eq(_arg_string(it, args, 0))); }
+    if name.eq("concat") { return iv_string(s.concat(_arg_string(it, args, 0))); }
+    if name.eq("starts_with") { return iv_bool(s.starts_with(_arg_string(it, args, 0))); }
+    if name.eq("ends_with") { return iv_bool(s.ends_with(_arg_string(it, args, 0))); }
+    if name.eq("contains") { return iv_bool(s.contains(_arg_string(it, args, 0))); }
+    if name.eq("index_of") { return iv_int(s.index_of(_arg_string(it, args, 0))); }
     if name.eq("substring") {
         let a: i32 = _arg_int(it, args, 0);
         let b: i32 = _arg_int(it, args, 1);
         return iv_string(s.substring(a, b));
     }
-    if name.eq("to_upper") {
-        return iv_string(s.to_upper());
-    }
-    if name.eq("to_lower") {
-        return iv_string(s.to_lower());
-    }
-    if name.eq("trim") {
-        return iv_string(s.trim());
-    }
+    if name.eq("to_upper") { return iv_string(s.to_upper()); }
+    if name.eq("to_lower") { return iv_string(s.to_lower()); }
+    if name.eq("trim") { return iv_string(s.trim()); }
     if name.eq("at") {
         let i: i32 = _arg_int(it, args, 0);
         return iv_char(s.at(i));
     }
-    if name.eq("to_string") {
-        return iv_string(s);
-    }
+    if name.eq("to_string") { return iv_string(s); }
     it.err("string has no method `".concat(name).concat("`"));
     return iv_null();
 }
 
 fn vector_method(it: *Interp, v: *Vector<IValue>, name: string, args: *Vector<IValue>) -> IValue {
-    if name.eq("len") {
-        return iv_int(v.len());
-    }
-    if name.eq("is_empty") {
-        return iv_bool(v.len() == 0);
-    }
+    if name.eq("len") { return iv_int(v.len()); }
+    if name.eq("is_empty") { return iv_bool(v.len() == 0); }
     if name.eq("push") {
         if args.len() < 1 {
             it.err("push requires 1 arg");
@@ -1458,9 +1136,7 @@ fn vector_method(it: *Interp, v: *Vector<IValue>, name: string, args: *Vector<IV
         return iv_null();
     }
     if name.eq("pop") {
-        if v.len() == 0 {
-            return iv_null();
-        }
+        if v.len() == 0 { return iv_null(); }
         return v.pop();
     }
     if name.eq("get") {
@@ -1493,15 +1169,9 @@ fn vector_method(it: *Interp, v: *Vector<IValue>, name: string, args: *Vector<IV
 }
 
 fn hashmap_method(it: *Interp, m: *HashMap<IValue>, name: string, args: *Vector<IValue>) -> IValue {
-    if name.eq("len") {
-        return iv_int(m.len());
-    }
-    if name.eq("is_empty") {
-        return iv_bool(m.is_empty());
-    }
-    if name.eq("contains") {
-        return iv_bool(m.contains(_arg_string(it, args, 0)));
-    }
+    if name.eq("len") { return iv_int(m.len()); }
+    if name.eq("is_empty") { return iv_bool(m.is_empty()); }
+    if name.eq("contains") { return iv_bool(m.contains(_arg_string(it, args, 0))); }
     if name.eq("get") {
         let k: string = _arg_string(it, args, 0);
         if !m.contains(k) {
@@ -1519,9 +1189,7 @@ fn hashmap_method(it: *Interp, m: *HashMap<IValue>, name: string, args: *Vector<
         m.insert(k, args.get(1));
         return iv_null();
     }
-    if name.eq("remove") {
-        return iv_bool(m.remove(_arg_string(it, args, 0)));
-    }
+    if name.eq("remove") { return iv_bool(m.remove(_arg_string(it, args, 0))); }
     if name.eq("clear") {
         m.clear();
         return iv_null();
@@ -1538,57 +1206,29 @@ fn hashmap_method(it: *Interp, m: *HashMap<IValue>, name: string, args: *Vector<
 // IV_VECTOR (but the underlying storage stays the compiler-owned
 // Vector — reads + iteration only, no push from inside the macro).
 fn member_read(it: *Interp, recv: IValue, field: string) -> IValue {
-    if recv.kind == IV_VECTOR && field.eq("len") {
-        return iv_int(recv.vec.len());
-    }
-    if recv.kind == IV_HASHMAP && field.eq("len") {
-        return iv_int(recv.map.len());
-    }
+    if recv.kind == IV_VECTOR && field.eq("len") { return iv_int(recv.vec.len()); }
+    if recv.kind == IV_HASHMAP && field.eq("len") { return iv_int(recv.map.len()); }
     if recv.kind != IV_PTR {
         it.err("field access on a non-pointer value");
         return iv_null();
     }
-    if recv.ty_tag.eq("Stmt") {
-        return stmt_field(it, recv.p as *Stmt, field);
-    }
-    if recv.ty_tag.eq("Expr") {
-        return expr_field(it, recv.p as *Expr, field);
-    }
-    if recv.ty_tag.eq("Type") {
-        return type_field(it, recv.p as *Type, field);
-    }
-    if recv.ty_tag.eq("Field") {
-        return field_field(it, recv.p as *Field, field);
-    }
-    if recv.ty_tag.eq("Param") {
-        return param_field(it, recv.p as *Param, field);
-    }
-    if recv.ty_tag.eq("Attr") {
-        return attr_field(it, recv.p as *Attr, field);
-    }
+    if recv.ty_tag.eq("Stmt") { return stmt_field(it, recv.p as *Stmt, field); }
+    if recv.ty_tag.eq("Expr") { return expr_field(it, recv.p as *Expr, field); }
+    if recv.ty_tag.eq("Type") { return type_field(it, recv.p as *Type, field); }
+    if recv.ty_tag.eq("Field") { return field_field(it, recv.p as *Field, field); }
+    if recv.ty_tag.eq("Param") { return param_field(it, recv.p as *Param, field); }
+    if recv.ty_tag.eq("Attr") { return attr_field(it, recv.p as *Attr, field); }
     it.err("unknown ptr tag: ".concat(recv.ty_tag));
     return iv_null();
 }
 
 fn stmt_field(it: *Interp, s: *Stmt, f: string) -> IValue {
-    if s == null {
-        return iv_null();
-    }
-    if f.eq("kind") {
-        return iv_int(s.kind);
-    }
-    if f.eq("name") {
-        return iv_string(s.name);
-    }
-    if f.eq("line") {
-        return iv_int(s.line);
-    }
-    if f.eq("column") {
-        return iv_int(s.column);
-    }
-    if f.eq("is_pub") {
-        return iv_bool(s.is_pub);
-    }
+    if s == null { return iv_null(); }
+    if f.eq("kind") { return iv_int(s.kind); }
+    if f.eq("name") { return iv_string(s.name); }
+    if f.eq("line") { return iv_int(s.line); }
+    if f.eq("column") { return iv_int(s.column); }
+    if f.eq("is_pub") { return iv_bool(s.is_pub); }
     if f.eq("struct_fields") {
         // Wrap the Vector<Field> as IV_VECTOR<IValue> by lifting each
         // Field into a fresh IV_PTR.
@@ -1625,9 +1265,7 @@ fn stmt_field(it: *Interp, s: *Stmt, f: string) -> IValue {
         return iv_vector(out);
     }
     if f.eq("fn_ret_ty") {
-        if s.fn_ret_ty == null {
-            return iv_null();
-        }
+        if s.fn_ret_ty == null { return iv_null(); }
         return iv_ptr(s.fn_ret_ty as *void, "Type");
     }
     if f.eq("fn_params") {
@@ -1659,49 +1297,25 @@ fn stmt_field(it: *Interp, s: *Stmt, f: string) -> IValue {
 }
 
 fn expr_field(it: *Interp, e: *Expr, f: string) -> IValue {
-    if e == null {
-        return iv_null();
-    }
-    if f.eq("kind") {
-        return iv_int(e.kind);
-    }
-    if f.eq("int_val") {
-        return iv_int(e.int_val as i32);
-    }
-    if f.eq("str_val") {
-        return iv_string(e.str_val);
-    }
-    if f.eq("bool_val") {
-        return iv_bool(e.bool_val);
-    }
-    if f.eq("op_code") {
-        return iv_int(e.op_code);
-    }
-    if f.eq("line") {
-        return iv_int(e.line);
-    }
-    if f.eq("column") {
-        return iv_int(e.column);
-    }
-    if f.eq("field") {
-        return iv_string(e.field);
-    }
+    if e == null { return iv_null(); }
+    if f.eq("kind") { return iv_int(e.kind); }
+    if f.eq("int_val") { return iv_int(e.int_val as i32); }
+    if f.eq("str_val") { return iv_string(e.str_val); }
+    if f.eq("bool_val") { return iv_bool(e.bool_val); }
+    if f.eq("op_code") { return iv_int(e.op_code); }
+    if f.eq("line") { return iv_int(e.line); }
+    if f.eq("column") { return iv_int(e.column); }
+    if f.eq("field") { return iv_string(e.field); }
     if f.eq("lhs") {
-        if e.lhs == null {
-            return iv_null();
-        }
+        if e.lhs == null { return iv_null(); }
         return iv_ptr(e.lhs as *void, "Expr");
     }
     if f.eq("rhs") {
-        if e.rhs == null {
-            return iv_null();
-        }
+        if e.rhs == null { return iv_null(); }
         return iv_ptr(e.rhs as *void, "Expr");
     }
     if f.eq("operand") {
-        if e.operand == null {
-            return iv_null();
-        }
+        if e.operand == null { return iv_null(); }
         return iv_ptr(e.operand as *void, "Expr");
     }
     it.err("Expr has no field `".concat(f).concat("`"));
@@ -1709,19 +1323,11 @@ fn expr_field(it: *Interp, e: *Expr, f: string) -> IValue {
 }
 
 fn type_field(it: *Interp, t: *Type, f: string) -> IValue {
-    if t == null {
-        return iv_null();
-    }
-    if f.eq("kind") {
-        return iv_int(t.kind);
-    }
-    if f.eq("name") {
-        return iv_string(t.name);
-    }
+    if t == null { return iv_null(); }
+    if f.eq("kind") { return iv_int(t.kind); }
+    if f.eq("name") { return iv_string(t.name); }
     if f.eq("inner") {
-        if t.inner == null {
-            return iv_null();
-        }
+        if t.inner == null { return iv_null(); }
         return iv_ptr(t.inner as *void, "Type");
     }
     if f.eq("args") {
@@ -1741,36 +1347,22 @@ fn type_field(it: *Interp, t: *Type, f: string) -> IValue {
 }
 
 fn field_field(it: *Interp, fld: *Field, f: string) -> IValue {
-    if fld == null {
-        return iv_null();
-    }
-    if f.eq("name") {
-        return iv_string(fld.name);
-    }
+    if fld == null { return iv_null(); }
+    if f.eq("name") { return iv_string(fld.name); }
     if f.eq("ty") {
-        if fld.ty == null {
-            return iv_null();
-        }
+        if fld.ty == null { return iv_null(); }
         return iv_ptr(fld.ty as *void, "Type");
     }
-    if f.eq("is_pub") {
-        return iv_bool(fld.is_pub);
-    }
+    if f.eq("is_pub") { return iv_bool(fld.is_pub); }
     it.err("Field has no field `".concat(f).concat("`"));
     return iv_null();
 }
 
 fn param_field(it: *Interp, p: *Param, f: string) -> IValue {
-    if p == null {
-        return iv_null();
-    }
-    if f.eq("name") {
-        return iv_string(p.name);
-    }
+    if p == null { return iv_null(); }
+    if f.eq("name") { return iv_string(p.name); }
     if f.eq("ty") {
-        if p.ty == null {
-            return iv_null();
-        }
+        if p.ty == null { return iv_null(); }
         return iv_ptr(p.ty as *void, "Type");
     }
     it.err("Param has no field `".concat(f).concat("`"));
@@ -1778,18 +1370,10 @@ fn param_field(it: *Interp, p: *Param, f: string) -> IValue {
 }
 
 fn attr_field(it: *Interp, a: *Attr, f: string) -> IValue {
-    if a == null {
-        return iv_null();
-    }
-    if f.eq("name") {
-        return iv_string(a.name);
-    }
-    if f.eq("line") {
-        return iv_int(a.line);
-    }
-    if f.eq("column") {
-        return iv_int(a.column);
-    }
+    if a == null { return iv_null(); }
+    if f.eq("name") { return iv_string(a.name); }
+    if f.eq("line") { return iv_int(a.line); }
+    if f.eq("column") { return iv_int(a.column); }
     if f.eq("args") {
         let out: *Vector<IValue> = Vector::new();
         if a.args != null {
@@ -1858,9 +1442,7 @@ fn _arg_bool(it: *Interp, args: *Vector<IValue>, i: i32) -> bool {
 // stmts in the output).
 fn _vec_to_stmt_vec(_it: *Interp, v: IValue) -> *Vector<Stmt> {
     let out: *Vector<Stmt> = Vector::new();
-    if v.kind != IV_VECTOR {
-        return out;
-    }
+    if v.kind != IV_VECTOR { return out; }
     for let i: i32 = 0; i < v.vec.len(); i++ {
         let elem: IValue = v.vec.get(i);
         if elem.kind == IV_PTR && elem.ty_tag.eq("Stmt") && elem.p != null {
@@ -1873,9 +1455,7 @@ fn _vec_to_stmt_vec(_it: *Interp, v: IValue) -> *Vector<Stmt> {
 
 fn _vec_to_expr_vec(_it: *Interp, v: IValue) -> *Vector<Expr> {
     let out: *Vector<Expr> = Vector::new();
-    if v.kind != IV_VECTOR {
-        return out;
-    }
+    if v.kind != IV_VECTOR { return out; }
     for let i: i32 = 0; i < v.vec.len(); i++ {
         let elem: IValue = v.vec.get(i);
         if elem.kind == IV_PTR && elem.ty_tag.eq("Expr") && elem.p != null {
@@ -1888,9 +1468,7 @@ fn _vec_to_expr_vec(_it: *Interp, v: IValue) -> *Vector<Expr> {
 
 fn _vec_to_param_vec(_it: *Interp, v: IValue) -> *Vector<Param> {
     let out: *Vector<Param> = Vector::new();
-    if v.kind != IV_VECTOR {
-        return out;
-    }
+    if v.kind != IV_VECTOR { return out; }
     for let i: i32 = 0; i < v.vec.len(); i++ {
         let elem: IValue = v.vec.get(i);
         if elem.kind == IV_PTR && elem.ty_tag.eq("Param") && elem.p != null {
@@ -1903,9 +1481,7 @@ fn _vec_to_param_vec(_it: *Interp, v: IValue) -> *Vector<Param> {
 
 fn _vec_to_field_vec(_it: *Interp, v: IValue) -> *Vector<Field> {
     let out: *Vector<Field> = Vector::new();
-    if v.kind != IV_VECTOR {
-        return out;
-    }
+    if v.kind != IV_VECTOR { return out; }
     for let i: i32 = 0; i < v.vec.len(); i++ {
         let elem: IValue = v.vec.get(i);
         if elem.kind == IV_PTR && elem.ty_tag.eq("Field") && elem.p != null {
@@ -1918,14 +1494,10 @@ fn _vec_to_field_vec(_it: *Interp, v: IValue) -> *Vector<Field> {
 
 fn _vec_to_string_vec(_it: *Interp, v: IValue) -> *Vector<string> {
     let out: *Vector<string> = Vector::new();
-    if v.kind != IV_VECTOR {
-        return out;
-    }
+    if v.kind != IV_VECTOR { return out; }
     for let i: i32 = 0; i < v.vec.len(); i++ {
         let elem: IValue = v.vec.get(i);
-        if elem.kind == IV_STRING {
-            out.push(elem.s);
-        }
+        if elem.kind == IV_STRING { out.push(elem.s); }
     }
     return out;
 }
@@ -1936,9 +1508,7 @@ fn _arg_ptr(it: *Interp, args: *Vector<IValue>, i: i32, want_tag: string) -> *vo
         return null;
     }
     let v: IValue = args.get(i);
-    if v.kind == IV_NULL {
-        return null;
-    }
+    if v.kind == IV_NULL { return null; }
     if v.kind != IV_PTR {
         it.err("expected pointer arg");
         return null;
@@ -1952,29 +1522,15 @@ fn _arg_ptr(it: *Interp, args: *Vector<IValue>, i: i32, want_tag: string) -> *vo
 
 // ---- value display (for diagnostic println) -------------------------
 fn _iv_to_display(v: IValue) -> string {
-    if v.kind == IV_NULL {
-        return "null";
-    }
-    if v.kind == IV_INT {
-        return v.i.to_string();
-    }
+    if v.kind == IV_NULL { return "null"; }
+    if v.kind == IV_INT { return v.i.to_string(); }
     if v.kind == IV_BOOL {
-        if v.b {
-            return "true";
-        }
+        if v.b { return "true"; }
         return "false";
     }
-    if v.kind == IV_STRING {
-        return v.s;
-    }
-    if v.kind == IV_PTR {
-        return "<ptr:".concat(v.ty_tag).concat(">");
-    }
-    if v.kind == IV_VECTOR {
-        return "<vector len=".concat(v.vec.len().to_string()).concat(">");
-    }
-    if v.kind == IV_HASHMAP {
-        return "<hashmap len=".concat(v.map.len().to_string()).concat(">");
-    }
+    if v.kind == IV_STRING { return v.s; }
+    if v.kind == IV_PTR { return "<ptr:".concat(v.ty_tag).concat(">"); }
+    if v.kind == IV_VECTOR { return "<vector len=".concat(v.vec.len().to_string()).concat(">"); }
+    if v.kind == IV_HASHMAP { return "<hashmap len=".concat(v.map.len().to_string()).concat(">"); }
     return "<value>";
 }
