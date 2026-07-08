@@ -1001,25 +1001,47 @@ fn collect_calls_expr(e: *Expr, out: *HashMap<bool>) {
 
 // `let mut x` where x is never reassigned. The `mut` is noise.
 pub fn analysis_unnecessary_mut(t: *Typer, program: *Vector<Stmt>) {
+    // Methods taking `&mut self`, by NAME across every impl: a call `x.m()`
+    // is an implicit `&mut x` — the typer now REQUIRES the binding to be
+    // mut — so the warning must never advise deleting it. Name-level is an
+    // over-approximation across types; suppressing a warning is harmless,
+    // advising a removal that re-errors is not.
+    let mutself: *HashMap<bool> = HashMap::new();
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind != ST_IMPL || s.impl_methods == null {
+            continue;
+        }
+        for let j: i32 = 0; j < s.impl_methods.len(); j++ {
+            let m: Stmt = s.impl_methods.get(j);
+            if m.kind != ST_FN || m.name == null || m.fn_params == null || m.fn_params.len() == 0 {
+                continue;
+            }
+            let p0: Param = m.fn_params.get(0);
+            if p0.ty != null && p0.ty.kind == TY_BORROW_MUT {
+                mutself.insert(m.name, true);
+            }
+        }
+    }
     for let i: i32 = 0; i < program.len(); i++ {
         let s: Stmt = program.get(i);
         if s.kind == ST_FN && s.fn_body != null {
             t.current_origin = s.origin;
-            check_mut_body(t, s.fn_body);
+            check_mut_body(t, s.fn_body, mutself);
         }
         if s.kind == ST_IMPL && s.impl_methods != null {
             t.current_origin = s.origin;
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
                 if m.fn_body != null {
-                    check_mut_body(t, m.fn_body);
+                    check_mut_body(t, m.fn_body, mutself);
                 }
             }
         }
     }
 }
 
-fn check_mut_body(t: *Typer, body: *Vector<Stmt>) {
+fn check_mut_body(t: *Typer, body: *Vector<Stmt>, mutself: *HashMap<bool>) {
     let n: i32 = body.len();
     for let i: i32 = 0; i < n; i++ {
         let s: Stmt = body.get(i);
@@ -1027,7 +1049,7 @@ fn check_mut_body(t: *Typer, body: *Vector<Stmt>) {
             let mut reassigned: bool = false;
             for let j: i32 = i + 1; j < n; j++ {
                 let s2: Stmt = body.get(j);
-                if stmt_reassigns(&s2, s.name) {
+                if stmt_reassigns(&s2, s.name, mutself) {
                     reassigned = true;
                     break;
                 }
@@ -1039,42 +1061,42 @@ fn check_mut_body(t: *Typer, body: *Vector<Stmt>) {
             }
         }
         if s.then_body != null {
-            check_mut_body(t, s.then_body);
+            check_mut_body(t, s.then_body, mutself);
         }
         if s.else_body != null {
-            check_mut_body(t, s.else_body);
+            check_mut_body(t, s.else_body, mutself);
         }
         if s.kind == ST_SELECT && s.select_arms != null {
             for let k: i32 = 0; k < s.select_arms.len(); k++ {
                 let arm: SelectArm = s.select_arms.get(k);
                 if arm.body != null {
-                    check_mut_body(t, arm.body);
+                    check_mut_body(t, arm.body, mutself);
                 }
             }
         }
     }
 }
 
-fn stmt_reassigns(s: *Stmt, name: string) -> bool {
+fn stmt_reassigns(s: *Stmt, name: string, mutself: *HashMap<bool>) -> bool {
     if s == null {
         return false;
     }
-    if s.expr_value != null && expr_reassigns(s.expr_value, name) {
+    if s.expr_value != null && expr_reassigns(s.expr_value, name, mutself) {
         return true;
     }
-    if s.let_value != null && expr_reassigns(s.let_value, name) {
+    if s.let_value != null && expr_reassigns(s.let_value, name, mutself) {
         return true;
     }
-    if s.cond != null && expr_reassigns(s.cond, name) {
+    if s.cond != null && expr_reassigns(s.cond, name, mutself) {
         return true;
     }
-    if s.for_step != null && expr_reassigns(s.for_step, name) {
+    if s.for_step != null && expr_reassigns(s.for_step, name, mutself) {
         return true;
     }
     if s.then_body != null {
         for let i: i32 = 0; i < s.then_body.len(); i++ {
             let b: Stmt = s.then_body.get(i);
-            if stmt_reassigns(&b, name) {
+            if stmt_reassigns(&b, name, mutself) {
                 return true;
             }
         }
@@ -1082,7 +1104,7 @@ fn stmt_reassigns(s: *Stmt, name: string) -> bool {
     if s.else_body != null {
         for let i: i32 = 0; i < s.else_body.len(); i++ {
             let b: Stmt = s.else_body.get(i);
-            if stmt_reassigns(&b, name) {
+            if stmt_reassigns(&b, name, mutself) {
                 return true;
             }
         }
@@ -1090,13 +1112,13 @@ fn stmt_reassigns(s: *Stmt, name: string) -> bool {
     if s.kind == ST_SELECT && s.select_arms != null {
         for let i: i32 = 0; i < s.select_arms.len(); i++ {
             let arm: SelectArm = s.select_arms.get(i);
-            if arm.send_value != null && expr_reassigns(arm.send_value, name) {
+            if arm.send_value != null && expr_reassigns(arm.send_value, name, mutself) {
                 return true;
             }
             if arm.body != null {
                 for let j: i32 = 0; j < arm.body.len(); j++ {
                     let b: Stmt = arm.body.get(j);
-                    if stmt_reassigns(&b, name) {
+                    if stmt_reassigns(&b, name, mutself) {
                         return true;
                     }
                 }
@@ -1136,7 +1158,7 @@ fn _write_root_name(e: *Expr) -> string {
     return "";
 }
 
-fn expr_reassigns(e: *Expr, name: string) -> bool {
+fn expr_reassigns(e: *Expr, name: string, mutself: *HashMap<bool>) -> bool {
     if e == null {
         return false;
     }
@@ -1151,19 +1173,27 @@ fn expr_reassigns(e: *Expr, name: string) -> bool {
     if e.kind == EX_UNARY && (e.op_code == UN_ADDR || e.op_code == UN_ADDR_MUT) && e.operand != null && e.operand.kind == EX_IDENT && e.operand.str_val.eq(name) {
         return true;
     }
-    if e.lhs != null && expr_reassigns(e.lhs, name) {
+    // `name.m(...)` where some impl's `m` takes `&mut self`: the call is an
+    // implicit `&mut name` (the typer enforces the mut now), so the mut is
+    // used — never advise deleting it.
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.lhs != null
+        && e.lhs.lhs.kind == EX_IDENT && e.lhs.lhs.str_val != null && e.lhs.lhs.str_val.eq(name)
+        && e.lhs.field != null && mutself != null && mutself.contains(e.lhs.field) {
         return true;
     }
-    if e.rhs != null && expr_reassigns(e.rhs, name) {
+    if e.lhs != null && expr_reassigns(e.lhs, name, mutself) {
         return true;
     }
-    if e.operand != null && expr_reassigns(e.operand, name) {
+    if e.rhs != null && expr_reassigns(e.rhs, name, mutself) {
+        return true;
+    }
+    if e.operand != null && expr_reassigns(e.operand, name, mutself) {
         return true;
     }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {
             let a: Expr = e.args.get(i);
-            if expr_reassigns(&a, name) {
+            if expr_reassigns(&a, name, mutself) {
                 return true;
             }
         }
