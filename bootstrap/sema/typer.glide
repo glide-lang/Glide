@@ -888,6 +888,9 @@ pub struct Typer {
     pub module_consts: *HashMap<bool>,
     pub borrows: *Vector<BorrowEvent>, // active let-bound borrows; save/restore per block
     pub current_ret: *Type,
+    // Body of the fn currently being checked (for the 2B value-copy escape
+    // walker _let_binding_escapes). null outside a fn body => conservative MOVE.
+    pub cur_fn_body: *Vector<Stmt>,
     // Type parameters of the enclosing fn (e.g. `["T", "U"]`). Used by
     // EX_PATH resolution: `T::method(v)` is valid inside a `<T: Trait>`
     // body when T is one of these. Null/empty outside any generic fn.
@@ -1707,6 +1710,7 @@ impl Typer {
         let rel: *Vector<DiagRelated> = Vector::new();
         t.related = rel;
         t.current_ret = null;
+        t.cur_fn_body = null;
         t.current_type_params = null;
         t.impl_type_params = null;
         t.current_origin = "";
@@ -3328,6 +3332,87 @@ fn _stmt_uses_name(s: *Stmt, name: string) -> bool {
     return false;
 }
 
+// ---- Value-copy escape walker (increment 2B) -----------------------------
+// Does the binding `name` ESCAPE its function — i.e. could a copy of it outlive
+// the value it was copied from? A binding is always declared in the source's
+// scope or an inner one, so it can only outlive the source by leaving the fn:
+// `return name`, passing `name` by value to a call, embedding it in a struct
+// literal, storing it into a place, or re-aliasing `let c = name`. A projection
+// READ (`name.f`, `name.f.g`, `name[i]`) or a method receiver (`name.m(..)`)
+// does NOT escape name (it reads/borrows). On any doubt a bare `name` ident is
+// reached => escape (conservative => keep the MOVE). Used to relax the
+// move-on-rebind so a CONTAINED copy (`let u2 = u; let u3 = u`) leaves u usable.
+fn _let_esc_args(args: *Vector<Expr>, name: string) -> bool {
+    if args == null { return false; }
+    for let i: i32 = 0; i < args.len(); i++ {
+        let a: Expr = args.get(i);
+        if _let_esc_expr(&a, name) { return true; }
+    }
+    return false;
+}
+fn _let_esc_expr(e: *Expr, name: string) -> bool {
+    if e == null { return false; }
+    // A bare value use of `name` escapes.
+    if e.kind == EX_IDENT { return e.str_val != null && e.str_val.eq(name); }
+    // `name.field` / `name.field.g` — reading a field, NOT an escape of name.
+    if e.kind == EX_MEMBER && e.lhs != null && e.lhs.kind == EX_IDENT && e.lhs.str_val != null && e.lhs.str_val.eq(name) {
+        return false;
+    }
+    // `name[i]` — indexing name; not an escape of name, but the index may use name.
+    if e.kind == EX_INDEX && e.lhs != null && e.lhs.kind == EX_IDENT && e.lhs.str_val != null && e.lhs.str_val.eq(name) {
+        return _let_esc_expr(e.rhs, name);
+    }
+    // `name.method(args)` — receiver is a borrow/read, not an escape; scan args.
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER
+        && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT && e.lhs.lhs.str_val != null && e.lhs.lhs.str_val.eq(name) {
+        return _let_esc_args(e.args, name);
+    }
+    if _let_esc_expr(e.lhs, name) { return true; }
+    if _let_esc_expr(e.rhs, name) { return true; }
+    if _let_esc_expr(e.operand, name) { return true; }
+    if _let_esc_args(e.args, name) { return true; }
+    if e.fn_expr_body != null {
+        for let i: i32 = 0; i < e.fn_expr_body.len(); i++ {
+            let b: Stmt = e.fn_expr_body.get(i);
+            if _let_esc_stmt(&b, name) { return true; }
+        }
+    }
+    if e.match_arms != null {
+        for let i: i32 = 0; i < e.match_arms.len(); i++ {
+            let ar: MatchArm = e.match_arms.get(i);
+            if _let_esc_expr(ar.lit, name) { return true; }
+            if ar.body != null {
+                for let j: i32 = 0; j < ar.body.len(); j++ { let bs: Stmt = ar.body.get(j); if _let_esc_stmt(&bs, name) { return true; } }
+            }
+        }
+    }
+    return false;
+}
+fn _let_esc_stmt(s: *Stmt, name: string) -> bool {
+    if s == null { return false; }
+    if _let_esc_expr(s.let_value, name) { return true; }
+    if _let_esc_expr(s.expr_value, name) { return true; }
+    if _let_esc_expr(s.cond, name) { return true; }
+    if _let_esc_expr(s.for_step, name) { return true; }
+    if _let_esc_expr(s.scrutinee, name) { return true; }
+    if s.for_init != null && _let_esc_stmt(s.for_init, name) { return true; }
+    if s.then_body != null { for let i: i32 = 0; i < s.then_body.len(); i++ { let b: Stmt = s.then_body.get(i); if _let_esc_stmt(&b, name) { return true; } } }
+    if s.else_body != null { for let i: i32 = 0; i < s.else_body.len(); i++ { let b: Stmt = s.else_body.get(i); if _let_esc_stmt(&b, name) { return true; } } }
+    if s.fn_body != null { for let i: i32 = 0; i < s.fn_body.len(); i++ { let b: Stmt = s.fn_body.get(i); if _let_esc_stmt(&b, name) { return true; } } }
+    if s.arms != null { for let i: i32 = 0; i < s.arms.len(); i++ { let ar: MatchArm = s.arms.get(i); if _let_esc_expr(ar.lit, name) { return true; } if ar.body != null { for let j: i32 = 0; j < ar.body.len(); j++ { let bs: Stmt = ar.body.get(j); if _let_esc_stmt(&bs, name) { return true; } } } } }
+    if s.select_arms != null { for let i: i32 = 0; i < s.select_arms.len(); i++ { let sa: SelectArm = s.select_arms.get(i); if _let_esc_expr(sa.chan_expr, name) { return true; } if _let_esc_expr(sa.send_value, name) { return true; } if sa.body != null { for let j: i32 = 0; j < sa.body.len(); j++ { let bs: Stmt = sa.body.get(j); if _let_esc_stmt(&bs, name) { return true; } } } } }
+    return false;
+}
+fn _let_binding_escapes(t: *Typer, bname: string) -> bool {
+    if bname == null || bname.eq("") { return true; }
+    if t.cur_fn_body == null { return true; } // no body in view => conservative MOVE
+    for let i: i32 = 0; i < t.cur_fn_body.len(); i++ {
+        let st: Stmt = t.cur_fn_body.get(i);
+        if _let_esc_stmt(&st, bname) { return true; }
+    }
+    return false;
+}
+
 fn _body_uses_name_after(body: *Vector<Stmt>, idx: i32, name: string) -> bool {
     let n: i32 = body.len();
     let mut i: i32 = idx + 1;
@@ -3706,6 +3791,7 @@ fn check_fn(t: *Typer, s: *Stmt) {
     let saved_const_bindings: *HashMap<bool> = t.const_bindings;
     let saved_borrows: *Vector<BorrowEvent> = t.borrows;
     let saved_ret: *Type = t.current_ret;
+    let saved_body: *Vector<Stmt> = t.cur_fn_body;
     let saved_tps: *Vector<string> = t.current_type_params;
     let new_scope: *HashMap<Type> = HashMap::new();
     let new_owned: *HashMap<bool> = HashMap::new();
@@ -3726,6 +3812,7 @@ fn check_fn(t: *Typer, s: *Stmt) {
     t.call_owned = HashMap::new();
     t.borrows = new_borrows;
     t.current_ret = s.fn_ret_ty;
+    t.cur_fn_body = s.fn_body;
     t.current_type_params = s.type_params;
     // Param + return type annotations must name real types. (Only top-level
     // `fn`s reach check_fn — impl methods are skipped by check_top — so the
@@ -3793,6 +3880,7 @@ fn check_fn(t: *Typer, s: *Stmt) {
     t.const_bindings = saved_const_bindings;
     t.borrows = saved_borrows;
     t.current_ret = saved_ret;
+    t.cur_fn_body = saved_body;
     t.current_type_params = saved_tps;
 }
 
@@ -4591,8 +4679,20 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
         // itself flagged.
         if s.kind == ST_LET && s.let_value != null && s.let_value.kind == EX_IDENT {
             let mut _rebind_moves: bool = t.owned_locals.contains(s.let_value.str_val) || t.call_owned.contains(s.let_value.str_val);
+            // Value semantics (2B): a non-POD struct copy `let b = a` is a MOVE
+            // only when the new binding b may OUTLIVE a (escapes the fn). A
+            // CONTAINED copy (b only read/projected locally) leaves a usable —
+            // `let u2 = u; let u3 = u` are copies. Sound because codegen's
+            // struct-value field-drop already treats any alias of a as an escape
+            // and skips a's drop, so the shared strings leak conservatively,
+            // never double-free/UAF. The owned-pointer case (line above) stays an
+            // unconditional MOVE — codegen retargets its auto-drop, so a copy
+            // there WOULD double-free. This gate only ever REMOVES a move-marking,
+            // so it is monotonically self-host-safe.
             if !_rebind_moves && val_ty != null && val_ty.kind == TY_NAMED && t.structs.contains(val_ty.name) && !_struct_is_pod(t, val_ty.name) {
-                _rebind_moves = true;
+                if _let_binding_escapes(t, s.name) {
+                    _rebind_moves = true;
+                }
             }
             if _rebind_moves {
                 t.consumed_locals.insert(s.let_value.str_val, true);

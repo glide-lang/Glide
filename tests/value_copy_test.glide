@@ -1,0 +1,35 @@
+// Value semantics (2B): a non-POD struct copy `let b = a` is a COPY when b is
+// contained (only read/projected locally), so `a` stays usable — no more spurious
+// use-after-move on the second reuse. The shared string is read through every
+// alias; value-asserted so a wrong copy (corruption) would surface. (The source's
+// heap field leaks conservatively for now — sound, never double-free/UAF.)
+
+struct User { name: string }
+
+fn joined() -> string {
+    let u = User { name: "a".concat("b") };   // owns a heap string
+    let u2 = u;                                 // COPY (u still usable)
+    let u3 = u;                                 // COPY
+    return u.name.concat(u2.name).concat(u3.name);   // "ab"+"ab"+"ab"
+}
+
+fn test_contained_copy_reuses() -> i32 {
+    assert!(joined().eq("ababab"));
+    return 0;
+}
+
+// A POD struct always copied (unaffected by 2B — this is the control).
+struct Point { x: i32, y: i32 }
+
+fn pod_sum() -> i32 {
+    let p = Point { x: 3, y: 4 };
+    let a = p;
+    let b = p;
+    let c = p;
+    return a.x + b.y + c.x + p.x;   // 3+4+3+3
+}
+
+fn test_pod_copy() -> i32 {
+    assert!(pod_sum() == 13);
+    return 0;
+}
