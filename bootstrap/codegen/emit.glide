@@ -1803,8 +1803,16 @@ fn _vec_fresh_ctor(e: *Expr, tyname: string) -> bool {
 fn _vec_let_droppable(g: *CG, st: *Stmt) -> bool {
     if st == null || st.kind != ST_LET { return false; }
     if st.is_auto_owned { return false; }
-    if st.let_ty == null || st.let_ty.kind != TY_POINTER || st.let_ty.inner == null { return false; }
-    let inner: *Type = st.let_ty.inner;
+    // Pointer handles (`let v: *Vector<T> = Vector::new()`) — and Box, whose
+    // handle is a 16-byte VALUE (`let b: Box<T> = Box::new(v)`): the binding
+    // is TY_GENERIC directly, only the boxed T is on the heap.
+    let mut inner: *Type = null;
+    if st.let_ty != null && st.let_ty.kind == TY_POINTER && st.let_ty.inner != null {
+        inner = st.let_ty.inner;
+    } else if st.let_ty != null && st.let_ty.kind == TY_GENERIC && st.let_ty.name != null && st.let_ty.name.eq("Box") {
+        inner = st.let_ty;
+    }
+    if inner == null { return false; }
     if inner.kind != TY_GENERIC || inner.name == null { return false; }
     if !(inner.name.eq("Vector") || inner.name.eq("HashMap") || inner.name.eq("Box")) { return false; }
     if !_vec_fresh_ctor(st.let_value, inner.name) { return false; }
@@ -3384,11 +3392,17 @@ pub fn prescan_stmt(g: *CG, s: *Stmt) {
         if s.let_value != null {
             prescan_expr(g, s.let_value, s.let_ty);
         }
-        // Auto-drop with `let v*` on a generic type: queue the free-method
-        // mono so its forward decl is emitted before any user fn body.
-        if s.kind == ST_LET && s.is_auto_owned && s.let_ty != null {
+        // Auto-drop on a generic type: queue the free-method mono so its
+        // forward decl is emitted before any user fn body. Covers BOTH the
+        // explicit `let v*` form and the inferred droppable collections
+        // (Vector/HashMap/Box) — the drop decision happens at emission, too
+        // late for a decl, and the member-call dispatch would leave an
+        // implicit declaration that modern cc rejects. A queued mono that
+        // ends up unused is just a dead function.
+        if s.kind == ST_LET && s.let_ty != null {
             let inner_ty: *Type = strip_ptr(s.let_ty);
-            if inner_ty != null && inner_ty.kind == TY_GENERIC {
+            if inner_ty != null && inner_ty.kind == TY_GENERIC && inner_ty.name != null
+                && (s.is_auto_owned || inner_ty.name.eq("Vector") || inner_ty.name.eq("HashMap") || inner_ty.name.eq("Box")) {
                 let free_name: string = inner_ty.name.concat("_free");
                 if g.generic_fns.contains(free_name) {
                     let mangled: string = mangle_generic(free_name, inner_ty.args);
@@ -3415,6 +3429,46 @@ pub fn prescan_stmt(g: *CG, s: *Stmt) {
     }
     if s.for_step != null {
         prescan_expr(g, s.for_step, no_hint);
+    }
+    // Match arms: a method call on a ?T/!T payload binding (`some(b) =>
+    // b.get()`) must monomorphize HERE — dispatch at emit time still works,
+    // but its forward decl would be missing (the C call becomes an implicit
+    // declaration that conflicts with the later definition). Type the payload
+    // from the scrutinee's inner and walk the arm bodies.
+    if s.arms != null {
+        let mut truthy_ty: *Type = null;
+        let mut falsy_ty: *Type = null;
+        if s.scrutinee != null {
+            prescan_expr(g, s.scrutinee, no_hint);
+            let sc_ty: *Type = strip_ptr(infer_for_codegen(g, s.scrutinee));
+            if sc_ty != null && (sc_ty.kind == TY_OPTION || sc_ty.kind == TY_RESULT || sc_ty.kind == TY_OPT_RESULT) {
+                truthy_ty = sc_ty.inner;
+                if sc_ty.kind != TY_OPTION {
+                    falsy_ty = ty_named("string");
+                }
+            }
+        }
+        for let i: i32 = 0; i < s.arms.len(); i++ {
+            let ar: MatchArm = s.arms.get(i);
+            if ar.bindings != null && ar.bindings.len() == 1 {
+                let mut bty: *Type = falsy_ty;
+                if ar.variant != null && (ar.variant.eq("some") || ar.variant.eq("ok")) {
+                    bty = truthy_ty;
+                }
+                if bty != null {
+                    g.declare(ar.bindings.get(0), bty);
+                }
+            }
+            if ar.lit != null {
+                prescan_expr(g, ar.lit, no_hint);
+            }
+            if ar.body != null {
+                for let j: i32 = 0; j < ar.body.len(); j++ {
+                    let bs: Stmt = ar.body.get(j);
+                    prescan_stmt(g, &bs);
+                }
+            }
+        }
     }
     if s.then_body != null {
         for let i: i32 = 0; i < s.then_body.len(); i++ {
