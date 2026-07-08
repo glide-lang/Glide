@@ -791,7 +791,9 @@ fn render_doc_lines(raw: string, pad: string) -> string {
             j = j + 1;
         }
         let line: string = raw.substring(i, j);
-        out = out.concat(pad).concat("// ").concat(line).concat("\n");
+        // Doc comments re-render as `///` — flattening them to `//` strips
+        // their doc-ness and glide doc / hover lose the text.
+        out = out.concat(pad).concat("/// ").concat(line).concat("\n");
         if j >= n {
             break;
         }
