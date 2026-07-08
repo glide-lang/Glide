@@ -1284,6 +1284,153 @@ fn _index_has_type(idx: *Vector<ImportableSym>, name: string) -> bool {
     return false;
 }
 
+// ---- Ownership-class hover (Glide value semantics) -----------------------
+// Glide has no move/borrow ceremony in the source, so the LSP EXPLAINS what the
+// compiler does implicitly: a value is Copy (POD — pure data) or Move (owns a
+// string/Vector/pointer), a `*T` is a shared pointer, a `&T` is a second-class
+// borrow. Mirrors the typer's `_ty_is_pod` / `_struct_is_pod` exactly (POD iff
+// every field is a scalar / char / payload-less enum / POD struct / POD tuple;
+// ANY string / pointer / Vector / borrow / generic field makes it Move).
+fn _lsp_is_prim_name(n: string) -> bool {
+    if n == null { return false; }
+    return n.eq("i8") || n.eq("i16") || n.eq("i32") || n.eq("i64")
+        || n.eq("u8") || n.eq("u16") || n.eq("u32") || n.eq("u64")
+        || n.eq("i128") || n.eq("u128") || n.eq("i256") || n.eq("u256")
+        || n.eq("usize") || n.eq("isize") || n.eq("f32") || n.eq("f64")
+        || n.eq("bool") || n.eq("char");
+}
+fn _lsp_is_struct(stmts: *Vector<Stmt>, name: string) -> bool {
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind == ST_STRUCT && s.name != null && s.name.eq(name) { return true; }
+    }
+    return false;
+}
+fn _lsp_enum_is_pod(stmts: *Vector<Stmt>, name: string) -> bool {
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind == ST_ENUM && s.name != null && s.name.eq(name) {
+            if s.enum_variants != null {
+                for let j: i32 = 0; j < s.enum_variants.len(); j++ {
+                    let v: EnumVariant = s.enum_variants.get(j);
+                    if v.fields != null && v.fields.len() > 0 { return false; }
+                }
+            }
+            return true;
+        }
+    }
+    return false;
+}
+fn _lsp_is_enum(stmts: *Vector<Stmt>, name: string) -> bool {
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind == ST_ENUM && s.name != null && s.name.eq(name) { return true; }
+    }
+    return false;
+}
+fn _lsp_ty_is_pod(stmts: *Vector<Stmt>, ty: *Type, depth: i32) -> bool {
+    if ty == null || depth > 16 { return false; }
+    if ty.kind == TY_NAMED && ty.name != null {
+        if _lsp_is_prim_name(ty.name) { return true; }
+        if _lsp_is_enum(stmts, ty.name) { return _lsp_enum_is_pod(stmts, ty.name); }
+        if _lsp_is_struct(stmts, ty.name) { return _lsp_struct_is_pod(stmts, ty.name, depth + 1); }
+        return false;
+    }
+    if ty.kind == TY_TUPLE {
+        if ty.args == null { return true; }
+        for let i: i32 = 0; i < ty.args.len(); i++ {
+            let a: Type = ty.args.get(i);
+            if !_lsp_ty_is_pod(stmts, &a, depth + 1) { return false; }
+        }
+        return true;
+    }
+    return false; // pointer / borrow / slice / string / generic / fn-ptr => not POD
+}
+fn _lsp_struct_is_pod(stmts: *Vector<Stmt>, name: string, depth: i32) -> bool {
+    if name == null || name.eq("") || depth > 16 { return false; }
+    let mut found: bool = false;
+    let mut pod: bool = true;
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind == ST_STRUCT && s.name != null && s.name.eq(name) {
+            found = true;
+            if s.is_extern { return false; }
+            if s.type_params != null && s.type_params.len() > 0 { return false; }
+            if s.struct_fields != null {
+                for let j: i32 = 0; j < s.struct_fields.len(); j++ {
+                    let f: Field = s.struct_fields.get(j);
+                    if !_lsp_ty_is_pod(stmts, f.ty, depth + 1) { pod = false; }
+                }
+            }
+        }
+    }
+    if !found { return false; }
+    return pod;
+}
+// Resolve a local binding's type by finding its `let` in the enclosing fn body
+// (so `let u2 = u` can classify `u`'s type). Shallow: top-level body + one level
+// of if/for/while blocks; a miss just yields no ownership card.
+fn _lsp_find_let_ty(stmts: *Vector<Stmt>, host: *Stmt, body: *Vector<Stmt>, name: string, depth: i32) -> *Type {
+    if body == null || depth > 6 { return null; }
+    for let i: i32 = 0; i < body.len(); i++ {
+        let st: Stmt = body.get(i);
+        if st.kind == ST_LET && st.name != null && st.name.eq(name) {
+            if st.let_ty != null { return st.let_ty; }
+            if st.let_value != null {
+                if st.let_value.kind == EX_STRUCT_LIT && st.let_value.str_val != null && !st.let_value.str_val.eq("") {
+                    return ty_named(st.let_value.str_val);
+                }
+                if st.let_value.kind == EX_IDENT && st.let_value.str_val != null && !st.let_value.str_val.eq(name) {
+                    return _lsp_find_let_ty(stmts, host, body, st.let_value.str_val, depth + 1);
+                }
+                return lsp_infer_expr(stmts, host, st.let_value);
+            }
+            return null;
+        }
+        let r1: *Type = _lsp_find_let_ty(stmts, host, st.then_body, name, depth + 1);
+        if r1 != null { return r1; }
+        let r2: *Type = _lsp_find_let_ty(stmts, host, st.else_body, name, depth + 1);
+        if r2 != null { return r2; }
+        let r3: *Type = _lsp_find_let_ty(stmts, host, st.fn_body, name, depth + 1);
+        if r3 != null { return r3; }
+    }
+    return null;
+}
+fn _lsp_local_decl_type(stmts: *Vector<Stmt>, host: *Stmt, name: string) -> *Type {
+    if host == null || host.fn_body == null || name == null { return null; }
+    return _lsp_find_let_ty(stmts, host, host.fn_body, name, 0);
+}
+// The one-line ownership card for a resolved binding type. "" = nothing to say.
+fn _lsp_ownership_note(stmts: *Vector<Stmt>, ty: *Type) -> string {
+    if ty == null { return ""; }
+    if ty.kind == TY_POINTER {
+        let inner: *Type = ty.inner;
+        if inner != null && inner.kind == TY_GENERIC && inner.name != null && (inner.name.eq("Vector") || inner.name.eq("HashMap")) {
+            return "🧹 **owned collection** — auto-freed at scope end (no manual `.free()`)";
+        }
+        return "📍 **pointer** `*T` — shared, no ownership transfer; `.field` auto-derefs";
+    }
+    if ty.kind == TY_BORROW { return "🤝 **borrow** `&T` — second-class: flows into calls, never escapes or returns"; }
+    if ty.kind == TY_BORROW_MUT { return "🤝 **mutable borrow** `&mut T` — exclusive, cannot escape"; }
+    if ty.kind == TY_SLICE { return "🔎 **slice** `[T]` — fat pointer (ptr+len), a view; does not own the data"; }
+    if ty.kind == TY_NAMED && ty.name != null {
+        let n: string = ty.name;
+        if _lsp_is_prim_name(n) { return "📋 **Copy** — primitive; assign/pass makes a bitwise copy"; }
+        if n.eq("string") { return "🧵 **value** — freed once by the compiler's analysis (no manual `.free()`)"; }
+        if _lsp_is_enum(stmts, n) {
+            if _lsp_enum_is_pod(stmts, n) { return "📋 **Copy** — payload-less enum; copies on assign/pass"; }
+            return "📦 **Move** — enum with payload; `let b = a` and passing by value transfer ownership (`a` is consumed). Use `&a`.";
+        }
+        if _lsp_is_struct(stmts, n) {
+            if _lsp_struct_is_pod(stmts, n, 0) {
+                return "📋 **Copy** — plain-data struct; assign/pass copies it, the original stays valid";
+            }
+            return "📦 **Move** — owns heap (string/Vector/ptr); `let b = a` and passing by value transfer ownership (`a` is consumed). Use `&a` to use it without moving.";
+        }
+    }
+    return "";
+}
+
 fn render_hover_for_let(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt, hpath: string, state: *LspState) -> string {
     let mut header: string = "let ";
     if s.is_mut {
@@ -1393,6 +1540,40 @@ fn render_hover_for_let(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt, hpath: stri
     let mut block: string = "```glide\n".concat(header).concat("\n```");
     if inferred {
         block = block.concat("\n\n*type inferred*");
+    }
+    // Ownership card: Glide has no move/borrow ceremony in source, so the LSP
+    // surfaces what the compiler does implicitly for this binding's type.
+    let mut _oty: *Type = s.let_ty;
+    if _oty == null && s.let_value != null {
+        if s.let_value.kind == EX_STRUCT_LIT && s.let_value.str_val != null && !s.let_value.str_val.eq("") && _type_name_known(stmts, state, s.let_value.str_val) {
+            _oty = ty_named(s.let_value.str_val);
+        } else if s.let_value.kind == EX_IDENT && s.let_value.str_val != null {
+            _oty = _lsp_local_decl_type(stmts, host, s.let_value.str_val);
+        } else {
+            _oty = lsp_infer_expr(stmts, host, s.let_value);
+        }
+    }
+    // If the header couldn't show a type (e.g. `let u2 = u`) but we resolved one
+    // for the card, surface it in the header too so the two agree. Only when the
+    // header truly lacks a type: an explicit `let x: T` already has it (and is
+    // not flagged `inferred`), so it must NOT be re-appended.
+    if s.let_ty == null && !inferred && _oty != null {
+        block = "```glide\n".concat(header).concat(": ").concat(type_to_string_pretty(_oty)).concat("\n```\n\n*type inferred*");
+    }
+    let _onote: string = _lsp_ownership_note(stmts, _oty);
+    if !_onote.eq("") {
+        block = block.concat("\n\n").concat(_onote);
+    }
+    // Rebind `let b = a`: does this assignment MOVE `a` (non-POD value) or COPY it?
+    if s.let_value != null && s.let_value.kind == EX_IDENT && s.let_value.str_val != null && _oty != null && _oty.kind == TY_NAMED && _oty.name != null {
+        let mut _moves: bool = false;
+        if _lsp_is_struct(stmts, _oty.name) && !_lsp_struct_is_pod(stmts, _oty.name, 0) { _moves = true; }
+        if _lsp_is_enum(stmts, _oty.name) && !_lsp_enum_is_pod(stmts, _oty.name) { _moves = true; }
+        if _moves {
+            block = block.concat("\n\n➡️ **moves** `").concat(s.let_value.str_val).concat("` — consumed from here on (use `&").concat(s.let_value.str_val).concat("` to keep it)");
+        } else {
+            block = block.concat("\n\n➡️ **copies** `").concat(s.let_value.str_val).concat("` — the original stays valid");
+        }
     }
     return block;
 }
