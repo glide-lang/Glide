@@ -2826,6 +2826,26 @@ pub fn emit_struct_mono(g: *CG, t: *Type) {
             if fsub != null && fsub.kind == TY_NAMED {
                 _emit_concrete_payload_def(g, fsub.name);
             }
+            // A wrapper field (`?Inner` / `!Inner` / `?!Inner`) embeds Inner
+            // BY VALUE inside `__glide_option_<m>_t`: the program-wide wrapper
+            // pre-pass skips generic templates, so a mono's wrapper fields are
+            // never registered there. Make sure Inner's full definition exists
+            // (generic mono body / concrete payload), then emit the guarded
+            // wrapper template so this body's field type resolves. The #ifndef
+            // guards make any later re-emission harmless.
+            if fsub != null && (fsub.kind == TY_OPTION || fsub.kind == TY_RESULT || fsub.kind == TY_OPT_RESULT) {
+                // emit_struct_mono directly (not forward_decl_generic_monos):
+                // the uses-loop above already printed Inner's typedef and
+                // marked emitted_monos, which would make forward_decl skip the
+                // BODY — and the template embeds Inner by value.
+                if fsub.inner != null && fsub.inner.kind == TY_GENERIC && g.generic_structs.contains(fsub.inner.name) {
+                    emit_struct_mono(g, fsub.inner);
+                }
+                if fsub.inner != null && fsub.inner.kind == TY_NAMED {
+                    _emit_concrete_payload_def(g, fsub.inner.name);
+                }
+                _emit_wrapper_for_type(g, fsub);
+            }
         }
     }
     println!("struct ", mangled, " {");
@@ -2856,6 +2876,18 @@ fn collect_generic_uses_in_type(t: *Type, out: *Vector<Type>) {
     }
     if t.kind == TY_POINTER || t.kind == TY_BORROW || t.kind == TY_BORROW_MUT || t.kind == TY_SLICE {
         collect_generic_uses_in_type(t.inner, out);
+    }
+    // A generic can hide under a wrapper (`?Box<LL<T>>`, `!Vector<T>`) or a
+    // tuple element — without these the nested mono is never discovered and
+    // its typedef/body/drop are missing (ICE on any `?Box<generic>` field).
+    if t.kind == TY_OPTION || t.kind == TY_RESULT || t.kind == TY_OPT_RESULT {
+        collect_generic_uses_in_type(t.inner, out);
+    }
+    if t.kind == TY_TUPLE && t.args != null {
+        for let i: i32 = 0; i < t.args.len(); i++ {
+            let a: Type = t.args.get(i);
+            collect_generic_uses_in_type(&a, out);
+        }
     }
 }
 

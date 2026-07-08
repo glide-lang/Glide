@@ -675,7 +675,7 @@ pub fn _forward_decl_field_monos(g: *CG, s: *Stmt) {
 // reference doesn't outpace its typedef. No-op for non-wrapper types
 // or for wrapper-of-named-struct (the named body must come first; the
 // guarded later emission picks it up).
-fn _emit_wrapper_for_type(g: *CG, t: *Type) {
+pub fn _emit_wrapper_for_type(g: *CG, t: *Type) {
     if t == null {
         return;
     }

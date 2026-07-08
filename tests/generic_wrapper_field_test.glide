@@ -1,0 +1,53 @@
+// Wrapper fields of generic monos: a `?T` / `!T` / `?Box<Gen<T>>` field must
+// register its wrapper template and any nested mono when the struct mono is
+// emitted — the program-wide wrapper pre-pass skips generic templates, so
+// these otherwise reference undeclared C typedefs (and a `none()` field init
+// stayed unmangled: undefined reference to `none`).
+
+struct Stack<T> {
+    top: ?T,
+}
+
+struct Holder<T> {
+    r: !T,
+}
+
+struct LL<T> {
+    data: T,
+    next: ?Box<LL<T>>,
+}
+
+fn test_option_field_mono() -> i32 {
+    let s: Stack<i32> = Stack { top: none() };
+    match s.top {
+        some(x) => {
+            assert!(false);
+        },
+        none => {},
+    }
+    let s2: Stack<i32> = Stack { top: some(5) };
+    match s2.top {
+        some(x) => {
+            assert!(x == 5);
+        },
+        none => {
+            assert!(false);
+        },
+    }
+    return 0;
+}
+
+fn test_result_field_mono() -> i32 {
+    let h: Holder<i32> = Holder { r: ok(3) };
+    assert!(h.r.is_ok());
+    assert!(h.r.unwrap() == 3);
+    return 0;
+}
+
+// The recursive Rust-style shape: declaring and initializing the terminator
+// compiles and runs (traversal via a boxed node is covered by box_test).
+fn test_recursive_option_box_decl() -> i32 {
+    let n: LL<i32> = LL { data: 1, next: none() };
+    assert!(n.data == 1);
+    return 0;
+}

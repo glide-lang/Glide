@@ -6723,10 +6723,15 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
         //      since we may need to print a forward decl on its own line.
 
         // Generic struct literal hint: `let b: Box<int> = Box { ... }` →
-        // rewrite the struct lit type_name to the mangled mono name.
+        // rewrite the struct lit type_name to the mangled mono name. Keep the
+        // ORIGINAL generic type on cast_to: the field-emission fallback needs
+        // it to substitute template field types (a `top: none()` init can't
+        // resolve its `__glide_none_<m>` otherwise — the mangled name is not
+        // in g.structs).
         if s.let_value != null && s.let_ty != null && s.let_ty.kind == TY_GENERIC {
             if s.let_value.kind == EX_STRUCT_LIT && s.let_value.str_val.eq(s.let_ty.name) {
                 s.let_value.str_val = mangle_generic(s.let_ty.name, s.let_ty.args);
+                s.let_value.cast_to = s.let_ty;
             }
         }
         // make_chan(cap) hint: rewrite to __glide_make_chan_<m>(cap) using let-annot.
