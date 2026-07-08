@@ -5796,6 +5796,32 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 t.err_code_range(e.rhs.line, e.rhs.column, _arg_span(e.rhs), "wrapper-field-needs-ctor", "field `".concat(e.lhs.field).concat("` is `").concat(type_to_string(wfty)).concat("`, not a bare struct value — wrap it: `").concat(hint).concat("`"));
             }
         }
+        // `some(Self { .. })` whose struct-lit ARG doesn't match the wrapper's
+        // inner: `?Box<LL<T>>` wraps a Box, not a bare LL — cc died on the
+        // ctor's argument type. Purely syntactic (lit name vs inner base
+        // name): no re-inference, no false positives; name-equal or non-lit
+        // args stay quiet.
+        if e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.field != null
+            && e.rhs != null && e.rhs.kind == EX_CALL && e.rhs.lhs != null && e.rhs.lhs.kind == EX_IDENT
+            && e.rhs.lhs.str_val != null && (e.rhs.lhs.str_val.eq("some") || e.rhs.lhs.str_val.eq("ok"))
+            && e.rhs.args != null && e.rhs.args.len() == 1 {
+            let mut wfin: *Type = lt;
+            if wfin == null {
+                wfin = _simple_field_ty(t, e.lhs);
+            }
+            if wfin != null && (wfin.kind == TY_OPTION || wfin.kind == TY_RESULT || wfin.kind == TY_OPT_RESULT)
+                && wfin.inner != null && (wfin.inner.kind == TY_GENERIC || wfin.inner.kind == TY_NAMED)
+                && wfin.inner.name != null && !wfin.inner.name.eq("") {
+                let wa: Expr = e.rhs.args.get(0);
+                if wa.kind == EX_STRUCT_LIT && wa.str_val != null && !wa.str_val.eq("") && !wa.str_val.eq(wfin.inner.name) {
+                    let mut bx_hint: string = "";
+                    if wfin.inner.name.eq("Box") {
+                        bx_hint = " — box the node: `".concat(e.rhs.lhs.str_val).concat("(Box::new(v))`");
+                    }
+                    t.err_code_range(wa.line, wa.column, wa.str_val.len(), "wrapper-inner-mismatch", "`".concat(e.rhs.lhs.str_val).concat("(...)` here must wrap `").concat(type_to_string(wfin.inner)).concat("`, but the value is a `").concat(wa.str_val).concat("` literal").concat(bx_hint));
+                }
+            }
+        }
         // Move-on-assign: a plain `=` whose RHS is an owned local moves it; later
         // reads of that local are use-after-move (ownership now belongs to the
         // target). Mark AFTER inferring rt so the RHS read here is not flagged.

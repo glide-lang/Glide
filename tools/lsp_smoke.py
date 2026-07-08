@@ -2176,6 +2176,14 @@ case_diagnostics("method re-declaring the impl's type param is rejected",
     'fn main() { println!("x"); }',
     expect_codes_present=["type-param-shadow"])
 
+case_diagnostics("some() wrapping the wrong inner for a boxed field is rejected",
+    'struct LL<T> { next: ?Box<LL<T>>, data: T }\n'
+    'impl<T> LL<T> {\n'
+    '    pub fn bad(&mut self, data: T) { self.next = some(LL { data: data, next: none() }); }\n'
+    '}\n'
+    'fn main() { println!("x"); }',
+    expect_codes_present=["wrapper-inner-mismatch"])
+
 case_diagnostics("bare struct literal into a wrapper field is rejected",
     'struct LL<T> { next: ?Box<LL<T>>, data: T }\n'
     'impl<T> LL<T> {\n'
