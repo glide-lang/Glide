@@ -2921,6 +2921,10 @@ fn parse_prefix(p: *Parser) -> *Expr {
         p.advance();
         let ie: *Expr = expr_int(parse_int_lexeme(tok.lexeme), line, col);
         ie.cast_to = _num_suffix_type(tok.lexeme);
+        // Keep the original spelling (hex `0x1f`, binary `0b101`, a `200u8`
+        // suffix, digit `_` groups) so fmt re-renders it verbatim instead of
+        // collapsing every literal to a bare decimal.
+        ie.str_val = tok.lexeme;
         return ie;
     }
     if tok.kind == TOK_FLOAT {

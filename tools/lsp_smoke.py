@@ -1039,6 +1039,97 @@ case_feature("formatting preserves !field marker and Self",
                 and "Self {" in r["result"][0].get("newText",""),
             f"got: {(r or {}).get('result')}")))
 
+# an `else if` ladder stays a flat chain — never a `else { if … }` staircase
+# that drifts every branch one level deeper to the right.
+case_feature("formatting keeps else-if chains flat",
+    'fn classify(c: i32) -> i32 {\n'
+    '    if c == 1 {\n'
+    '        return 1;\n'
+    '    } else if c == 2 {\n'
+    '        return 2;\n'
+    '    } else if c == 3 {\n'
+    '        return 3;\n'
+    '    } else {\n'
+    '        return 0;\n'
+    '    }\n'
+    '}\n',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/formatting",
+     "params":{"options":{"tabSize":4,"insertSpaces":True}}},
+    lambda r: (
+        check("renders `} else if c == 2 {` on one line (chained)",
+            r and r.get("result")
+                and "} else if c == 2 {" in r["result"][0].get("newText",""),
+            f"got: {(r or {}).get('result')}"),
+        check("does NOT nest into a `} else {`+`if` staircase",
+            r and r.get("result")
+                and "} else {\n        if " not in r["result"][0].get("newText",""),
+            f"got: {(r or {}).get('result')}")))
+
+# Integer literals keep their source spelling — a formatter that rewrites
+# `0xff` to `255` or drops a `u8` suffix changes intent (and, for the suffix,
+# the inferred type).
+case_feature("formatting preserves integer literal spelling",
+    'const A: i32 = 0x0c;\n'
+    'const B: u8 = 200u8;\n'
+    'const C: i32 = 0b1010;\n',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/formatting",
+     "params":{"options":{"tabSize":4,"insertSpaces":True}}},
+    lambda r: (
+        check("keeps hex `0x0c` (not `12`)",
+            r and r.get("result") and "= 0x0c;" in r["result"][0].get("newText",""),
+            f"got: {(r or {}).get('result')}"),
+        check("keeps binary `0b1010` and `200u8` suffix",
+            r and r.get("result")
+                and "= 0b1010;" in r["result"][0].get("newText","")
+                and "= 200u8;" in r["result"][0].get("newText",""),
+            f"got: {(r or {}).get('result')}")))
+
+# `spawn_thread` (dedicated pthread) must survive a reformat — collapsing it to
+# `spawn` silently reroutes the call onto the M:N coroutine scheduler.
+case_feature("formatting keeps spawn_thread distinct from spawn",
+    'fn worker() {}\n'
+    'fn main() -> i32 {\n'
+    '    spawn worker();\n'
+    '    spawn_thread worker();\n'
+    '    return 0;\n'
+    '}\n',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/formatting",
+     "params":{"options":{"tabSize":4,"insertSpaces":True}}},
+    lambda r: check("keeps `spawn_thread worker();` (not flattened to `spawn`)",
+        r and r.get("result") and "spawn_thread worker();" in r["result"][0].get("newText",""),
+        f"got: {(r or {}).get('result')}"))
+
+# A macro definition round-trips: a body-less builtin stub, a matcher list, and
+# a `$( … )*` repetition body all survive instead of turning into a `fn` stub
+# or a `/* fmt: unknown stmt */` placeholder.
+case_feature("formatting round-trips macro definitions",
+    'macro shout!($($arg:expr),*);\n'
+    'pub macro first!($a:expr, $b:expr) {\n'
+    '    return $a;\n'
+    '}\n'
+    'impl Vector<T> {\n'
+    '    macro push_all!($($x:expr),*) {\n'
+    '        $( self.push($x); )*\n'
+    '    }\n'
+    '}\n',
+    {"jsonrpc":"2.0","id":2,"method":"textDocument/formatting",
+     "params":{"options":{"tabSize":4,"insertSpaces":True}}},
+    lambda r: (
+        check("keeps body-less stub `macro shout!($($arg:expr),*);`",
+            r and r.get("result")
+                and "macro shout!($($arg:expr),*);" in r["result"][0].get("newText",""),
+            f"got: {(r or {}).get('result')}"),
+        check("keeps the `$( self.push($x); )*` repetition in an impl macro",
+            r and r.get("result")
+                and "macro push_all!($($x:expr),*) {" in r["result"][0].get("newText","")
+                and "$( self.push($x); )*" in r["result"][0].get("newText",""),
+            f"got: {(r or {}).get('result')}"),
+        check("does NOT emit a `fn` stub or unknown-stmt placeholder",
+            r and r.get("result")
+                and "fn push_all" not in r["result"][0].get("newText","")
+                and "unknown stmt" not in r["result"][0].get("newText",""),
+            f"got: {(r or {}).get('result')}")))
+
 # ---- signatureHelp ----
 
 case_feature("signatureHelp free fn tracks active param",

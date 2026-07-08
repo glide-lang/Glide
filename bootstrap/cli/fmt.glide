@@ -325,7 +325,13 @@ fn fmt_binary_wrap(e: *Expr, depth: i32) -> string {
 
 fn fmt_expr_prec(e: *Expr, min_bp: i32) -> string {
     if e == null { return ""; }
-    if e.kind == EX_INT { return int_to_str(e.int_val); }
+    if e.kind == EX_INT {
+        // Re-render the original spelling (hex/binary/suffix/`_` groups) when the
+        // parser kept it; synthetic literals (proc-macros, desugars) fall back to
+        // the decimal value.
+        if e.str_val != null && !e.str_val.eq("") { return e.str_val; }
+        return int_to_str(e.int_val);
+    }
     if e.kind == EX_FLOAT {
         // float_val holds the original source lexeme ("3.14"); int_val is 0 for
         // a float, so emitting int_val here silently rewrote every float to 0.
@@ -637,6 +643,50 @@ fn render_lead_lines(raw: string, pad: string) -> string {
     return out;
 }
 
+// `macro name!(matchers) { body }`, or a body-less `macro name!(matchers);`
+// stub. Shared by the statement path and impl-member rendering (a macro can be
+// declared at either spot).
+fn fmt_macro_def(s: *Stmt, depth: i32) -> string {
+    let pad: string = fmt_indent(depth);
+    let mut kw: string = "macro ";
+    if s.is_pub { kw = "pub macro "; }
+    let mut out: string = pad.concat(kw).concat(s.name).concat("!(").concat(_fmt_macro_matchers(s.macro_params)).concat(")");
+    if s.then_body == null { return out.concat(";\n"); }
+    out = out.concat(" {\n").concat(fmt_body(s.then_body, depth + 1));
+    return out.concat(pad).concat("}\n");
+}
+
+// Reverse a macro matcher list back to source: `$x:expr` for a plain binder,
+// `$($x:expr)sep*` for a variadic one, comma-joined.
+fn _fmt_macro_matchers(params: *Vector<MacroParam>) -> string {
+    if params == null { return ""; }
+    let mut out: string = "";
+    for let i: i32 = 0; i < params.len(); i++ {
+        if i > 0 { out = out.concat(", "); }
+        let mp: MacroParam = params.get(i);
+        if mp.is_variadic {
+            out = out.concat("$($").concat(mp.name).concat(":").concat(mp.kind).concat(")").concat(mp.separator).concat("*");
+        } else {
+            out = out.concat("$").concat(mp.name).concat(":").concat(mp.kind);
+        }
+    }
+    return out;
+}
+
+// An `else` body that is a single comment-free `if`/`if let` is an `else if`
+// chain: render it on the `} else ` line rather than nesting a block. Any
+// comment attached to the nested guard falls back to the block form so the
+// comment keeps its place.
+fn _else_is_chain(else_body: *Vector<Stmt>) -> bool {
+    if else_body == null || else_body.len() != 1 { return false; }
+    let b: Stmt = else_body.get(0);
+    if b.kind != ST_IF && b.kind != ST_IF_LET { return false; }
+    let no_lead: bool = b.leading_comments == null || b.leading_comments.eq("");
+    let no_doc: bool = b.doc_comment == null || b.doc_comment.eq("");
+    let no_trail: bool = b.trailing_comment == null || b.trailing_comment.eq("");
+    return no_lead && no_doc && no_trail;
+}
+
 pub fn fmt_stmt(s: *Stmt, depth: i32) -> string {
     if s == null { return ""; }
     let pad: string = fmt_indent(depth);
@@ -688,7 +738,11 @@ fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
         return pad.concat("defer_err ").concat(fmt_expr(s.expr_value)).concat(";\n");
     }
     if s.kind == ST_SPAWN {
-        return pad.concat("spawn ").concat(fmt_expr(s.expr_value)).concat(";\n");
+        // `spawn_thread` (dedicated pthread) must NOT collapse to `spawn` (an
+        // M:N coroutine) — they lower to different runtimes.
+        let mut kw: string = "spawn ";
+        if s.is_spawn_thread { kw = "spawn_thread "; }
+        return pad.concat(kw).concat(fmt_expr(s.expr_value)).concat(";\n");
     }
     if s.kind == ST_IMPORT {
         // Reconstruct the module-path syntax. `s.import_path` was set to the
@@ -757,6 +811,14 @@ fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
         let mut out: string = pad.concat("if ").concat(fmt_value(s.cond, depth)).concat(" {\n");
         out = out.concat(fmt_body(s.then_body, depth + 1));
         if s.else_body != null {
+            // `else if` chain: a lone `if`/`if let` in the else keeps riding on
+            // the `} else ` line instead of nesting into `} else { if … }`.
+            // Comments on the nested guard force the block form so they stay put.
+            if _else_is_chain(s.else_body) {
+                let eb: Stmt = s.else_body.get(0);
+                let nested: string = fmt_stmt(&eb, depth);
+                return out.concat(pad).concat("} else ").concat(nested.substring(pad.len(), nested.len()));
+            }
             out = out.concat(pad).concat("} else {\n");
             for let i: i32 = 0; i < s.else_body.len(); i++ {
                 let b: Stmt = s.else_body.get(i);
@@ -772,6 +834,11 @@ fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
         let mut out: string = pad.concat("if let ").concat(pat).concat(" = ").concat(fmt_expr(s.let_value)).concat(" {\n");
         out = out.concat(fmt_body(s.then_body, depth + 1));
         if s.else_body != null {
+            if _else_is_chain(s.else_body) {
+                let eb: Stmt = s.else_body.get(0);
+                let nested: string = fmt_stmt(&eb, depth);
+                return out.concat(pad).concat("} else ").concat(nested.substring(pad.len(), nested.len()));
+            }
             out = out.concat(pad).concat("} else {\n");
             for let i: i32 = 0; i < s.else_body.len(); i++ {
                 let b: Stmt = s.else_body.get(i);
@@ -827,6 +894,20 @@ fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
     if s.kind == ST_TRAIT { return fmt_trait(s, depth); }
     if s.kind == ST_MATCH { return fmt_match(s, depth); }
     if s.kind == ST_ASM { return fmt_asm(s, depth); }
+    if s.kind == ST_MACRO_DEF { return fmt_macro_def(s, depth); }
+    if s.kind == ST_MACRO_REP {
+        // `$( <body> )sep*` repetition. The body is short by construction, so
+        // it rides on a single line just like the source form.
+        let mut inner: string = "";
+        if s.then_body != null {
+            for let i: i32 = 0; i < s.then_body.len(); i++ {
+                if i > 0 { inner = inner.concat(" "); }
+                let b: Stmt = s.then_body.get(i);
+                inner = inner.concat(fmt_stmt_inline(&b));
+            }
+        }
+        return pad.concat("$( ").concat(inner).concat(" )").concat(s.macro_rep_sep).concat("*\n");
+    }
     return pad.concat("/* fmt: unknown stmt */\n");
 }
 
@@ -1115,7 +1196,11 @@ fn fmt_impl(s: *Stmt, depth: i32) -> string {
                     out = out.concat(render_doc_lines(m.doc_comment, mpad));
                 }
             }
-            out = out.concat(fmt_fn(&m, depth + 1));
+            if m.kind == ST_MACRO_DEF {
+                out = out.concat(fmt_macro_def(&m, depth + 1));
+            } else {
+                out = out.concat(fmt_fn(&m, depth + 1));
+            }
         }
     }
     return out.concat(pad).concat("}\n");
