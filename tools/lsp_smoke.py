@@ -2160,6 +2160,14 @@ case_diagnostics("comparing an option FIELD with null is rejected",
     '    let n: N = N { v: some(1) };\n    if n.v != null { println!("x"); }\n}',
     expect_codes_present=["option-null-compare"])
 
+case_diagnostics("impl of a generic struct without its type params is rejected",
+    'struct LL<T> { data: T }\n'
+    'impl LL {\n'
+    '    pub fn new<T>(data: T) -> Self { return Self { data: data }; }\n'
+    '}\n'
+    'fn main() { println!("x"); }',
+    expect_codes_present=["impl-missing-type-params"])
+
 case_diagnostics("assigning to a struct while a field borrow lives is rejected",
     'struct S { v: i32 }\n'
     'fn main() -> i32 {\n'

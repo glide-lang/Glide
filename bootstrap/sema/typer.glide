@@ -2602,6 +2602,21 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
                 tname = s.impl_target.name;
             }
             if !tname.eq("") {
+                // A generic struct must be impl'd WITH its type params — a
+                // bare `impl LinkedList { fn new<T>(..) -> Self }` leaves
+                // `Self`/`T` unresolved in the registered signatures and used
+                // to die at cc as a please-report ICE. Point at the target.
+                if t.struct_generic.contains(tname)
+                    && (s.type_params == null || s.type_params.len() == 0)
+                    && (s.impl_target.args == null || s.impl_target.args.len() == 0) {
+                    let mut il: i32 = s.impl_target.line;
+                    let mut ic: i32 = s.impl_target.col;
+                    if il == 0 {
+                        il = s.line;
+                        ic = s.column;
+                    }
+                    t.err_code_range(il, ic, tname.len(), "impl-missing-type-params", "struct `".concat(tname).concat("` is generic; impl it with its type parameters — `impl<T> ").concat(tname).concat("<T>` — or specialize it (`impl ").concat(tname).concat("<i32>`)"));
+                }
                 // Specialized impls on concrete arg types (`impl Vector<int>`)
                 // register under a fully-qualified key — `Vector<int>_max` —
                 // so they don't collide with sibling specializations or the
