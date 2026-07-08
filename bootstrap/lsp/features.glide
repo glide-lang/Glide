@@ -1431,7 +1431,44 @@ fn _lsp_ownership_note(stmts: *Vector<Stmt>, ty: *Type) -> string {
     return "";
 }
 
-fn render_hover_for_let(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt, hpath: string, state: *LspState) -> string {
+// True when the identifier at (line,col) is immediately followed by `(` — a
+// call or a method-decl `fn name(`. Used to tell a method (`u.name()`, `fn
+// name(`) from a same-named FIELD access (`self.name`, `T { name: .. }`), which
+// never has a `(` after it.
+fn _word_is_call(text: string, line0: i32, col0: i32) -> bool {
+    let off: i32 = _line_col_offset(text, line0, col0);
+    if off < 0 { return false; }
+    let n: i32 = text.len();
+    let mut e: i32 = off;
+    while e < n {
+        let c: i32 = text.at(e).to_int();
+        if c == 95 || (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) { e = e + 1; } else { break; }
+    }
+    while e < n {
+        let c: i32 = text.at(e).to_int();
+        if c == 32 || c == 9 { e = e + 1; } else { break; }
+    }
+    return e < n && text.at(e).to_int() == 40;
+}
+// Return type of `recv.method(...)` when `recv` is a local whose type resolves
+// to a struct with that method. Lets `let n = u.name()` hover as `string`.
+fn _lsp_method_call_ret(stmts: *Vector<Stmt>, host: *Stmt, e: *Expr) -> *Type {
+    if e == null || e.kind != EX_CALL || e.lhs == null || e.lhs.kind != EX_MEMBER { return null; }
+    if e.lhs.field == null || e.lhs.lhs == null { return null; }
+    let recv: *Expr = e.lhs.lhs;
+    let mut rty: *Type = null;
+    if recv.kind == EX_IDENT && recv.str_val != null {
+        rty = _lsp_local_decl_type(stmts, host, recv.str_val);
+    }
+    if rty == null { return null; }
+    let mut st: *Type = rty;
+    while st != null && st.kind == TY_POINTER && st.inner != null { st = st.inner; }
+    if st == null || st.name == null { return null; }
+    let m: *Stmt = find_method_in_impl(stmts, st.name, e.lhs.field);
+    if m == null { return null; }
+    return m.fn_ret_ty;
+}
+fn render_hover_for_let(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt, hpath: string, state: *LspState, at_decl: bool) -> string {
     let mut header: string = "let ";
     if s.is_mut {
         header = header.concat("mut ");
@@ -1549,6 +1586,9 @@ fn render_hover_for_let(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt, hpath: stri
             _oty = ty_named(s.let_value.str_val);
         } else if s.let_value.kind == EX_IDENT && s.let_value.str_val != null {
             _oty = _lsp_local_decl_type(stmts, host, s.let_value.str_val);
+        } else if s.let_value.kind == EX_CALL && s.let_value.lhs != null && s.let_value.lhs.kind == EX_MEMBER {
+            _oty = _lsp_method_call_ret(stmts, host, s.let_value);
+            if _oty == null { _oty = lsp_infer_expr(stmts, host, s.let_value); }
         } else {
             _oty = lsp_infer_expr(stmts, host, s.let_value);
         }
@@ -1560,19 +1600,24 @@ fn render_hover_for_let(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt, hpath: stri
     if s.let_ty == null && !inferred && _oty != null {
         block = "```glide\n".concat(header).concat(": ").concat(type_to_string_pretty(_oty)).concat("\n```\n\n*type inferred*");
     }
-    let _onote: string = _lsp_ownership_note(stmts, _oty);
-    if !_onote.eq("") {
-        block = block.concat("\n\n").concat(_onote);
-    }
-    // Rebind `let b = a`: does this assignment MOVE `a` (non-POD value) or COPY it?
-    if s.let_value != null && s.let_value.kind == EX_IDENT && s.let_value.str_val != null && _oty != null && _oty.kind == TY_NAMED && _oty.name != null {
-        let mut _moves: bool = false;
-        if _lsp_is_struct(stmts, _oty.name) && !_lsp_struct_is_pod(stmts, _oty.name, 0) { _moves = true; }
-        if _lsp_is_enum(stmts, _oty.name) && !_lsp_enum_is_pod(stmts, _oty.name) { _moves = true; }
-        if _moves {
-            block = block.concat("\n\n➡️ **moves** `").concat(s.let_value.str_val).concat("` — consumed from here on (use `&").concat(s.let_value.str_val).concat("` to keep it)");
-        } else {
-            block = block.concat("\n\n➡️ **copies** `").concat(s.let_value.str_val).concat("` — the original stays valid");
+    // The ownership card + rebind note describe the BINDING, so only show them on
+    // the declaration itself — not on every downstream use of the variable (a
+    // use like `u.name()` borrows `u`, so a "Move" card there would mislead).
+    if at_decl {
+        let _onote: string = _lsp_ownership_note(stmts, _oty);
+        if !_onote.eq("") {
+            block = block.concat("\n\n").concat(_onote);
+        }
+        // Rebind `let b = a`: does this assignment MOVE `a` (non-POD value) or COPY it?
+        if s.let_value != null && s.let_value.kind == EX_IDENT && s.let_value.str_val != null && _oty != null && _oty.kind == TY_NAMED && _oty.name != null {
+            let mut _moves: bool = false;
+            if _lsp_is_struct(stmts, _oty.name) && !_lsp_struct_is_pod(stmts, _oty.name, 0) { _moves = true; }
+            if _lsp_is_enum(stmts, _oty.name) && !_lsp_enum_is_pod(stmts, _oty.name) { _moves = true; }
+            if _moves {
+                block = block.concat("\n\n➡️ **moves** `").concat(s.let_value.str_val).concat("` — consumed from here on (use `&").concat(s.let_value.str_val).concat("` to keep it)");
+            } else {
+                block = block.concat("\n\n➡️ **copies** `").concat(s.let_value.str_val).concat("` — the original stays valid");
+            }
         }
     }
     return block;
@@ -3501,7 +3546,8 @@ pub fn handle_hover(req: *JsonValue, state: *LspState) {
             if content.eq("") {
                 let lst: *Stmt = find_local_let_in_body(host.fn_body, word);
                 if lst != null {
-                    content = render_hover_for_let(doc.stmts, host, lst, uri_to_path(uri), state);
+                    let _atd: bool = lst.line - 1 == line0;
+                    content = render_hover_for_let(doc.stmts, host, lst, uri_to_path(uri), state, _atd);
                 }
             }
             // Not a `let` or a param — a match-arm binding (`f` in `ok(f) =>`)
@@ -3522,7 +3568,10 @@ pub fn handle_hover(req: *JsonValue, state: *LspState) {
     // (e.g. user `Point::new` vs stdlib `Pair::new`). Only fall back to the
     // first-match-anywhere scan when neither the qualifier, the receiver, nor
     // the enclosing `impl` block at a decl site can name the owner.
-    if content.eq("") {
+    // Gated on a trailing `(`: a method is always called / declared with one
+    // (`u.name()`, `fn name(`), whereas a same-named FIELD access (`self.name`,
+    // `T { name: .. }`) has none and must fall through to the field resolver.
+    if content.eq("") && _word_is_call(doc.text, line0, col0) {
         let mut hm: *Stmt = null;
         let mut howner: string = "";
         // (a) `Type::method(` — explicit qualifier before the cursor.
