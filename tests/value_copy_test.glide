@@ -65,6 +65,23 @@ fn test_copy_then_pass() -> i32 {
     return 0;
 }
 
+// 2D: an ESCAPING copy no longer move-errors — the source stays usable and
+// the lifetimes diverge; codegen keeps the shared heap field alive
+// (conservative leak, never UAF). Auto-clone will turn that into one
+// visible allocation as a follow-up.
+fn escape_copy() -> User {
+    let u = User { name: "e".concat("c") };
+    let b = u;
+    assert!(u.name.eq("ec"));
+    return b;
+}
+
+fn test_diverging_copy_source_usable() -> i32 {
+    let out = escape_copy();
+    assert!(out.name.eq("ec"));
+    return 0;
+}
+
 // A POD struct always copied (unaffected by 2B — this is the control).
 struct Point { x: i32, y: i32 }
 

@@ -4716,23 +4716,19 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
         // itself flagged.
         if s.kind == ST_LET && s.let_value != null && s.let_value.kind == EX_IDENT {
             let mut _rebind_moves: bool = t.owned_locals.contains(s.let_value.str_val) || t.call_owned.contains(s.let_value.str_val);
-            // Value semantics (2B): a non-POD struct copy `let b = a` is a MOVE
-            // only when the new binding b may OUTLIVE a (escapes the fn). A
-            // CONTAINED copy (b only read/projected locally, passed by value,
-            // or re-aliased into another contained binding) leaves a usable —
-            // `let u2 = u; let u3 = u` are copies. Sound because codegen's
-            // struct-value field-drop judges drops independently: it frees the
-            // source exactly once when every alias is proven contained
-            // (free-once) and keeps the conservative leak otherwise — never
-            // double-free/UAF. The owned-pointer case (line above) stays an
-            // unconditional MOVE — codegen retargets its auto-drop, so a copy
-            // there WOULD double-free. This gate only ever REMOVES a move-marking,
-            // so it is monotonically self-host-safe.
-            if !_rebind_moves && val_ty != null && val_ty.kind == TY_NAMED && t.structs.contains(val_ty.name) && !_struct_is_pod(t, val_ty.name) {
-                if _let_binding_escapes(t, s.name) {
-                    _rebind_moves = true;
-                }
-            }
+            // Value semantics (2B/2D): a non-POD struct rebind `let b = a` is
+            // ALWAYS a copy — never a move-error. A CONTAINED copy leaves the
+            // source droppable exactly once (codegen free-once); a copy that
+            // ESCAPES the fn makes the lifetimes diverge — no single owner —
+            // and codegen's independent walker then keeps the source's heap
+            // fields alive (conservative leak, sound: drops only fire when
+            // EVERY alias is proven contained, so never double-free/UAF).
+            // Auto-clone at diverging sites (turning that leak into one
+            // visible allocation) is the planned follow-up; the semantics —
+            // it always compiles, the source stays usable — land here. The
+            // owned-pointer case (line above) stays an unconditional MOVE:
+            // codegen retargets its auto-drop, so a copy there WOULD
+            // double-free.
             if _rebind_moves {
                 t.consumed_locals.insert(s.let_value.str_val, true);
                 t.moved_out.insert(s.let_value.str_val, true);
