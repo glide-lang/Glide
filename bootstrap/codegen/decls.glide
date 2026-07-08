@@ -497,6 +497,15 @@ fn try_resolve_open_let(g: *CG, s: *Stmt, body: *Vector<Stmt>, start: i32) -> *T
         let s2: Stmt = body.get(j);
         let r: *Type = try_constrain_from_stmt(g, &s2, s.name, gen_base, template.type_params);
         if r != null {
+            // The method-based constrain builds the Vector-style POINTER
+            // handle by convention, but the binding's real shape follows the
+            // ctor's return: `fn new(..) -> Self` on a value type yields a
+            // VALUE (`let node = LinkedList::new(x)` declared *LinkedList
+            // miscompiled — cc init of a pointer from a value). Reshape to
+            // the template's return.
+            if template.fn_ret_ty.kind != TY_POINTER && r.kind == TY_POINTER && r.inner != null && r.inner.kind == TY_GENERIC {
+                return r.inner;
+            }
             return r;
         }
     }
