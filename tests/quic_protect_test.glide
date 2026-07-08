@@ -1,0 +1,86 @@
+// QUIC packet protection assembly (RFC 9001 §5.4 + §5.3): applying header
+// protection reproduces the Appendix A.2 protected header, long-header parsing
+// recovers the framing fields, and a full encode -> decode round-trips the
+// packet number and the plaintext frames.
+import stdlib::testing::*;
+import stdlib::net::quic::protect::*;
+import stdlib::net::quic::packet::*;
+import stdlib::net::quic::crypto::*;
+import stdlib::net::tls13::record::*;
+import stdlib::hex::*;
+
+fn _h(s: string) -> string {
+    return hex_decode(s).unwrap();
+}
+
+// RFC 9001 A.2: the unprotected client Initial header ends with pn 00000002 at
+// offset 18; with hp key 9f50.. and the ciphertext sample d1b1.., header
+// protection turns the first byte c3 -> c0 and the pn 00000002 -> 7b9aec34.
+fn test_apply_hp_rfc_a2() -> i32 {
+    let hp: string = _h("9f50449e04a0e810283a1e9933adedd2");
+    let header: string = _h("c300000001088394c8f03e5157080000449e00000002");
+    let sample: string = _h("d1b1c98dd7689fb8ec11d242b123dc9b");
+    let packet: string = header.concat(sample); // sample sits right after the pn
+    let wire: string = quic_apply_hp(AEAD_AES128_GCM, hp, packet, 18).unwrap();
+    assert_str_eq!(hex_encode(wire.substring(0, 22)), "c000000001088394c8f03e5157080000449e7b9aec34");
+    return 0;
+}
+
+// Removing header protection is the exact inverse: the masked wire header goes
+// back to the unprotected bytes, and the packet number decodes to 2.
+fn test_remove_hp_inverts_apply() -> i32 {
+    let hp: string = _h("9f50449e04a0e810283a1e9933adedd2");
+    let header: string = _h("c300000001088394c8f03e5157080000449e00000002");
+    let sample: string = _h("d1b1c98dd7689fb8ec11d242b123dc9b");
+    let wire: string = quic_apply_hp(AEAD_AES128_GCM, hp, header.concat(sample), 18).unwrap();
+    let open: *HpOpen = quic_remove_hp(AEAD_AES128_GCM, hp, wire, 18).unwrap();
+    assert_eq!(open.pn as i64, 2);
+    assert_eq!(open.pn_len, 4);
+    assert_eq!(open.first, 0xc3);
+    assert_str_eq!(hex_encode(open.header), "c300000001088394c8f03e5157080000449e00000002");
+    return 0;
+}
+
+// The long-header parser recovers version, CIDs, token and the Length field,
+// and points pn_offset at the first packet-number byte.
+fn test_parse_long_header() -> i32 {
+    let dcid: string = _h("8394c8f03e515708");
+    let pkt: string = build_initial(1, dcid, _h("aabb"), "", 7, 4, _h("06004041"));
+    let h: *LongHeader = quic_parse_long_header(pkt, 0).unwrap();
+    assert_eq!(h.kind, PKT_INITIAL);
+    assert_eq!(h.version as i64, 1);
+    assert_str_eq!(hex_encode(h.dcid), "8394c8f03e515708");
+    assert_str_eq!(hex_encode(h.scid), "aabb");
+    assert_eq!(h.token.len(), 0);
+    // pn (4) + payload (4) + tag (16) = 24
+    assert_eq!(h.length as i64, 24);
+    return 0;
+}
+
+// Full pipeline: encode a protected Initial, then decode it back to the same
+// packet number and frame bytes (binary-safe, incl. an embedded NUL).
+fn test_encode_decode_roundtrip() -> i32 {
+    let dcid: string = _h("8394c8f03e515708");
+    let ck: *QuicKeys = quic_client_initial_keys(dcid).unwrap();
+    let frames: string = frame_crypto(0, "fake ClientHello\x00with a NUL and padding bytes here").concat(frame_padding(20));
+    let wire: string = quic_encode_initial(AEAD_AES128_GCM, ck, 1, dcid, "", "", 2, frames).unwrap();
+    // The protected first byte must not expose the long-header type bits.
+    let dec: *QuicPacket = quic_decode_long(AEAD_AES128_GCM, ck, wire, 0).unwrap();
+    assert_eq!(dec.pn as i64, 2);
+    assert_eq!(dec.kind, PKT_INITIAL);
+    assert!(dec.payload.eq(frames));
+    return 0;
+}
+
+// A tampered ciphertext byte fails the AEAD tag (fail-closed).
+fn test_decode_rejects_tamper() -> i32 {
+    let dcid: string = _h("8394c8f03e515708");
+    let ck: *QuicKeys = quic_client_initial_keys(dcid).unwrap();
+    let frames: string = frame_crypto(0, "some handshake bytes for the crypto stream here");
+    let wire: string = quic_encode_initial(AEAD_AES128_GCM, ck, 1, dcid, "", "", 5, frames).unwrap();
+    // Flip a byte deep in the ciphertext (past the header).
+    let n: i32 = wire.len();
+    let bad: string = wire.substring(0, n - 8).concat(((wire.at(n - 8).to_int() ^ 1) as char).to_string()).concat(wire.substring(n - 7, n));
+    assert!(quic_decode_long(AEAD_AES128_GCM, ck, bad, 0).is_err());
+    return 0;
+}

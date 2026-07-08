@@ -1,0 +1,228 @@
+// QUIC packet protection assembly (RFC 9001 §5.4 header protection + §5.3
+// AEAD), pure Glide. `packet.glide` builds the UNPROTECTED header+payload and
+// `crypto.glide` derives keys / seals payloads; this file ties them together
+// into a fully-protected datagram and back:
+//
+//   encode: build header+payload -> AEAD seal -> apply header protection
+//   decode: remove header protection -> learn pn -> AEAD open
+//
+// Header protection hides the packet number and the low bits of the first
+// byte using a mask derived from a 16-byte ciphertext sample taken 4 bytes
+// past the start of the packet number (RFC 9001 §5.4.2).
+//
+// ```glide
+// import stdlib::net::quic::protect::*;
+//
+// let ck: *QuicKeys = quic_client_initial_keys(dcid).unwrap();
+// let pkt: string = quic_encode_initial(AEAD_AES128_GCM, ck, 1, dcid, scid,
+//                                        "", pn, frames).unwrap();
+// // ...send pkt over UDP, receive a datagram back...
+// let p: *QuicPacket = quic_decode_long(AEAD_AES128_GCM, sk, dgram, 0).unwrap();
+// ```
+import stdlib::net::quic::packet::*;
+import stdlib::net::quic::crypto::*;
+import stdlib::net::tls13::record::*; // AEAD_* constants
+import stdlib::bytes::*;
+
+fn _ppb(s: string, i: i32) -> i32 {
+    return s.at(i).to_int() & 255;
+}
+
+// ---- header protection (RFC 9001 §5.4) --------------------------------
+
+// The bits of the first byte that header protection masks: the low 4 for a
+// long header (reserved + pn length), the low 5 for a short header (reserved +
+// key phase + pn length).
+fn _hp_bits(first: i32) -> i32 {
+    if (first & 0x80) != 0 { return 0x0f; }
+    return 0x1f;
+}
+
+/// Apply header protection to an assembled packet whose payload is ALREADY
+/// AEAD-sealed. `pn_offset` is the index of the first packet-number byte; the
+/// packet-number length is read from the (still unprotected) first byte's low
+/// two bits. Returns the on-the-wire packet bytes.
+pub fn quic_apply_hp(aead: i32, hp: string, packet: string, pn_offset: i32) -> !string {
+    let pn_len: i32 = (_ppb(packet, 0) & 3) + 1;
+    let sample_off: i32 = pn_offset + 4;
+    if sample_off + 16 > packet.len() { return err("quic: packet too short for HP sample"); }
+    let sample: string = packet.substring(sample_off, sample_off + 16);
+    let mask: string = quic_hp_mask(aead, hp, sample)?;
+    let bb: *ByteBuffer = ByteBuffer::new();
+    bb.push((_ppb(packet, 0) ^ _ppb(mask, 0) & _hp_bits(_ppb(packet, 0))) as u8);
+    for let i: i32 = 1; i < pn_offset; i++ {
+        bb.push(_ppb(packet, i) as u8);
+    }
+    for let i: i32 = 0; i < pn_len; i++ {
+        bb.push((_ppb(packet, pn_offset + i) ^ _ppb(mask, 1 + i)) as u8);
+    }
+    for let i: i32 = pn_offset + pn_len; i < packet.len(); i++ {
+        bb.push(_ppb(packet, i) as u8);
+    }
+    let s: string = bb.to_string();
+    bb.free();
+    return ok(s);
+}
+
+/// The result of removing header protection: the recovered first byte, the
+/// packet number and its length, and the header bytes (first byte + fields +
+/// unmasked packet number) that serve as the AEAD AAD.
+pub struct HpOpen {
+    pub first: i32,
+    pub pn: u64,
+    pub pn_len: i32,
+    pub header: string,
+}
+
+/// Remove header protection. `pn_offset` is where the packet number starts;
+/// the first byte and packet number are unmasked, and the packet-number
+/// length is recovered from the unmasked first byte. The returned `header`
+/// (bytes 0..pn_offset+pn_len, unmasked) is the AAD for AEAD open.
+pub fn quic_remove_hp(aead: i32, hp: string, packet: string, pn_offset: i32) -> !*HpOpen {
+    let sample_off: i32 = pn_offset + 4;
+    if sample_off + 16 > packet.len() { return err("quic: packet too short for HP sample"); }
+    let sample: string = packet.substring(sample_off, sample_off + 16);
+    let mask: string = quic_hp_mask(aead, hp, sample)?;
+    let first: i32 = _ppb(packet, 0) ^ _ppb(mask, 0) & _hp_bits(_ppb(packet, 0));
+    let pn_len: i32 = (first & 3) + 1;
+    let hb: *ByteBuffer = ByteBuffer::new();
+    hb.push((first & 255) as u8);
+    for let i: i32 = 1; i < pn_offset; i++ {
+        hb.push(_ppb(packet, i) as u8);
+    }
+    let mut pn: u64 = 0;
+    for let i: i32 = 0; i < pn_len; i++ {
+        let b: i32 = _ppb(packet, pn_offset + i) ^ _ppb(mask, 1 + i);
+        hb.push((b & 255) as u8);
+        pn = pn << 8 | b as u64;
+    }
+    let header: string = hb.to_string();
+    hb.free();
+    let out: *HpOpen = malloc(sizeof(HpOpen)) as *HpOpen;
+    out.first = first;
+    out.pn = pn;
+    out.pn_len = pn_len;
+    out.header = header;
+    return ok(out);
+}
+
+// ---- long-header parsing (RFC 9000 §17.2) -----------------------------
+
+/// A parsed long-header packet's framing fields. `pn_offset` is where the
+/// (protected) packet number begins; `length` is the varint Length field
+/// covering the packet number + protected payload + AEAD tag. `end` is the
+/// index one past this packet (start of any coalesced packet in the datagram).
+pub struct LongHeader {
+    pub kind: i32, // PKT_INITIAL / PKT_HANDSHAKE / ...
+    pub version: u32,
+    pub dcid: string,
+    pub scid: string,
+    pub token: string,
+    pub length: u64,
+    pub pn_offset: i32,
+    pub end: i32,
+}
+
+/// Parse a long-header packet starting at `off`, up to (not including) the
+/// packet number. Fails on truncation or a non-long-header first byte.
+pub fn quic_parse_long_header(packet: string, off: i32) -> !*LongHeader {
+    if off >= packet.len() { return err("quic: empty long header"); }
+    let first: i32 = _ppb(packet, off);
+    if (first & 0x80) == 0 { return err("quic: not a long header"); }
+    let mut p: i32 = off + 1;
+    if p + 4 > packet.len() { return err("quic: truncated version"); }
+    let version: u32 = (_ppb(packet, p) << 24 | _ppb(packet, p + 1) << 16 | _ppb(packet, p + 2) << 8 | _ppb(packet, p + 3)) as u32;
+    p = p + 4;
+    if p >= packet.len() { return err("quic: truncated DCID len"); }
+    let dcid_len: i32 = _ppb(packet, p);
+    p = p + 1;
+    if p + dcid_len > packet.len() { return err("quic: truncated DCID"); }
+    let dcid: string = packet.substring(p, p + dcid_len);
+    p = p + dcid_len;
+    if p >= packet.len() { return err("quic: truncated SCID len"); }
+    let scid_len: i32 = _ppb(packet, p);
+    p = p + 1;
+    if p + scid_len > packet.len() { return err("quic: truncated SCID"); }
+    let scid: string = packet.substring(p, p + scid_len);
+    p = p + scid_len;
+    let kind: i32 = first >> 4 & 3;
+    let mut token: string = "";
+    if kind == PKT_INITIAL {
+        let tlv: *Varint = varint_decode(packet, p)?;
+        p = p + tlv.len;
+        let tl: i32 = tlv.value as i32;
+        if p + tl > packet.len() { return err("quic: truncated token"); }
+        token = packet.substring(p, p + tl);
+        p = p + tl;
+    }
+    let lv: *Varint = varint_decode(packet, p)?;
+    p = p + lv.len;
+    let out: *LongHeader = malloc(sizeof(LongHeader)) as *LongHeader;
+    out.kind = kind;
+    out.version = version;
+    out.dcid = dcid;
+    out.scid = scid;
+    out.token = token;
+    out.length = lv.value;
+    out.pn_offset = p;
+    out.end = p + lv.value as i32;
+    return ok(out);
+}
+
+// ---- full encode / decode ---------------------------------------------
+
+/// A decoded, decrypted QUIC packet: its packet number and the plaintext
+/// frame bytes, plus how many datagram bytes it consumed (for coalescing).
+pub struct QuicPacket {
+    pub kind: i32,
+    pub pn: u64,
+    pub payload: string, // decrypted frame bytes
+    pub scid: string, // sender's source connection ID (long header)
+    pub end: i32, // one past this packet in the datagram
+}
+
+/// Encode a fully-protected long-header Initial packet from plaintext frames.
+/// Builds the header, AEAD-seals the frames with the header as AAD, then
+/// applies header protection. `pn_len` is fixed at 4 (simplest correct choice).
+pub fn quic_encode_initial(aead: i32, keys: *QuicKeys, version: u32, dcid: string, scid: string, token: string, packet_number: u64, frames: string) -> !string {
+    let pn_len: i32 = 4;
+    // build_initial writes the Length field for pn + frames + AEAD tag, then
+    // header fields + pn + frames. Parse it back to find where the pn starts,
+    // seal the frames under the header (AAD), and header-protect the result.
+    let full: string = build_initial(version, dcid, scid, token, packet_number, pn_len, frames);
+    let hdr: *LongHeader = quic_parse_long_header(full, 0)?;
+    let pn_offset: i32 = hdr.pn_offset;
+    free(hdr as *void);
+    let header: string = full.substring(0, pn_offset + pn_len);
+    let sealed: string = quic_seal(aead, keys.key, keys.iv, packet_number, header, frames)?;
+    let wire: string = quic_apply_hp(aead, keys.hp, header.concat(sealed), pn_offset)?;
+    return ok(wire);
+}
+
+/// Decode + decrypt one long-header packet at `off` in a (possibly coalesced)
+/// datagram. Removes header protection, opens the AEAD payload, and reports
+/// where the next coalesced packet begins.
+pub fn quic_decode_long(aead: i32, keys: *QuicKeys, packet: string, off: i32) -> !*QuicPacket {
+    let hdr: *LongHeader = quic_parse_long_header(packet, off)?;
+    let pn_offset: i32 = hdr.pn_offset;
+    let hp: *HpOpen = quic_remove_hp(aead, keys.hp, packet, pn_offset)?;
+    // Ciphertext = the Length field's bytes after the packet number.
+    let ct_start: i32 = pn_offset + hp.pn_len;
+    let ct_end: i32 = pn_offset + hdr.length as i32;
+    if ct_end > packet.len() {
+        free(hdr as *void);
+        free(hp as *void);
+        return err("quic: truncated packet body");
+    }
+    let ciphertext: string = packet.substring(ct_start, ct_end);
+    let payload: string = quic_open(aead, keys.key, keys.iv, hp.pn, hp.header, ciphertext)?;
+    let out: *QuicPacket = malloc(sizeof(QuicPacket)) as *QuicPacket;
+    out.kind = hdr.kind;
+    out.pn = hp.pn;
+    out.payload = payload;
+    out.scid = hdr.scid;
+    out.end = hdr.end;
+    free(hdr as *void);
+    free(hp as *void);
+    return ok(out);
+}
