@@ -3479,6 +3479,33 @@ fn _let_binding_escapes(t: *Typer, bname: string) -> bool {
     return false;
 }
 
+// Does `t` mention TY_NAMED `n` anywhere (as an arg / inner)? Drives the
+// occurs check in wrapper-inner-mismatch: a param `T` can never equal a type
+// that CONTAINS `T`.
+fn _ty_mentions_named(t: *Type, n: string) -> bool {
+    if t == null || n == null {
+        return false;
+    }
+    if t.kind == TY_NAMED && t.name != null && t.name.eq(n) {
+        return true;
+    }
+    if _ty_mentions_named(t.inner, n) {
+        return true;
+    }
+    if t.fnptr_ret != null && _ty_mentions_named(t.fnptr_ret, n) {
+        return true;
+    }
+    if t.args != null {
+        for let i: i32 = 0; i < t.args.len(); i++ {
+            let a: Type = t.args.get(i);
+            if _ty_mentions_named(&a, n) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // One-level field type of `<ident>.<field>` via the declared-field table —
 // a pure scope + struct_field_types lookup, NO infer_expr re-run (that would
 // duplicate its diagnostics). infer_expr defers member types to codegen, so
@@ -5819,6 +5846,28 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                         bx_hint = " — box the node: `".concat(e.rhs.lhs.str_val).concat("(Box::new(v))`");
                     }
                     t.err_code_range(wa.line, wa.column, wa.str_val.len(), "wrapper-inner-mismatch", "`".concat(e.rhs.lhs.str_val).concat("(...)` here must wrap `").concat(type_to_string(wfin.inner)).concat("`, but the value is a `").concat(wa.str_val).concat("` literal").concat(bx_hint));
+                }
+                // `some(Box::new(v))` where the field wants `Box<LinkedList<T>>`
+                // but v is a bare `T` (or a concrete non-node): T can never BE
+                // LinkedList<T> (the occurs check), so this is wrong for every
+                // instantiation — it died in cc as an incompatible ctor arg.
+                if wa.kind == EX_CALL && wa.lhs != null && wa.lhs.kind == EX_PATH
+                    && wa.lhs.str_val != null && wfin.inner.kind == TY_GENERIC
+                    && wa.lhs.str_val.eq(wfin.inner.name)
+                    && wa.lhs.field != null && wa.lhs.field.eq("new")
+                    && wfin.inner.args != null && wfin.inner.args.len() == 1
+                    && wa.args != null && wa.args.len() == 1 {
+                    let want_in: Type = wfin.inner.args.get(0);
+                    let va: Expr = wa.args.get(0);
+                    if va.kind == EX_IDENT && va.str_val != null && t.scope.contains(va.str_val) {
+                        let vat: Type = t.scope.get(va.str_val);
+                        // occurs: the arg's type is a bare name that appears
+                        // INSIDE the wanted inner (T vs LinkedList<T>).
+                        if vat.kind == TY_NAMED && vat.name != null
+                            && want_in.kind == TY_GENERIC && _ty_mentions_named(&want_in, vat.name) {
+                            t.err_code_range(va.line, va.column, va.str_val.len(), "wrapper-inner-mismatch", "`".concat(wfin.inner.name).concat("::new(").concat(va.str_val).concat(")` boxes a `").concat(vat.name).concat("`, but field `").concat(e.lhs.field).concat("` needs `").concat(type_to_string(wfin.inner)).concat("` — wrap a full node: `some(").concat(wfin.inner.name).concat("::new(Self::new(").concat(va.str_val).concat(")))`"));
+                        }
+                    }
                 }
             }
         }

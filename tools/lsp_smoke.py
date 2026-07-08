@@ -2184,6 +2184,14 @@ case_diagnostics("some() wrapping the wrong inner for a boxed field is rejected"
     'fn main() { println!("x"); }',
     expect_codes_present=["wrapper-inner-mismatch"])
 
+case_diagnostics("Box::new of a bare T for a Box<Node<T>> field is rejected (occurs)",
+    'struct LL<T> { next: ?Box<LL<T>>, data: T }\n'
+    'impl<T> LL<T> {\n'
+    '    pub fn bad(&mut self, data: T) { self.next = some(Box::new(data)); }\n'
+    '}\n'
+    'fn main() { println!("x"); }',
+    expect_codes_present=["wrapper-inner-mismatch"])
+
 case_diagnostics("bare struct literal into a wrapper field is rejected",
     'struct LL<T> { next: ?Box<LL<T>>, data: T }\n'
     'impl<T> LL<T> {\n'
