@@ -2149,6 +2149,18 @@ case_diagnostics("using a &mut binder after copying it is use-after-move",
     '    a.v = 2;\n    return b.v;\n}',
     expect_codes_present=["use-after-move"])
 
+case_diag_message("generic method arg checked against the ctor-inferred T",
+    'struct LL<T> { next: ?Box<LL<T>>, data: T }\n'
+    'impl<T> LL<T> {\n'
+    '    pub fn new(data: T) -> Self { return Self { data: data, next: none() }; }\n'
+    '    pub fn insert(&mut self, data: T) { self.next = some(Box::new(Self::new(data))); }\n'
+    '}\n'
+    'fn main() {\n'
+    '    let node = LL::new("alelo");\n'
+    '    node.insert(2);\n'
+    '}',
+    "arg data type mismatch: expected string, got i32")
+
 case_diagnostics("comparing an option local with null is rejected (value, not pointer)",
     'fn main() {\n'
     '    let o: ?i32 = some(1);\n    if o == null { println!("x"); }\n}',

@@ -3522,6 +3522,46 @@ fn _ty_mentions_named(t: *Type, n: string) -> bool {
     return false;
 }
 
+// Structurally unify a declared param type against an inferred arg type,
+// binding any TY_NAMED that names one of `params` (first binding wins).
+// The typer-side mirror of codegen's unify_for_inference — what lets
+// `LinkedList::new("alelo")` return a CONCRETE LinkedList<string>.
+fn _typer_unify(pt: *Type, at: *Type, params: *Vector<string>, b_names: *Vector<string>, b_args: *Vector<Type>) {
+    if pt == null || at == null {
+        return;
+    }
+    if pt.kind == TY_NAMED && pt.name != null {
+        for let i: i32 = 0; i < params.len(); i++ {
+            if params.get(i).eq(pt.name) {
+                for let j: i32 = 0; j < b_names.len(); j++ {
+                    if b_names.get(j).eq(pt.name) {
+                        return;
+                    }
+                }
+                b_names.push(pt.name);
+                b_args.push(*at);
+                return;
+            }
+        }
+        return;
+    }
+    _typer_unify(pt.inner, at.inner, params, b_names, b_args);
+    if pt.fnptr_ret != null {
+        _typer_unify(pt.fnptr_ret, at.fnptr_ret, params, b_names, b_args);
+    }
+    if pt.args != null && at.args != null {
+        let mut n: i32 = pt.args.len();
+        if at.args.len() < n {
+            n = at.args.len();
+        }
+        for let i: i32 = 0; i < n; i++ {
+            let pa: Type = pt.args.get(i);
+            let aa: Type = at.args.get(i);
+            _typer_unify(&pa, &aa, params, b_names, b_args);
+        }
+    }
+}
+
 // Substitute TY_NAMED occurrences of `params[i]` with `args[i]` in `ty`
 // (shallow-clone walker). The typer-side mirror of codegen's subst_type,
 // only as much as _simple_field_ty needs.
@@ -6611,24 +6651,48 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                         t.err_code_range(e.lhs.line, e.lhs.column, path_span, "", "wrong arg count for `".concat(prefix).concat("::").concat(e.lhs.field).concat("`: expected ").concat(int_to_str(plen)).concat(", got ").concat(int_to_str(alen)));
                     }
                 }
+                // Bind type params from the call's OWN args — `LinkedList::
+                // new("alelo")` binds T := string — so (a) later args are
+                // checked against the binding, and (b) the RETURN comes back
+                // CONCRETE: `node` enters scope as LinkedList<string> and the
+                // existing receiver-substituted method check catches a later
+                // `node.insert(2)` instead of first-use-binding T to i32.
+                let _tp_all: *Vector<string> = Vector::new();
+                if sig.owner_type_params != null {
+                    for let oi: i32 = 0; oi < sig.owner_type_params.len(); oi++ {
+                        _tp_all.push(sig.owner_type_params.get(oi));
+                    }
+                }
+                if sig.type_params != null {
+                    for let mi: i32 = 0; mi < sig.type_params.len(); mi++ {
+                        _tp_all.push(sig.type_params.get(mi));
+                    }
+                }
+                let _b_names: *Vector<string> = Vector::new();
+                let _b_args: *Vector<Type> = Vector::new();
                 if e.args != null {
                     for let i: i32 = 0; i < e.args.len(); i++ {
                         let a: Expr = e.args.get(i);
                         let at: *Type = infer_expr(t, &a);
-                        // Type-check each arg against its param. Skip params
-                        // whose declared type mentions a method- OR owner-
-                        // level type parameter (generic ctors like
-                        // `Vector::new()` / `Vector::from(x: T)` — T can't be
-                        // bound here without monomorphization).
                         if i < plen {
                             let p: Param = sig.params.get(i);
                             _check_null_borrow_arg(t, p.ty, &a);
                             _check_scalar_borrow_forward(t, p.ty, &a);
-                            if p.ty != null && !_type_references_any(p.ty, sig.type_params) && !_type_references_any(p.ty, sig.owner_type_params) && !arg_compat(p.ty, at, sig.type_params) {
-                                t.err_code_range(a.line, a.column, _arg_span(&a), "", "arg ".concat(p.name).concat(" type mismatch: expected ").concat(type_to_string(p.ty)).concat(", got ").concat(type_to_string(at)));
+                            if p.ty != null && at != null && _tp_all.len() > 0 {
+                                _typer_unify(p.ty, at, _tp_all, _b_names, _b_args);
+                            }
+                            let mut want: *Type = p.ty;
+                            if p.ty != null && _b_names.len() > 0 {
+                                want = _typer_subst_type(p.ty, _b_names, _b_args);
+                            }
+                            if want != null && !_type_references_any(want, sig.type_params) && !_type_references_any(want, sig.owner_type_params) && !arg_compat(want, at, sig.type_params) {
+                                t.err_code_range(a.line, a.column, _arg_span(&a), "", "arg ".concat(p.name).concat(" type mismatch: expected ").concat(type_to_string(want)).concat(", got ").concat(type_to_string(at)));
                             }
                         }
                     }
+                }
+                if sig.ret_type != null && _b_names.len() > 0 {
+                    return _typer_subst_type(sig.ret_type, _b_names, _b_args);
                 }
                 return sig.ret_type;
             }
