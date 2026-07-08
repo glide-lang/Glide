@@ -831,6 +831,10 @@ pub struct Typer {
     // reference those params, so literal field-value checking is skipped for
     // them (no monomorphization at this stage) to avoid false positives.
     pub struct_generic: *HashMap<bool>,
+    // Generic struct name -> its param names, comma-joined (`"K,V"`). Lets
+    // _simple_field_ty substitute a concrete receiver's args into the raw
+    // template field type.
+    pub struct_type_params: *HashMap<string>,
     // Opaque `extern type Foo;` names. Registered in `structs` too (so `*Foo`
     // resolves), but by-value uses and struct literals are rejected — the C
     // side owns the definition and Glide never knows the size.
@@ -1694,6 +1698,7 @@ impl Typer {
         t.struct_fields_all = struct_fields_all;
         t.struct_field_types = HashMap::new();
         t.struct_generic = HashMap::new();
+        t.struct_type_params = HashMap::new();
         t.extern_types = HashMap::new();
         t.scope = scope;
         t.module_scope = mscope;
@@ -2555,6 +2560,17 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
             // type param, so their literal field-value checking is skipped.
             if s.type_params != null && s.type_params.len() > 0 {
                 t.struct_generic.insert(s.name, true);
+                // Param NAMES (comma-joined) so _simple_field_ty can
+                // substitute a concrete receiver's args into the raw template
+                // field type (`Stack<i32>.top` resolves to `?i32`, not `?T`).
+                let mut tps: string = "";
+                for let ti: i32 = 0; ti < s.type_params.len(); ti++ {
+                    if ti > 0 {
+                        tps = tps.concat(",");
+                    }
+                    tps = tps.concat(s.type_params.get(ti));
+                }
+                t.struct_type_params.insert(s.name, tps);
                 // Record per-param bounds (`struct S<T: Ord>`) so annotation
                 // sites (`let x: S<Plain>`) can enforce them; parsed-and-
                 // dropped bounds were a silent lie.
@@ -3506,12 +3522,52 @@ fn _ty_mentions_named(t: *Type, n: string) -> bool {
     return false;
 }
 
+// Substitute TY_NAMED occurrences of `params[i]` with `args[i]` in `ty`
+// (shallow-clone walker). The typer-side mirror of codegen's subst_type,
+// only as much as _simple_field_ty needs.
+fn _typer_subst_type(ty: *Type, params: *Vector<string>, args: *Vector<Type>) -> *Type {
+    if ty == null {
+        return null;
+    }
+    if ty.kind == TY_NAMED && ty.name != null {
+        for let i: i32 = 0; i < params.len() && i < args.len(); i++ {
+            if params.get(i).eq(ty.name) {
+                let a: Type = args.get(i);
+                let ap: *Type = __glide_palloc(sizeof(Type)) as *Type;
+                *ap = a;
+                return ap;
+            }
+        }
+        return ty;
+    }
+    let c: *Type = __glide_palloc(sizeof(Type)) as *Type;
+    *c = *ty;
+    if ty.inner != null {
+        c.inner = _typer_subst_type(ty.inner, params, args);
+    }
+    if ty.fnptr_ret != null {
+        c.fnptr_ret = _typer_subst_type(ty.fnptr_ret, params, args);
+    }
+    if ty.args != null {
+        let na: *Vector<Type> = Vector::new();
+        for let i: i32 = 0; i < ty.args.len(); i++ {
+            let a: Type = ty.args.get(i);
+            let sp: *Type = _typer_subst_type(&a, params, args);
+            na.push(*sp);
+        }
+        c.args = na;
+    }
+    return c;
+}
+
 // One-level field type of `<ident>.<field>` via the declared-field table —
 // a pure scope + struct_field_types lookup, NO infer_expr re-run (that would
 // duplicate its diagnostics). infer_expr defers member types to codegen, so
-// checks that need a field's declared type (the option-null-compare reject)
-// use this. Generic receivers resolve to the template's RAW field type
-// (`?Box<LL<T>>`): only its KIND is consulted, which substitution preserves.
+// checks that need a field's declared type (option-null-compare, match
+// exhaustiveness, payload binding) use this. A generic receiver's raw
+// template field type gets the receiver's args substituted (`Stack<i32>.top`
+// -> `?i32`); when the args are themselves params (`self` inside the generic
+// impl) the substitution is the identity.
 fn _simple_field_ty(t: *Typer, e: *Expr) -> *Type {
     if e == null || e.kind != EX_MEMBER || e.field == null || e.field.eq("") { return null; }
     if e.lhs == null || e.lhs.kind != EX_IDENT || e.lhs.str_val == null { return null; }
@@ -3525,6 +3581,15 @@ fn _simple_field_ty(t: *Typer, e: *Expr) -> *Type {
     let ft: Type = t.struct_field_types.get(key);
     let p: *Type = __glide_palloc(sizeof(Type)) as *Type;
     *p = ft;
+    if st.kind == TY_GENERIC && st.args != null && t.struct_type_params.contains(st.name) {
+        let plist: *Vector<string> = t.struct_type_params.get(st.name).split(",");
+        if plist.len() == st.args.len() {
+            let sp: *Type = _typer_subst_type(p, plist, st.args);
+            plist.free();
+            return sp;
+        }
+        plist.free();
+    }
     return p;
 }
 
@@ -4506,6 +4571,12 @@ fn check_stmt(t: *Typer, s: *Stmt) {
         let mut scrut_ty: *Type = null;
         if s.scrutinee != null {
             scrut_ty = infer_expr(t, s.scrutinee);
+            // infer_expr defers FIELD types to codegen (returns null), which
+            // silently skipped exhaustiveness for `match n.v` / `match
+            // self.next` — the declared-field lookup recovers the type.
+            if scrut_ty == null {
+                scrut_ty = _simple_field_ty(t, s.scrutinee);
+            }
         }
         // Check each arm body in a borrow scope, binding payload names with
         // `__unknown__` placeholders (codegen emits them via `__typeof__`, so
@@ -5275,7 +5346,12 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         return v_ty;
     }
     if e.kind == EX_MATCH {
-        let scrut_ty: *Type = infer_expr(t, e.lhs);
+        let mut scrut_ty: *Type = infer_expr(t, e.lhs);
+        // Same field-scrutinee recovery as the statement form: infer_expr
+        // defers member types, silently skipping exhaustiveness/payload types.
+        if scrut_ty == null {
+            scrut_ty = _simple_field_ty(t, e.lhs);
+        }
         let mut result_ty: *Type = null;
         let mut saw_value_arm: bool = false;
         let mut saw_void_arm: bool = false;

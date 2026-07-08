@@ -1708,7 +1708,7 @@ case_completion_has("match arm completion offers some/none for an Option",
     '    return 0;\n'
     '}',
     {"line":3,"character":8},
-    ["some(v) => {}","none() => {}"])
+    ["some(v) => {}","none => {}"])
 
 # Enum scrutinee (unannotated local) -> one arm per variant.
 case_completion_has("match arm completion offers enum variants",
@@ -2153,6 +2153,16 @@ case_diagnostics("comparing an option local with null is rejected (value, not po
     'fn main() {\n'
     '    let o: ?i32 = some(1);\n    if o == null { println!("x"); }\n}',
     expect_codes_present=["option-null-compare"])
+
+case_diagnostics("match on an option FIELD without none is not exhaustive",
+    'struct N { v: ?i32 }\n'
+    'fn main() {\n'
+    '    let n: N = N { v: some(1) };\n'
+    '    match n.v {\n'
+    '        some(x) => { println!(x); },\n'
+    '    }\n'
+    '}',
+    expect_codes_present=["match-not-exhaustive"])
 
 case_diagnostics("comparing an option FIELD with null is rejected",
     'struct N { v: ?i32 }\n'
