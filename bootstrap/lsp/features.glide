@@ -1916,9 +1916,34 @@ pub fn handle_signature_help(req: *JsonValue, state: *LspState) {
         target = find_method_in_impl(doc.stmts, cc.type_qual, cc.name);
     }
     if target == null && cc.is_method {
-        let hit: ImplMethodHit = find_method_anywhere(doc.stmts, cc.name);
-        target = hit.method;
-        drop_self = true;
+        // Resolve the RECEIVER's type first — the name-only lookup below
+        // picked the first same-named method ANYWHERE (`node.insert(` on a
+        // LinkedList showed Vector::insert's signature). Same chain resolver
+        // member completion uses; recv_end is the receiver's `.` offset.
+        let mut recv_resolved: bool = false;
+        if cc.recv_end > 0 {
+            let rty: *Type = _chain_resolve_type(doc.text, cc.recv_end, doc.stmts, line0, uri_to_path(uri));
+            let rx: *Type = _strip_ptr_borrow(rty);
+            if rx != null && (rx.kind == TY_NAMED || rx.kind == TY_GENERIC) && rx.name != null && !rx.name.eq("") {
+                recv_resolved = true;
+                target = find_method_in_impl(doc.stmts, rx.name, cc.name);
+                if target != null {
+                    drop_self = true;
+                }
+            }
+        }
+        // A KNOWN receiver type without this method => no popup at all is
+        // better than another type's same-named signature. Only an
+        // unresolvable receiver keeps the name-based fallback.
+        if target == null && !recv_resolved {
+            let hit: ImplMethodHit = find_method_anywhere(doc.stmts, cc.name);
+            target = hit.method;
+            drop_self = true;
+        }
+        if target == null && recv_resolved {
+            lsp_send_response(id, json_null());
+            return;
+        }
     }
     if target == null {
         let td2: *Stmt = find_top_decl(doc.stmts, cc.name);
