@@ -845,6 +845,27 @@ pub fn word_at(text: string, line0: i32, col0: i32) -> string {
     return "";
 }
 
+// The `*` prefix for a `Type::method()` binding shown in hover/inlay follows
+// the called method's DECLARED return: `fn new() -> Self` binds a VALUE,
+// `-> *Vector<T>` the pointer handle. (Was a hardcoded `*` — value ctors
+// displayed as pointer bindings.) Unresolvable method => keep the historical
+// `*` (the stdlib handle convention).
+fn _ctor_star(imp: *Stmt, method: string) -> string {
+    if imp == null || imp.impl_methods == null || method == null {
+        return "*";
+    }
+    for let i: i32 = 0; i < imp.impl_methods.len(); i++ {
+        let m: Stmt = imp.impl_methods.get(i);
+        if m.kind == ST_FN && m.name != null && m.name.eq(method) {
+            if m.fn_ret_ty != null && m.fn_ret_ty.kind == TY_POINTER {
+                return "*";
+            }
+            return "";
+        }
+    }
+    return "*";
+}
+
 // Best-effort type inference for hover. Mirrors what the codegen does in
 // `try_resolve_open_let`: when a variable is declared as `Generic::new()`
 // without an annotation, walk subsequent uses in the same body looking for
@@ -1495,6 +1516,7 @@ fn render_hover_for_let(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt, hpath: stri
                 let gen_name: string = e.lhs.str_val;
                 let imp: *Stmt = find_generic_impl(stmts, gen_name);
                 let is_generic: bool = imp != null && imp.type_params != null && imp.type_params.len() > 0;
+                let star: string = _ctor_star(imp, e.lhs.field);
                 if is_generic {
                     let mut t_str: string = "?";
                     if host != null && host.fn_body != null {
@@ -1503,9 +1525,9 @@ fn render_hover_for_let(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt, hpath: stri
                             t_str = type_to_string_pretty(r);
                         }
                     }
-                    header = header.concat(": *").concat(gen_name).concat("<").concat(t_str).concat(">");
+                    header = header.concat(": ").concat(star).concat(gen_name).concat("<").concat(t_str).concat(">");
                 } else {
-                    header = header.concat(": *").concat(gen_name);
+                    header = header.concat(": ").concat(star).concat(gen_name);
                 }
                 inferred = true;
             } else {
@@ -2209,7 +2231,7 @@ fn _infer_let_type_str(stmts: *Vector<Stmt>, host: *Stmt, s: *Stmt) -> string {
                 if host != null && host.fn_body != null {
                     let r: *Type = walk_constraint_in_body(stmts, host, host.fn_body, s.name, imp.impl_methods, imp.type_params);
                     if r != null {
-                        return "*".concat(gen_name).concat("<").concat(type_to_string_pretty(r)).concat(">");
+                        return _ctor_star(imp, e.lhs.field).concat(gen_name).concat("<").concat(type_to_string_pretty(r)).concat(">");
                     }
                 }
                 return ""; // generic ctor whose T we couldn't pin down
