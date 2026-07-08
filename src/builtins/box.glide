@@ -70,6 +70,22 @@ impl<T> Box<T> {
         self.ptr[0] = v;
     }
 
+    /// In-place access to the boxed value: a raw `*T` into the heap slot —
+    /// mutation through it lands in the box (unlike `get`, which copies).
+    /// This is what makes a recursive structure WALKABLE and mutable:
+    ///
+    /// ```glide
+    /// match self.next {
+    ///     some(b) => b.get_mut().insert(data),   // recurse into the real node
+    ///     none => self.next = some(Box::new(Self::new(data))),
+    /// }
+    /// ```
+    ///
+    /// The pointer is valid until `free` / the scope-end drop.
+    fn get_mut(self: *Box<T>) -> *T {
+        return self.ptr;
+    }
+
     /// Release the inner allocation. The handle itself is a plain value —
     /// nothing else to free. After `free`, the handle is dangling; do not
     /// touch it again. Arena-backed boxes are owned by the arena, so this is

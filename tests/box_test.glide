@@ -30,3 +30,43 @@ fn test_box_recursive_list() -> i32 {
     assert!(sum == 3);
     return 0;
 }
+
+impl<T> LL<T> {
+    // Recursive in-place tail insert — get_mut is what makes the recursive
+    // structure MUTABLE through the box (get would mutate a copy).
+    pub fn push_back(&mut self, data: T) {
+        match self.next {
+            some(b) => {
+                b.get_mut().push_back(data);
+            },
+            none => {
+                self.next = some(Box::new(Self { data: data, next: none() }));
+            },
+        }
+    }
+}
+
+fn test_box_get_mut_tail_insert() -> i32 {
+    let mut head: LL<i32> = LL { data: 1, next: none() };
+    head.push_back(2);
+    head.push_back(3);
+    let mut sum: i32 = head.data;
+    match head.next {
+        some(b) => {
+            sum = sum + b.get().data;
+            match b.get().next {
+                some(c) => {
+                    sum = sum + c.get().data;
+                },
+                none => {
+                    assert!(false);
+                },
+            }
+        },
+        none => {
+            assert!(false);
+        },
+    }
+    assert!(sum == 6);
+    return 0;
+}
