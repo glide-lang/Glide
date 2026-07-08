@@ -44,6 +44,27 @@ fn test_free_once_by_value_pass() -> i32 {
     return 0;
 }
 
+// Alias chain: `let c = b` re-aliases the copy; with c contained the whole
+// chain is contained, so the source stays usable through every link.
+fn test_alias_chain_contained() -> i32 {
+    let u = User { name: "ch".concat("n") };
+    let b = u;
+    let c = b;
+    assert!(u.name.eq("chn"));
+    assert!(c.name.eq("chn"));
+    return 0;
+}
+
+// Copy passed by value: the callee's C copy dies with the call — neither the
+// copy nor the source is consumed by the pass.
+fn test_copy_then_pass() -> i32 {
+    let u = User { name: "c".concat("p") };
+    let b = u;
+    assert!(read_name_len(b) == 2);
+    assert!(u.name.eq("cp"));
+    return 0;
+}
+
 // A POD struct always copied (unaffected by 2B — this is the control).
 struct Point { x: i32, y: i32 }
 
