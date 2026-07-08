@@ -46,6 +46,30 @@ impl<T> LL<T> {
     }
 }
 
+impl<T> LL<T> {
+    // Chained method on an rvalue receiver (`b.get().count()`) — the C
+    // dispatch spills the temporary before taking its address.
+    pub fn count(&self) -> i32 {
+        match self.next {
+            some(b) => {
+                return 1 + b.get().count();
+            },
+            none => {
+                return 1;
+            },
+        }
+    }
+}
+
+fn test_rvalue_receiver_chain() -> i32 {
+    let mut head: LL<i32> = LL { data: 1, next: none() };
+    for i in 0..20 {
+        head.push_back(i);
+    }
+    assert!(head.count() == 21);
+    return 0;
+}
+
 fn test_box_get_mut_tail_insert() -> i32 {
     let mut head: LL<i32> = LL { data: 1, next: none() };
     head.push_back(2);

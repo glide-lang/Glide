@@ -5797,9 +5797,28 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                 let spec_prefix: string = mangle_generic(stripped.name, stripped.args);
                 let spec_name: string = spec_prefix.concat("_").concat(method);
                 if g.fns.contains(spec_name) {
+                    let spec_needs_addr: bool = recv_ty != null && recv_ty.kind != TY_POINTER && recv_ty.kind != TY_BORROW && recv_ty.kind != TY_BORROW_MUT;
+                    // `&<call()>` is not valid C (rvalue receiver): spill into
+                    // a statement-expr temp, mirroring the concrete dispatch.
+                    let spec_rv: bool = recv.kind != EX_IDENT && recv.kind != EX_MEMBER && recv.kind != EX_INDEX && recv.kind != EX_UNARY;
+                    if spec_needs_addr && spec_rv {
+                        print!("({ __auto_type __glide_rcv = ");
+                        emit_expr(g, recv);
+                        print!("; ");
+                        print!(spec_name);
+                        print!("(&__glide_rcv");
+                        if e.args != null {
+                            for let i: i32 = 0; i < e.args.len(); i++ {
+                                print!(", ");
+                                let a: Expr = e.args.get(i);
+                                emit_expr(g, &a);
+                            }
+                        }
+                        print!("); })");
+                        return;
+                    }
                     print!(spec_name);
                     print!("(");
-                    let spec_needs_addr: bool = recv_ty != null && recv_ty.kind != TY_POINTER && recv_ty.kind != TY_BORROW && recv_ty.kind != TY_BORROW_MUT;
                     if spec_needs_addr {
                         print!("&");
                     }
@@ -5850,8 +5869,6 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                         let entry: FnMonoEntry = FnMonoEntry { name: template.name, args: full_args };
                         g.fn_mono_queue.push(entry);
                     }
-                    print!(mangled);
-                    print!("(");
                     // Methods with `self: *T` (pointer receiver, the
                     // common case) want `&recv` when recv is a value;
                     // methods with `self: T` (by-value receiver) take
@@ -5867,6 +5884,28 @@ pub fn emit_expr(g: *CG, e: *Expr) {
                     let r_is_ptr: bool = recv_ty != null && (recv_ty.kind == TY_POINTER || recv_ty.kind == TY_BORROW || recv_ty.kind == TY_BORROW_MUT);
                     let needs_addr: bool = p_is_ptr && !r_is_ptr;
                     let needs_deref: bool = !p_is_ptr && r_is_ptr;
+                    // `&<call()>` is not valid C (rvalue receiver): spill into
+                    // a statement-expr temp so `b.get().insert(x)` chains work.
+                    // Mirrors the concrete-dispatch spill below.
+                    let gen_rv: bool = recv.kind != EX_IDENT && recv.kind != EX_MEMBER && recv.kind != EX_INDEX && recv.kind != EX_UNARY;
+                    if needs_addr && gen_rv {
+                        print!("({ __auto_type __glide_rcv = ");
+                        emit_expr(g, recv);
+                        print!("; ");
+                        print!(mangled);
+                        print!("(&__glide_rcv");
+                        if e.args != null {
+                            for let i: i32 = 0; i < e.args.len(); i++ {
+                                print!(", ");
+                                let a: Expr = e.args.get(i);
+                                emit_expr(g, &a);
+                            }
+                        }
+                        print!("); })");
+                        return;
+                    }
+                    print!(mangled);
+                    print!("(");
                     if needs_addr {
                         print!("&");
                     }
