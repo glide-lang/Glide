@@ -30,6 +30,20 @@ fn test_free_once_reads_before_drop() -> i32 {
     return 0;
 }
 
+fn read_name_len(u: User) -> i32 {
+    return u.name.len();
+}
+
+// Free-once across a by-value pass: a non-retaining callee gets a C copy, so
+// the caller's source stays droppable AND readable after the call — the
+// scope-end free lands after both.
+fn test_free_once_by_value_pass() -> i32 {
+    let u = User { name: "pa".concat("ss") };
+    assert!(read_name_len(u) == 4);
+    assert!(u.name.eq("pass"));
+    return 0;
+}
+
 // A POD struct always copied (unaffected by 2B — this is the control).
 struct Point { x: i32, y: i32 }
 

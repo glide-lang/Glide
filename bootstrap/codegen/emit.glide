@@ -1305,6 +1305,38 @@ fn _sv_args_escape(g: *CG, name: string, args: *Vector<Expr>) -> bool {
     }
     return false;
 }
+// A struct VALUE param whose type has an owned string field — the shapes the
+// retention summary tracks for the free-once by-value pass (see
+// compute_str_retention). Pointer/borrow params are excluded: absent entries
+// default to RETAIN in callee_retains_arg.
+fn _sv_param_struct_with_str(g: *CG, ty: *Type) -> bool {
+    if ty == null || ty.kind != TY_NAMED || ty.name == null { return false; }
+    if !g.structs.contains(ty.name) { return false; }
+    let sd: Stmt = g.structs.get(ty.name);
+    if sd.struct_fields == null { return false; }
+    for let i: i32 = 0; i < sd.struct_fields.len(); i = i + 1 {
+        let sf: Field = sd.struct_fields.get(i);
+        if _param_is_string(sf.ty) { return true; }
+    }
+    return false;
+}
+// Retention-aware call-arg check (free-once by-value pass): a bare-ident
+// struct-value arg handed to a param the callee does NOT retain is a safe
+// pass — the callee gets a C copy and provably never aliases its owned
+// string fields out (its body passes this same walker; computed in
+// compute_str_retention's fixpoint). Anything else stays conservative.
+fn _sv_call_args_escape(g: *CG, name: string, call: *Expr) -> bool {
+    if call.args == null { return false; }
+    for let i: i32 = 0; i < call.args.len(); i = i + 1 {
+        let a: Expr = call.args.get(i);
+        if a.kind == EX_IDENT && a.str_val != null && a.str_val.eq(name) {
+            if callee_retains_arg(g, call, i) { return true; }
+        } else {
+            if _sv_expr_escapes(g, name, &a) { return true; }
+        }
+    }
+    return false;
+}
 fn _sv_expr_escapes(g: *CG, name: string, e: *Expr) -> bool {
     if e == null { return false; }
     if e.kind == EX_IDENT { return e.str_val != null && e.str_val.eq(name); }
@@ -1332,7 +1364,7 @@ fn _sv_expr_escapes(g: *CG, name: string, e: *Expr) -> bool {
     if _sv_is_field_access(name, e) { return true; }
     if e.kind == EX_CALL {
         if _sv_expr_escapes(g, name, e.lhs) { return true; }
-        if _sv_args_escape(g, name, e.args) { return true; }
+        if _sv_call_args_escape(g, name, e) { return true; }
         return false;
     }
     if _sv_expr_escapes(g, name, e.lhs) { return true; }
@@ -1374,6 +1406,9 @@ fn _sv_stmts_escape(g: *CG, name: string, list: *Vector<Stmt>) -> bool {
 }
 fn _sv_stmt_escapes(g: *CG, name: string, st: *Stmt) -> bool {
     if st == null { return false; }
+    // Spawned call: the worker reads its arg copy after this scope may have
+    // dropped — a non-retaining callee is NOT a safe pass across threads.
+    if st.kind == ST_SPAWN { return _ment_expr(name, st.expr_value); }
     // Free-once: `let b = a` copies the struct VALUE. b shares a's string
     // fields but never sv-drops itself (a copy has no struct-lit RHS), so a
     // stays the single owner and its scope-end free stays exactly-once. The
@@ -1970,12 +2005,19 @@ fn _param_is_string(ty: *Type) -> bool {
 fn compute_str_retention(g: *CG) {
     let names: *Vector<string> = g.fns.keys();
     // Seed: analyzable free-fn string params start non-retaining (false).
+    // Struct-VALUE params with an owned string field are tracked in the same
+    // table (a param is string- OR struct-typed, so keys never collide): does
+    // the callee alias the C-copy's string fields out? Judged by the _sv
+    // walker, which lets the free-once by-value pass keep the caller's source
+    // droppable across the call.
     for let i: i32 = 0; i < names.len(); i = i + 1 {
         let f: Stmt = g.fns.get(names.get(i));
         if f.is_extern || f.is_variadic || f.fn_body == null || f.fn_params == null { continue; }
         for let k: i32 = 0; k < f.fn_params.len(); k = k + 1 {
             let p: Param = f.fn_params.get(k);
-            if _param_is_string(p.ty) { g.str_retains.insert(names.get(i).concat("#").concat(k.to_string()), false); }
+            if _param_is_string(p.ty) || _sv_param_struct_with_str(g, p.ty) {
+                g.str_retains.insert(names.get(i).concat("#").concat(k.to_string()), false);
+            }
         }
     }
     // Fixpoint: consult the partial table (building=false), flip false->true only.
@@ -1995,6 +2037,20 @@ fn compute_str_retention(g: *CG) {
                     let key: string = fname.concat("#").concat(k.to_string());
                     if !g.str_retains.get(key) {
                         if _str_stmts_escape(g, p.name, f.fn_body) {
+                            g.str_retains.insert(key, true);
+                            changed = true;
+                        }
+                    }
+                } else if _sv_param_struct_with_str(g, p.ty) {
+                    let key: string = fname.concat("#").concat(k.to_string());
+                    if !g.str_retains.get(key) {
+                        // The _sv alias case reads g.cur_fn_body for the copy-
+                        // containment walk — point it at the CALLEE body here
+                        // (codegen hasn't started; it is null outside emission).
+                        g.cur_fn_body = f.fn_body;
+                        let esc: bool = _sv_stmts_escape(g, p.name, f.fn_body);
+                        g.cur_fn_body = null;
+                        if esc {
                             g.str_retains.insert(key, true);
                             changed = true;
                         }
