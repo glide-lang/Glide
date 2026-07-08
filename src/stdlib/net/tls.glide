@@ -25,16 +25,15 @@
 //   * System CA bundle is used for verification (SSL_CTX_set_default_
 //     verify_paths). Override via TlsConfig.ca_bundle.
 //   * verify=false disables cert validation — never do this in prod.
-
 import stdlib::net::ip::*;
 import stdlib::net::dns::*;
 import stdlib::net::tcp::*;
 import stdlib::net::listener::*;
-import stdlib::net::sys::*;   // Stream trait — TlsStream is a Stream
-import stdlib::bytes::*;      // ByteBuffer — O(n) read accumulation
-import stdlib::net::tls13::client::*;   // pure-Glide TLS 1.3 backend
-import stdlib::net::tls12::client::*;   // pure-Glide TLS 1.2 backend (legacy fallback)
-import stdlib::env::*;        // GLIDE_TLS_BACKEND selector
+import stdlib::net::sys::*; // Stream trait — TlsStream is a Stream
+import stdlib::bytes::*; // ByteBuffer — O(n) read accumulation
+import stdlib::net::tls13::client::*; // pure-Glide TLS 1.3 backend
+import stdlib::net::tls12::client::*; // pure-Glide TLS 1.2 backend (legacy fallback)
+import stdlib::env::*; // GLIDE_TLS_BACKEND selector
 
 // ============================================================================
 // TLS backend scope — THE RULE
@@ -69,7 +68,6 @@ import stdlib::env::*;        // GLIDE_TLS_BACKEND selector
 //   * Static-RSA and finite-field (non-EC) DH key exchange, DSA.
 //   * TLS renegotiation.
 // ============================================================================
-
 c_raw! {
     #ifndef GLIDE_NET_TLS_HELPERS_DEFINED
     #define GLIDE_NET_TLS_HELPERS_DEFINED
@@ -764,24 +762,36 @@ c_raw! {
     #endif
 }
 
-extern fn __glide_tls_connect(family: i32, v4: i64, v6_hi: i64, v6_lo: i64,
-                               port: i32, hostname: string, verify: i32,
-                               min_proto: i32, alpn_csv: string) -> *void;
-extern fn __glide_tls_attach(fd: i64, hostname: string, verify: i32,
-                              min_proto: i32, alpn_csv: string) -> *void;
+extern fn __glide_tls_connect(family: i32, v4: i64, v6_hi: i64, v6_lo: i64, port: i32, hostname: string, verify: i32, min_proto: i32, alpn_csv: string) -> *void;
+
+extern fn __glide_tls_attach(fd: i64, hostname: string, verify: i32, min_proto: i32, alpn_csv: string) -> *void;
+
 extern fn __glide_tls_write(h: *void, data: string, n: i32) -> i64;
+
 extern fn __glide_tls_write_raw(h: *void, data: *void, n: i32) -> i64;
+
 extern fn __glide_tls_read(h: *void, buf: *void, max: i32) -> i64;
+
 extern fn __glide_tls_close(h: *void);
+
 extern fn __glide_tls_alpn(h: *void) -> string;
+
 extern fn __glide_tls_version(h: *void) -> i32;
+
 extern fn __glide_tls_cipher(h: *void) -> string;
+
 extern fn __glide_tls_set_timeout(h: *void, ms: i32);
+
 extern fn __glide_tls_listen(port: i32, cert_path: string, key_path: string, alpn_csv: string) -> *void;
+
 extern fn __glide_tls_accept(listener: *void) -> *void;
+
 extern fn __glide_tls_accept_raw(listener: *void) -> i64;
+
 extern fn __glide_tls_accept_attach(listener: *void, fd: i64) -> *void;
+
 extern fn __glide_tls_listener_close(listener: *void);
+
 extern fn __glide_tls_server_attach(fd: i64, cert_path: string, key_path: string) -> *void;
 
 /// Configuration for an outbound TLS connection.
@@ -790,11 +800,9 @@ pub struct TlsConfig {
     /// production; set false only for local dev against self-signed
     /// servers.
     pub verify: bool,
-
     /// `0`=TLS1.0, `1`=TLS1.1, `2`=TLS1.2, `3`=TLS1.3 minimum. Default
     /// is 2 (TLS 1.2). Most modern servers support 1.2 and 1.3.
     pub min_proto: i32,
-
     /// Comma-separated ALPN protocols to advertise (e.g. "h2,http/1.1").
     /// Empty string disables ALPN.
     pub alpn: string,
@@ -837,13 +845,15 @@ impl TlsConfig {
     /// let cfg: *TlsConfig = TlsConfig::client();
     /// defer cfg.free();
     /// ```
-    pub fn free(self: *TlsConfig) { free(self as *void); }
+    pub fn free(self) {
+        free(self as *void);
+    }
 }
 
 pub struct TlsStream {
-    pub handle: *void,       // OpenSSL SSL* (backend 0)
-    pub backend: i32,        // 0 = OpenSSL, 1 = Glide TLS 1.3, 2 = Glide TLS 1.2
-    pub gconn: *TlsConn,     // pure-Glide TLS 1.3 connection (backend 1)
+    pub handle: *void, // OpenSSL SSL* (backend 0)
+    pub backend: i32, // 0 = OpenSSL, 1 = Glide TLS 1.3, 2 = Glide TLS 1.2
+    pub gconn: *TlsConn, // pure-Glide TLS 1.3 connection (backend 1)
     pub gconn12: *Tls12Conn, // pure-Glide TLS 1.2 connection (backend 2)
 }
 
@@ -852,6 +862,7 @@ pub struct TlsStream {
 fn _tls_use_glide() -> bool {
     return !env_get("GLIDE_TLS_BACKEND").eq("openssl");
 }
+
 // Wrap a Glide TLS 1.3 TlsConn as a TlsStream (backend 1).
 fn _tls_wrap_glide(g: *TlsConn) -> *TlsStream {
     let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
@@ -861,6 +872,7 @@ fn _tls_wrap_glide(g: *TlsConn) -> *TlsStream {
     s.gconn12 = null as *Tls12Conn;
     return s;
 }
+
 // Wrap a Glide TLS 1.2 connection as a TlsStream (backend 2).
 fn _tls_wrap_glide12(g: *Tls12Conn) -> *TlsStream {
     let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
@@ -870,7 +882,10 @@ fn _tls_wrap_glide12(g: *Tls12Conn) -> *TlsStream {
     s.gconn12 = g;
     return s;
 }
-fn _tlsb(s: string, i: i32) -> i32 { return s.at(i).to_int() & 255; }
+
+fn _tlsb(s: string, i: i32) -> i32 {
+    return s.at(i).to_int() & 255;
+}
 
 // Read one full TLS record (5-byte header + payload) from `stream`. May
 // return trailing bytes of a following record; the handshake seeds its
@@ -882,7 +897,7 @@ fn _tls_read_record(stream: *TcpStream) -> !string {
         if chunk.len() == 0 { return err("tls: connection closed before ClientHello"); }
         buf = buf.concat(chunk);
     }
-    let len: i32 = (_tlsb(buf, 3) << 8) | _tlsb(buf, 4);
+    let len: i32 = _tlsb(buf, 3) << 8 | _tlsb(buf, 4);
     while buf.len() < 5 + len {
         let chunk: string = stream.read(16384)?.to_string();
         if chunk.len() == 0 { return err("tls: truncated ClientHello"); }
@@ -894,26 +909,30 @@ fn _tls_read_record(stream: *TcpStream) -> !string {
 // True when a ClientHello record advertises TLS 1.3 via supported_versions.
 fn _tls_ch_offers_13(rec: string) -> bool {
     if rec.len() < 9 { return false; }
-    if _tlsb(rec, 5) != 1 { return false; }        // handshake type must be client_hello
-    let mut p: i32 = 9 + 2 + 32;                    // CH body: skip version + random
+    if _tlsb(rec, 5) != 1 { return false; } // handshake type must be client_hello
+    let mut p: i32 = 9 + 2 + 32; // CH body: skip version + random
     if p >= rec.len() { return false; }
-    let sid: i32 = _tlsb(rec, p); p = p + 1 + sid;  // legacy_session_id
+    let sid: i32 = _tlsb(rec, p);
+    p = p + 1 + sid; // legacy_session_id
     if p + 2 > rec.len() { return false; }
-    let cslen: i32 = (_tlsb(rec, p) << 8) | _tlsb(rec, p + 1); p = p + 2 + cslen;
+    let cslen: i32 = _tlsb(rec, p) << 8 | _tlsb(rec, p + 1);
+    p = p + 2 + cslen;
     if p >= rec.len() { return false; }
-    let complen: i32 = _tlsb(rec, p); p = p + 1 + complen;
+    let complen: i32 = _tlsb(rec, p);
+    p = p + 1 + complen;
     if p + 2 > rec.len() { return false; }
-    let extlen: i32 = (_tlsb(rec, p) << 8) | _tlsb(rec, p + 1); p = p + 2;
+    let extlen: i32 = _tlsb(rec, p) << 8 | _tlsb(rec, p + 1);
+    p = p + 2;
     let ext_end: i32 = p + extlen;
     while p + 4 <= ext_end && p + 4 <= rec.len() {
-        let et: i32 = (_tlsb(rec, p) << 8) | _tlsb(rec, p + 1);
-        let el: i32 = (_tlsb(rec, p + 2) << 8) | _tlsb(rec, p + 3);
+        let et: i32 = _tlsb(rec, p) << 8 | _tlsb(rec, p + 1);
+        let el: i32 = _tlsb(rec, p + 2) << 8 | _tlsb(rec, p + 3);
         p = p + 4;
-        if et == 43 {                              // supported_versions
+        if et == 43 {
             let n: i32 = _tlsb(rec, p);
             let mut q: i32 = p + 1;
             while q + 1 < p + 1 + n {
-                if ((_tlsb(rec, q) << 8) | _tlsb(rec, q + 1)) == 0x0304 { return true; }
+                if (_tlsb(rec, q) << 8 | _tlsb(rec, q + 1)) == 0x0304 { return true; }
                 q = q + 2;
             }
         }
@@ -929,8 +948,12 @@ fn _tls_alpn_vec(alpn: string) -> *Vector<string> {
     let mut cur: string = "";
     for let i: i32 = 0; i < alpn.len(); i++ {
         let c: string = alpn.substring(i, i + 1);
-        if c.eq(",") { if cur.len() > 0 { out.push(cur); } cur = ""; }
-        else { cur = cur.concat(c); }
+        if c.eq(",") {
+            if cur.len() > 0 { out.push(cur); }
+            cur = "";
+        } else {
+            cur = cur.concat(c);
+        }
     }
     if cur.len() > 0 { out.push(cur); }
     return out;
@@ -975,11 +998,9 @@ impl TlsStream {
         if !r.ok { return err(r.err); }
         let ips: *Vector<*IpAddr> = r.val;
         if ips.len() == 0 { return err("tls: no addresses for ".concat(host)); }
-
         let last_err: string = "tls: connect failed";
         let mut verify_int: i32 = 0;
         if cfg.verify { verify_int = 1; }
-
         for let i: i32 = 0; i < ips.len(); i++ {
             let ip: *IpAddr = ips.get(i);
             let mut family: i32 = 4;
@@ -994,16 +1015,14 @@ impl TlsStream {
                 hi = ip.v6_hi;
                 lo = ip.v6_lo;
             }
-            let h: *void = __glide_tls_connect(family, v4, hi, lo, port,
-                                                host, verify_int, cfg.min_proto,
-                                                cfg.alpn);
+            let h: *void = __glide_tls_connect(family, v4, hi, lo, port, host, verify_int, cfg.min_proto, cfg.alpn);
             if h != null {
                 let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
                 s.handle = h;
                 s.backend = 0;
                 s.gconn = null as *TlsConn;
                 s.gconn12 = null as *Tls12Conn;
-        s.gconn12 = null as *Tls12Conn;
+                s.gconn12 = null as *Tls12Conn;
                 return ok(s);
             }
         }
@@ -1027,8 +1046,7 @@ impl TlsStream {
     /// let r: !*TlsStream = TlsStream::attach(tcp, "smtp.example.com", cfg);
     /// if r.ok { defer r.val.close(); /* now encrypted */ }
     /// ```
-    pub fn attach(tcp: *TcpStream, hostname: string,
-                  cfg: *TlsConfig) -> !*TlsStream {
+    pub fn attach(tcp: *TcpStream, hostname: string, cfg: *TlsConfig) -> !*TlsStream {
         if _tls_use_glide() {
             // The Glide backend keeps the TcpStream wrapper (it reads/writes
             // through it), unlike the OpenSSL path which surrenders the fd.
@@ -1042,8 +1060,7 @@ impl TlsStream {
         free(tcp as *void);
         let mut verify_int: i32 = 0;
         if cfg.verify { verify_int = 1; }
-        let h: *void = __glide_tls_attach(fd, hostname, verify_int,
-                                           cfg.min_proto, cfg.alpn);
+        let h: *void = __glide_tls_attach(fd, hostname, verify_int, cfg.min_proto, cfg.alpn);
         if h == null { return err("tls: attach handshake failed"); }
         let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
         s.handle = h;
@@ -1061,7 +1078,7 @@ impl TlsStream {
     /// let r: !i32 = stream.write("hello");
     /// if r.ok { println!("sent", r.val, "bytes"); }
     /// ```
-    pub fn write(self: *TlsStream, data: string) -> !i32 {
+    pub fn write(self, data: string) -> !i32 {
         if self.backend == 1 { return tls_write(self.gconn, data); }
         if self.backend == 2 { return tls12_write(self.gconn12, data); }
         let n: i64 = __glide_tls_write(self.handle, data, data.len());
@@ -1074,7 +1091,7 @@ impl TlsStream {
     /// ```glide
     /// stream.write_all("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n");
     /// ```
-    pub fn write_all(self: *TlsStream, data: string) -> !i32 {
+    pub fn write_all(self, data: string) -> !i32 {
         let n: i32 = data.len();
         let mut sent: i32 = 0;
         while sent < n {
@@ -1096,11 +1113,11 @@ impl TlsStream {
     /// let r: !string = stream.read(4096);
     /// if r.ok && r.val.len() > 0 { print!(r.val); }
     /// ```
-    pub fn read(self: *TlsStream, max: i32) -> !string {
+    pub fn read(self, max: i32) -> !string {
         if self.backend == 1 {
             let r: !string = tls_read(self.gconn, max);
             if !r.ok {
-                if r.err.contains("closed") { return ok(""); }   // peer close = EOF
+                if r.err.contains("closed") { return ok(""); } // peer close = EOF
                 return err(r.err);
             }
             return ok(r.val);
@@ -1115,7 +1132,10 @@ impl TlsStream {
         }
         let buf: *u8 = malloc(max) as *u8;
         let n: i64 = __glide_tls_read(self.handle, buf as *void, max);
-        if n < 0 { free(buf as *void); return err("tls: read failed"); }
+        if n < 0 {
+            free(buf as *void);
+            return err("tls: read failed");
+        }
         let s: string = _bytes_to_string(buf, n as i32);
         free(buf as *void);
         return ok(s);
@@ -1129,7 +1149,7 @@ impl TlsStream {
     /// let r: !string = stream.read_to_end();
     /// if r.ok { println!(r.val.len(), "bytes"); }
     /// ```
-    pub fn read_to_end(self: *TlsStream) -> !string {
+    pub fn read_to_end(self) -> !string {
         // Accumulate into a doubling ByteBuffer, not `out = out.concat(...)`:
         // the fold reallocates + copies the whole prefix every chunk (O(n^2)),
         // which is pathological on a multi-MB download. 64 KiB reads cut the
@@ -1137,7 +1157,10 @@ impl TlsStream {
         let bb: *ByteBuffer = ByteBuffer::new();
         while true {
             let r: !string = self.read(65536);
-            if !r.ok { bb.free(); return err(r.err); }
+            if !r.ok {
+                bb.free();
+                return err(r.err);
+            }
             if r.val.len() == 0 {
                 let out: string = bb.to_string();
                 bb.free();
@@ -1153,9 +1176,9 @@ impl TlsStream {
     /// ```glide
     /// if stream.alpn().eq("h2") { /* speak HTTP/2 */ }
     /// ```
-    pub fn alpn(self: *TlsStream) -> string {
+    pub fn alpn(self) -> string {
         if self.backend == 1 { return self.gconn.alpn; }
-        if self.backend == 2 { return ""; }        // 1.2 backend does not negotiate ALPN here
+        if self.backend == 2 { return ""; } // 1.2 backend does not negotiate ALPN here
         let s: string = __glide_tls_alpn(self.handle);
         if s.len() == 0 { return ""; }
         return s;
@@ -1167,9 +1190,9 @@ impl TlsStream {
     /// ```glide
     /// if stream.version() < 3 { eprintln("not TLS 1.3"); }
     /// ```
-    pub fn version(self: *TlsStream) -> i32 {
-        if self.backend == 1 { return 3; }        // Glide TLS 1.3
-        if self.backend == 2 { return 2; }        // Glide TLS 1.2
+    pub fn version(self) -> i32 {
+        if self.backend == 1 { return 3; } // Glide TLS 1.3
+        if self.backend == 2 { return 2; } // Glide TLS 1.2
         let v: i32 = __glide_tls_version(self.handle);
         // 0x0303 = TLS 1.2, 0x0304 = TLS 1.3
         if v == 771 { return 2; }
@@ -1183,7 +1206,7 @@ impl TlsStream {
     /// ```glide
     /// println!("cipher:", stream.cipher());
     /// ```
-    pub fn cipher(self: *TlsStream) -> string {
+    pub fn cipher(self) -> string {
         if self.backend == 1 {
             if self.gconn.aead == 3 { return "TLS_CHACHA20_POLY1305_SHA256"; }
             return "TLS_AES_128_GCM_SHA256";
@@ -1198,12 +1221,10 @@ impl TlsStream {
     /// ```glide
     /// stream.set_timeout_ms(10000);   // 10s for reads and writes
     /// ```
-    pub fn set_timeout_ms(self: *TlsStream, ms: i32) {
-        if self.backend != 0 { return; }          // no-op for the Glide backends
+    pub fn set_timeout_ms(self, ms: i32) {
+        if self.backend != 0 { return; } // no-op for the Glide backends
         __glide_tls_set_timeout(self.handle, ms);
     }
-
-    // `close` is the Stream trait method (impl below).
 }
 
 /// TlsStream is a Stream — lets ws / http / h2 dispatch every transport
@@ -1212,14 +1233,15 @@ impl TlsStream {
 /// read_bytes/write_bytes are binary-safe (unlike the string `read`/`write`,
 /// which truncate at NUL) — h2 / TLS records rely on that.
 impl Stream for TlsStream {
-    fn read_bytes(self: *TlsStream, buf: *u8, max: i32) -> !i32 {
+    fn read_bytes(self, buf: *u8, max: i32) -> !i32 {
         if self.backend == 1 { return tls_read_into(self.gconn, buf as *void, max); }
         if self.backend == 2 { return tls12_read_into(self.gconn12, buf as *void, max); }
         let n: i64 = __glide_tls_read(self.handle, buf as *void, max);
         if n < 0 { return err("tls: read_bytes failed"); }
         return ok(n as i32);
     }
-    fn write_bytes(self: *TlsStream, buf: *u8, n: i32) -> !i32 {
+
+    fn write_bytes(self, buf: *u8, n: i32) -> !i32 {
         if self.backend == 1 {
             let w: !i32 = tls_write(self.gconn, _bytes_to_string(buf, n));
             if !w.ok { return err(w.err); }
@@ -1234,9 +1256,18 @@ impl Stream for TlsStream {
         if raw_n <= 0 { return err("tls: write_bytes failed"); }
         return ok(raw_n as i32);
     }
-    fn close(self: *TlsStream) {
-        if self.backend == 1 { tls_close(self.gconn); free(self as *void); return; }
-        if self.backend == 2 { tls12_close(self.gconn12); free(self as *void); return; }
+
+    fn close(self) {
+        if self.backend == 1 {
+            tls_close(self.gconn);
+            free(self as *void);
+            return;
+        }
+        if self.backend == 2 {
+            tls12_close(self.gconn12);
+            free(self as *void);
+            return;
+        }
         __glide_tls_close(self.handle);
         free(self as *void);
     }
@@ -1246,11 +1277,11 @@ impl Stream for TlsStream {
 /// underlying TCP listening socket. `accept` blocks for the next
 /// client and returns a TlsStream after the handshake succeeds.
 pub struct TlsListener {
-    handle: *void,              // OpenSSL SSL_CTX + socket (backend 0)
-    backend: i32,               // 0 = OpenSSL, 1 = pure-Glide TLS 1.3
-    glisten: *TcpListener,      // backend 1
-    identity: *ServerIdentity,  // backend 1: cert chain + key
-    salpn: *Vector<string>,     // backend 1: offered ALPN protocols
+    handle: *void, // OpenSSL SSL_CTX + socket (backend 0)
+    backend: i32, // 0 = OpenSSL, 1 = pure-Glide TLS 1.3
+    glisten: *TcpListener, // backend 1
+    identity: *ServerIdentity, // backend 1: cert chain + key
+    salpn: *Vector<string>, // backend 1: offered ALPN protocols
 }
 
 impl TlsListener {
@@ -1286,8 +1317,7 @@ impl TlsListener {
     ///     if s.ok { spawn handle(s.val); }
     /// }
     /// ```
-    pub fn bind_alpn(port: i32, cert_path: string, key_path: string,
-                     alpn_csv: string) -> !*TlsListener {
+    pub fn bind_alpn(port: i32, cert_path: string, key_path: string, alpn_csv: string) -> !*TlsListener {
         if _tls_use_glide() {
             let idr: !*ServerIdentity = tls13_load_identity(cert_path, key_path);
             if !idr.ok { return err(idr.err); }
@@ -1322,19 +1352,17 @@ impl TlsListener {
     ///     s.val.write("HTTP/1.1 200 OK\r\n\r\nhi");
     /// }
     /// ```
-    pub fn accept(self: *TlsListener) -> !*TlsStream {
+    pub fn accept(self) -> !*TlsStream {
         if self.backend == 1 {
             let stream: *TcpStream = self.glisten.accept()?;
             // Peek the ClientHello to pick the protocol version, then hand
             // the already-read bytes to the matching server handshake.
             let ch: string = _tls_read_record(stream)?;
             if _tls_ch_offers_13(ch) {
-                let g: *TlsConn = tls13_server_handshake_buffered(stream, self.identity.cert_chain,
-                    self.identity.key, self.identity.is_rsa, self.salpn, ch)?;
+                let g: *TlsConn = tls13_server_handshake_buffered(stream, self.identity.cert_chain, self.identity.key, self.identity.is_rsa, self.salpn, ch)?;
                 return ok(_tls_wrap_glide(g));
             }
-            let g12: *Tls12Conn = tls12_server_handshake(stream, self.identity.cert_chain,
-                self.identity.key, self.identity.is_rsa, ch)?;
+            let g12: *Tls12Conn = tls12_server_handshake(stream, self.identity.cert_chain, self.identity.key, self.identity.is_rsa, ch)?;
             return ok(_tls_wrap_glide12(g12));
         }
         let h: *void = __glide_tls_accept(self.handle);
@@ -1364,7 +1392,7 @@ impl TlsListener {
     ///     };
     /// }
     /// ```
-    pub fn accept_raw(self: *TlsListener) -> !i64 {
+    pub fn accept_raw(self) -> !i64 {
         let fd: i64 = __glide_tls_accept_raw(self.handle);
         if fd < 0 { return err("tls_listener: tcp accept failed"); }
         return ok(fd);
@@ -1373,7 +1401,7 @@ impl TlsListener {
     /// Complete the TLS handshake on a fd previously returned by
     /// `accept_raw`. Reuses the listener's certificate context. The fd
     /// is closed automatically on handshake failure.
-    pub fn attach(self: *TlsListener, fd: i64) -> !*TlsStream {
+    pub fn attach(self, fd: i64) -> !*TlsStream {
         let h: *void = __glide_tls_accept_attach(self.handle, fd);
         if h == null { return err("tls_listener: handshake failed on attached fd"); }
         let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
@@ -1390,7 +1418,7 @@ impl TlsListener {
     /// let l: *TlsListener = TlsListener::bind(443, "cert.pem", "key.pem").val;
     /// defer l.close();
     /// ```
-    pub fn close(self: *TlsListener) {
+    pub fn close(self) {
         __glide_tls_listener_close(self.handle);
         free(self as *void);
     }
@@ -1408,8 +1436,7 @@ impl TlsListener {
 /// let r: !*TlsStream = tls_attach_server(conn.fd, "cert.pem", "key.pem");
 /// if r.ok { defer r.val.close(); /* communicate over TLS */ }
 /// ```
-pub fn tls_attach_server(conn_fd: i32, cert_path: string,
-                         key_path: string) -> !*TlsStream {
+pub fn tls_attach_server(conn_fd: i32, cert_path: string, key_path: string) -> !*TlsStream {
     let h: *void = __glide_tls_server_attach(conn_fd as i64, cert_path, key_path);
     if h == null { return err("tls: server attach handshake failed"); }
     let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
@@ -1419,4 +1446,3 @@ pub fn tls_attach_server(conn_fd: i32, cert_path: string,
     s.gconn12 = null as *Tls12Conn;
     return ok(s);
 }
-

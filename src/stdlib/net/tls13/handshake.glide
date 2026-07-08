@@ -7,7 +7,6 @@
 // The AEAD-encrypted flight that follows (EncryptedExtensions, Certificate,
 // CertificateVerify, Finished) is parsed by the connection driver once the
 // handshake keys are derived.
-
 import stdlib::crypto::csprng::*;
 import stdlib::bytes::*;
 
@@ -20,37 +19,54 @@ pub const HS_CERTIFICATE: i32 = 11;
 pub const HS_CERTIFICATE_REQUEST: i32 = 13;
 pub const HS_CERTIFICATE_VERIFY: i32 = 15;
 pub const HS_FINISHED: i32 = 20;
-
 // Named groups.
 pub const GROUP_X25519: i32 = 0x001d;
 pub const GROUP_SECP256R1: i32 = 0x0017;
-
 // Cipher suites (SHA-256 key schedule).
 pub const TLS_AES_128_GCM_SHA256: i32 = 0x1301;
 pub const TLS_CHACHA20_POLY1305_SHA256: i32 = 0x1303;
 
-fn _hsb(s: string, i: i32) -> i32 { return s.at(i).to_int() & 255; }
+fn _hsb(s: string, i: i32) -> i32 {
+    return s.at(i).to_int() & 255;
+}
 
 // ---- wire-format helpers ----------------------------------------------
-
 fn _hsu16(n: i32) -> string {
     let bb: *ByteBuffer = ByteBuffer::new();
-    bb.push(((n >> 8) & 255) as u8); bb.push((n & 255) as u8);
-    let s: string = bb.to_string(); bb.free(); return s;
+    bb.push((n >> 8 & 255) as u8);
+    bb.push((n & 255) as u8);
+    let s: string = bb.to_string();
+    bb.free();
+    return s;
 }
+
 fn _hsu24(n: i32) -> string {
     let bb: *ByteBuffer = ByteBuffer::new();
-    bb.push(((n >> 16) & 255) as u8); bb.push(((n >> 8) & 255) as u8); bb.push((n & 255) as u8);
-    let s: string = bb.to_string(); bb.free(); return s;
+    bb.push((n >> 16 & 255) as u8);
+    bb.push((n >> 8 & 255) as u8);
+    bb.push((n & 255) as u8);
+    let s: string = bb.to_string();
+    bb.free();
+    return s;
 }
+
 // length-prefixed vectors (1/2/3-byte length header)
 fn _hsvec8(body: string) -> string {
     let bb: *ByteBuffer = ByteBuffer::new();
-    bb.push((body.len() & 255) as u8); bb.push_str(body);
-    let s: string = bb.to_string(); bb.free(); return s;
+    bb.push((body.len() & 255) as u8);
+    bb.push_str(body);
+    let s: string = bb.to_string();
+    bb.free();
+    return s;
 }
-fn _hsvec16(body: string) -> string { return _hsu16(body.len()).concat(body); }
-fn _hsvec24(body: string) -> string { return _hsu24(body.len()).concat(body); }
+
+fn _hsvec16(body: string) -> string {
+    return _hsu16(body.len()).concat(body);
+}
+
+fn _hsvec24(body: string) -> string {
+    return _hsu24(body.len()).concat(body);
+}
 
 // A single extension: type(2) || vec16(body).
 fn _hsext(ext_type: i32, body: string) -> string {
@@ -63,8 +79,7 @@ fn _hsext(ext_type: i32, body: string) -> string {
 /// for `hostname`, offering X25519 with the given 32-byte public key. If
 /// `alpn` is non-empty each protocol id is offered (e.g. "h2", "http/1.1").
 /// `random32` is the client random; pass "" to generate one.
-pub fn build_client_hello(hostname: string, x25519_pub: string,
-                          alpn: *Vector<string>, random32: string) -> !string {
+pub fn build_client_hello(hostname: string, x25519_pub: string, alpn: *Vector<string>, random32: string) -> !string {
     let mut rnd: string = random32;
     if rnd.len() != 32 {
         let r: !string = random_bytes(32);
@@ -72,14 +87,13 @@ pub fn build_client_hello(hostname: string, x25519_pub: string,
         rnd = r.unwrap();
     }
     let body: *ByteBuffer = ByteBuffer::new();
-    body.push_str(_hsu16(0x0303));                 // legacy_version TLS 1.2
-    body.push_str(rnd);                           // random
-    body.push_str(_hsvec8(""));                     // legacy_session_id (empty)
+    body.push_str(_hsu16(0x0303)); // legacy_version TLS 1.2
+    body.push_str(rnd); // random
+    body.push_str(_hsvec8("")); // legacy_session_id (empty)
     // cipher_suites
     body.push_str(_hsvec16(_hsu16(TLS_AES_128_GCM_SHA256).concat(_hsu16(TLS_CHACHA20_POLY1305_SHA256))));
     // legacy_compression_methods = { null }
     body.push_str(_hsvec8((0 as char).to_string()));
-
     // extensions
     let ext: *ByteBuffer = ByteBuffer::new();
     // server_name (SNI): list of host_name(0) entries
@@ -90,8 +104,7 @@ pub fn build_client_hello(hostname: string, x25519_pub: string,
     // supported_groups: x25519, secp256r1
     ext.push_str(_hsext(10, _hsvec16(_hsu16(GROUP_X25519).concat(_hsu16(GROUP_SECP256R1)))));
     // signature_algorithms
-    let sigalgs: string = _hsu16(0x0403).concat(_hsu16(0x0503)).concat(_hsu16(0x0804))
-        .concat(_hsu16(0x0805)).concat(_hsu16(0x0401)).concat(_hsu16(0x0501));
+    let sigalgs: string = _hsu16(0x0403).concat(_hsu16(0x0503)).concat(_hsu16(0x0804)).concat(_hsu16(0x0805)).concat(_hsu16(0x0401)).concat(_hsu16(0x0501));
     ext.push_str(_hsext(13, _hsvec16(sigalgs)));
     // supported_versions: TLS 1.3 (client uses a 1-byte-length list)
     ext.push_str(_hsext(43, _hsvec8(_hsu16(0x0304))));
@@ -101,23 +114,26 @@ pub fn build_client_hello(hostname: string, x25519_pub: string,
     // ALPN (optional)
     if alpn.len() > 0 {
         let protos: *ByteBuffer = ByteBuffer::new();
-        for let i: i32 = 0; i < alpn.len(); i++ { protos.push_str(_hsvec8(alpn.get(i))); }
-        let plist: string = protos.to_string(); protos.free();
+        for let i: i32 = 0; i < alpn.len(); i++ {
+            protos.push_str(_hsvec8(alpn.get(i)));
+        }
+        let plist: string = protos.to_string();
+        protos.free();
         ext.push_str(_hsext(16, _hsvec16(plist)));
     }
-    let exts: string = ext.to_string(); ext.free();
+    let exts: string = ext.to_string();
+    ext.free();
     body.push_str(_hsvec16(exts));
-
-    let ch: string = body.to_string(); body.free();
+    let ch: string = body.to_string();
+    body.free();
     // Handshake header: msg_type(1) || uint24 length || body
     return ok(((HS_CLIENT_HELLO & 255) as char).to_string().concat(_hsvec24(ch)));
 }
 
 // ---- ServerHello ------------------------------------------------------
-
 pub struct ServerHello {
     pub cipher_suite: i32,
-    pub server_key_share: string,   // the server's X25519 (or P-256) public key
+    pub server_key_share: string, // the server's X25519 (or P-256) public key
     pub key_share_group: i32,
     pub is_hello_retry: bool,
 }
@@ -131,33 +147,34 @@ const HRR_RANDOM: string = "\xcf\x21\xad\x74\xe5\x9a\x61\x11\xbe\x1d\x8c\x02\x1e
 pub fn parse_server_hello(body: string) -> !*ServerHello {
     let mut p: i32 = 0;
     if body.len() < 38 { return err("tls13: ServerHello too short"); }
-    p = p + 2;                                    // legacy_version
+    p = p + 2; // legacy_version
     let random: string = body.substring(p, p + 32);
     p = p + 32;
-    let sid_len: i32 = _hsb(body, p); p = p + 1; // legacy_session_id_echo
+    let sid_len: i32 = _hsb(body, p);
+    p = p + 1; // legacy_session_id_echo
     p = p + sid_len;
     if p + 3 > body.len() { return err("tls13: truncated ServerHello"); }
-    let cipher: i32 = (_hsb(body, p) << 8) | _hsb(body, p + 1); p = p + 2;
-    p = p + 1;                                    // legacy_compression_method
-    let ext_len: i32 = (_hsb(body, p) << 8) | _hsb(body, p + 1); p = p + 2;
+    let cipher: i32 = _hsb(body, p) << 8 | _hsb(body, p + 1);
+    p = p + 2;
+    p = p + 1; // legacy_compression_method
+    let ext_len: i32 = _hsb(body, p) << 8 | _hsb(body, p + 1);
+    p = p + 2;
     let ext_end: i32 = p + ext_len;
     if ext_end > body.len() { return err("tls13: ServerHello extensions overflow"); }
-
     let sh: *ServerHello = malloc(sizeof(ServerHello)) as *ServerHello;
     sh.cipher_suite = cipher;
     sh.server_key_share = "";
     sh.key_share_group = 0;
     sh.is_hello_retry = random.eq(HRR_RANDOM);
-
     while p + 4 <= ext_end {
-        let etype: i32 = (_hsb(body, p) << 8) | _hsb(body, p + 1);
-        let elen: i32 = (_hsb(body, p + 2) << 8) | _hsb(body, p + 3);
+        let etype: i32 = _hsb(body, p) << 8 | _hsb(body, p + 1);
+        let elen: i32 = _hsb(body, p + 2) << 8 | _hsb(body, p + 3);
         p = p + 4;
         if p + elen > ext_end { break; }
         let edata: string = body.substring(p, p + elen);
-        if etype == 51 && elen >= 4 {             // key_share
-            sh.key_share_group = (_hsb(edata, 0) << 8) | _hsb(edata, 1);
-            let kslen: i32 = (_hsb(edata, 2) << 8) | _hsb(edata, 3);
+        if etype == 51 && elen >= 4 {
+            sh.key_share_group = _hsb(edata, 0) << 8 | _hsb(edata, 1);
+            let kslen: i32 = _hsb(edata, 2) << 8 | _hsb(edata, 3);
             if 4 + kslen <= elen { sh.server_key_share = edata.substring(4, 4 + kslen); }
         }
         p = p + elen;
@@ -172,10 +189,11 @@ pub struct HsMessage {
     pub body: string,
     pub next: i32,
 }
+
 pub fn read_handshake(buf: string, off: i32) -> !*HsMessage {
     if off + 4 > buf.len() { return err("tls13: incomplete handshake header"); }
     let mtype: i32 = _hsb(buf, off);
-    let len: i32 = (_hsb(buf, off + 1) << 16) | (_hsb(buf, off + 2) << 8) | _hsb(buf, off + 3);
+    let len: i32 = _hsb(buf, off + 1) << 16 | _hsb(buf, off + 2) << 8 | _hsb(buf, off + 3);
     if off + 4 + len > buf.len() { return err("tls13: incomplete handshake body"); }
     let m: *HsMessage = malloc(sizeof(HsMessage)) as *HsMessage;
     m.msg_type = mtype;
@@ -185,11 +203,10 @@ pub fn read_handshake(buf: string, off: i32) -> !*HsMessage {
 }
 
 // ---- server-side: ClientHello parsing + ServerHello building ----------
-
 pub struct ClientHello {
     pub session_id: string,
     pub cipher_suites: *Vector<i32>,
-    pub client_key_share: string,   // X25519 public key (32 bytes), if offered
+    pub client_key_share: string, // X25519 public key (32 bytes), if offered
     pub key_share_group: i32,
     pub alpn: *Vector<string>,
     pub server_name: string,
@@ -199,15 +216,22 @@ pub struct ClientHello {
 pub fn parse_client_hello(body: string) -> !*ClientHello {
     let mut p: i32 = 0;
     if body.len() < 38 { return err("tls13: ClientHello too short"); }
-    p = p + 2;                                    // legacy_version
-    p = p + 32;                                   // random
-    let sid_len: i32 = _hsb(body, p); p = p + 1;
-    let session_id: string = body.substring(p, p + sid_len); p = p + sid_len;
-    let cs_len: i32 = (_hsb(body, p) << 8) | _hsb(body, p + 1); p = p + 2;
+    p = p + 2; // legacy_version
+    p = p + 32; // random
+    let sid_len: i32 = _hsb(body, p);
+    p = p + 1;
+    let session_id: string = body.substring(p, p + sid_len);
+    p = p + sid_len;
+    let cs_len: i32 = _hsb(body, p) << 8 | _hsb(body, p + 1);
+    p = p + 2;
     let suites: *Vector<i32> = Vector::new();
     let cs_end: i32 = p + cs_len;
-    while p + 2 <= cs_end { suites.push((_hsb(body, p) << 8) | _hsb(body, p + 1)); p = p + 2; }
-    let comp_len: i32 = _hsb(body, p); p = p + 1 + comp_len;
+    while p + 2 <= cs_end {
+        suites.push(_hsb(body, p) << 8 | _hsb(body, p + 1));
+        p = p + 2;
+    }
+    let comp_len: i32 = _hsb(body, p);
+    p = p + 1 + comp_len;
     let ch: *ClientHello = malloc(sizeof(ClientHello)) as *ClientHello;
     ch.session_id = session_id;
     ch.cipher_suites = suites;
@@ -216,35 +240,37 @@ pub fn parse_client_hello(body: string) -> !*ClientHello {
     ch.alpn = Vector::new();
     ch.server_name = "";
     if p + 2 > body.len() { return ok(ch); }
-    let ext_len: i32 = (_hsb(body, p) << 8) | _hsb(body, p + 1); p = p + 2;
+    let ext_len: i32 = _hsb(body, p) << 8 | _hsb(body, p + 1);
+    p = p + 2;
     let ext_end: i32 = p + ext_len;
     while p + 4 <= ext_end {
-        let etype: i32 = (_hsb(body, p) << 8) | _hsb(body, p + 1);
-        let elen: i32 = (_hsb(body, p + 2) << 8) | _hsb(body, p + 3);
+        let etype: i32 = _hsb(body, p) << 8 | _hsb(body, p + 1);
+        let elen: i32 = _hsb(body, p + 2) << 8 | _hsb(body, p + 3);
         p = p + 4;
         if p + elen > ext_end { break; }
         let ed: string = body.substring(p, p + elen);
-        if etype == 51 {                           // key_share: list of entries
-            let mut q: i32 = 2;                     // skip client_shares length
+        if etype == 51 {
+            let mut q: i32 = 2; // skip client_shares length
             while q + 4 <= elen {
-                let g: i32 = (_hsb(ed, q) << 8) | _hsb(ed, q + 1);
-                let klen: i32 = (_hsb(ed, q + 2) << 8) | _hsb(ed, q + 3);
+                let g: i32 = _hsb(ed, q) << 8 | _hsb(ed, q + 1);
+                let klen: i32 = _hsb(ed, q + 2) << 8 | _hsb(ed, q + 3);
                 if g == GROUP_X25519 && klen == 32 && q + 4 + klen <= elen {
                     ch.key_share_group = g;
                     ch.client_key_share = ed.substring(q + 4, q + 4 + klen);
                 }
                 q = q + 4 + klen;
             }
-        } else if etype == 16 {                    // ALPN
+        } else if etype == 16 {
             let mut q: i32 = 2;
             while q < elen {
-                let nlen: i32 = _hsb(ed, q); q = q + 1;
+                let nlen: i32 = _hsb(ed, q);
+                q = q + 1;
                 if q + nlen <= elen { ch.alpn.push(ed.substring(q, q + nlen)); }
                 q = q + nlen;
             }
-        } else if etype == 0 {                     // SNI
+        } else if etype == 0 {
             if elen >= 5 {
-                let hlen: i32 = (_hsb(ed, 3) << 8) | _hsb(ed, 4);
+                let hlen: i32 = _hsb(ed, 3) << 8 | _hsb(ed, 4);
                 if 5 + hlen <= elen { ch.server_name = ed.substring(5, 5 + hlen); }
             }
         }
@@ -256,8 +282,7 @@ pub fn parse_client_hello(body: string) -> !*ClientHello {
 /// Build a ServerHello handshake message (with header) selecting `cipher`
 /// and echoing `session_id`, carrying the server's X25519 `key_share`.
 /// `random32` is the server random; "" generates one.
-pub fn build_server_hello(cipher: i32, server_key_share: string,
-                          session_id: string, random32: string) -> !string {
+pub fn build_server_hello(cipher: i32, server_key_share: string, session_id: string, random32: string) -> !string {
     let mut rnd: string = random32;
     if rnd.len() != 32 {
         let r: !string = random_bytes(32);
@@ -265,17 +290,19 @@ pub fn build_server_hello(cipher: i32, server_key_share: string,
         rnd = r.unwrap();
     }
     let body: *ByteBuffer = ByteBuffer::new();
-    body.push_str(_hsu16(0x0303));                 // legacy_version TLS 1.2
+    body.push_str(_hsu16(0x0303)); // legacy_version TLS 1.2
     body.push_str(rnd);
-    body.push_str(_hsvec8(session_id));            // legacy_session_id_echo
-    body.push_str(_hsu16(cipher));                 // cipher_suite
-    body.push(0 as u8);                            // legacy compression = null
+    body.push_str(_hsvec8(session_id)); // legacy_session_id_echo
+    body.push_str(_hsu16(cipher)); // cipher_suite
+    body.push(0 as u8); // legacy compression = null
     // extensions: supported_versions(43)=0x0304, key_share(51)
     let ext: *ByteBuffer = ByteBuffer::new();
     ext.push_str(_hsext(43, _hsu16(0x0304)));
     ext.push_str(_hsext(51, _hsu16(GROUP_X25519).concat(_hsvec16(server_key_share))));
-    let exts: string = ext.to_string(); ext.free();
+    let exts: string = ext.to_string();
+    ext.free();
     body.push_str(_hsvec16(exts));
-    let sh: string = body.to_string(); body.free();
+    let sh: string = body.to_string();
+    body.free();
     return ok(((HS_SERVER_HELLO & 255) as char).to_string().concat(_hsvec24(sh)));
 }

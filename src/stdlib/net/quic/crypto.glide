@@ -10,11 +10,10 @@
 // let ck: *QuicKeys = quic_client_initial_keys(dcid).unwrap();
 // let prot: string = quic_seal(AEAD_AES128_GCM, ck.key, ck.iv, pn, header, payload).unwrap();
 // ```
-
-import stdlib::net::tls13::schedule::*;    // hkdf_expand_label
-import stdlib::net::tls13::record::*;      // AEAD_* constants
-import stdlib::crypto::hkdf::*;            // hkdf_extract
-import stdlib::crypto::aes_gcm::*;         // aes_gcm_encrypt/decrypt, aes_ecb_block
+import stdlib::net::tls13::schedule::*; // hkdf_expand_label
+import stdlib::net::tls13::record::*; // AEAD_* constants
+import stdlib::crypto::hkdf::*; // hkdf_extract
+import stdlib::crypto::aes_gcm::*; // aes_gcm_encrypt/decrypt, aes_ecb_block
 import stdlib::crypto::chacha20poly1305::*;
 import stdlib::bytes::*;
 
@@ -22,9 +21,9 @@ import stdlib::bytes::*;
 pub const QUIC_V1_SALT: string = "\x38\x76\x2c\xf7\xf5\x59\x34\xb3\x4d\x17\x9a\xe6\xa4\xc8\x0c\xad\xcc\xbb\x7f\x0a";
 
 pub struct QuicKeys {
-    pub key: string,   // AEAD key
-    pub iv: string,    // 12-byte packet IV
-    pub hp: string,    // header-protection key
+    pub key: string, // AEAD key
+    pub iv: string, // 12-byte packet IV
+    pub hp: string, // header-protection key
 }
 
 impl QuicKeys {
@@ -32,10 +31,14 @@ impl QuicKeys {
     /// managed by Glide's allocator, not freed here. Pair with the
     /// `quic_*_initial_keys` / `quic_derive_keys` constructors via
     /// `defer ck.free();`.
-    pub fn free(self: *QuicKeys) { free(self as *void); }
+    pub fn free(self) {
+        free(self as *void);
+    }
 }
 
-fn _qb(s: string, i: i32) -> i32 { return s.at(i).to_int() & 255; }
+fn _qb(s: string, i: i32) -> i32 {
+    return s.at(i).to_int() & 255;
+}
 
 /// The Initial secret: HKDF-Extract(QUIC_V1_SALT, Destination CID).
 pub fn quic_initial_secret(dcid: string) -> string {
@@ -49,7 +52,9 @@ pub fn quic_derive_keys(secret: string, key_len: i32) -> !*QuicKeys {
     let iv: string = hkdf_expand_label(secret, "quic iv", "", 12)?;
     let hp: string = hkdf_expand_label(secret, "quic hp", "", key_len)?;
     let out: *QuicKeys = malloc(sizeof(QuicKeys)) as *QuicKeys;
-    out.key = k; out.iv = iv; out.hp = hp;
+    out.key = k;
+    out.iv = iv;
+    out.hp = hp;
     return ok(out);
 }
 
@@ -58,6 +63,7 @@ pub fn quic_client_initial_keys(dcid: string) -> !*QuicKeys {
     let secret: string = hkdf_expand_label(quic_initial_secret(dcid), "client in", "", 32)?;
     return quic_derive_keys(secret, 16);
 }
+
 /// Server Initial keys derived from the Destination Connection ID.
 pub fn quic_server_initial_keys(dcid: string) -> !*QuicKeys {
     let secret: string = hkdf_expand_label(quic_initial_secret(dcid), "server in", "", 32)?;
@@ -70,7 +76,7 @@ pub fn quic_packet_nonce(iv: string, packet_number: u64) -> string {
     let bb: *ByteBuffer = ByteBuffer::new();
     for let i: i32 = 0; i < iv.len(); i++ {
         let shift: i32 = (iv.len() - 1 - i) * 8;
-        let pb: i32 = if shift < 64 { ((packet_number >> shift) & (255 as u64)) as i32 } else { 0 };
+        let pb: i32 = if shift < 64 { (packet_number >> shift & 255 as u64) as i32 } else { 0 };
         bb.push((_qb(iv, i) ^ pb) as u8);
     }
     let n: string = bb.to_string();
@@ -81,8 +87,7 @@ pub fn quic_packet_nonce(iv: string, packet_number: u64) -> string {
 /// AEAD-protect a packet payload. `header` (the packet header up to and
 /// including the packet number) is the AAD. Returns ciphertext || 16-byte
 /// tag.
-pub fn quic_seal(aead: i32, key: string, iv: string, packet_number: u64,
-                 header: string, payload: string) -> !string {
+pub fn quic_seal(aead: i32, key: string, iv: string, packet_number: u64, header: string, payload: string) -> !string {
     let nonce: string = quic_packet_nonce(iv, packet_number);
     if aead == AEAD_CHACHA20_POLY1305 { return aead_encrypt(key, nonce, payload, header); }
     return aes_gcm_encrypt(key, nonce, payload, header);
@@ -90,8 +95,7 @@ pub fn quic_seal(aead: i32, key: string, iv: string, packet_number: u64,
 
 /// AEAD-unprotect a packet payload (ciphertext || tag). Fails closed on a
 /// bad tag.
-pub fn quic_open(aead: i32, key: string, iv: string, packet_number: u64,
-                 header: string, ciphertext: string) -> !string {
+pub fn quic_open(aead: i32, key: string, iv: string, packet_number: u64, header: string, ciphertext: string) -> !string {
     let nonce: string = quic_packet_nonce(iv, packet_number);
     if aead == AEAD_CHACHA20_POLY1305 { return aead_decrypt(key, nonce, ciphertext, header); }
     return aes_gcm_decrypt(key, nonce, ciphertext, header);
@@ -106,8 +110,11 @@ pub fn quic_hp_mask(aead: i32, hp: string, sample: string) -> !string {
         let counter: string = sample.substring(0, 4);
         let nonce: string = sample.substring(4, 16);
         let zeros: *ByteBuffer = ByteBuffer::new();
-        for let i: i32 = 0; i < 5; i++ { zeros.push(0 as u8); }
-        let z: string = zeros.to_string(); zeros.free();
+        for let i: i32 = 0; i < 5; i++ {
+            zeros.push(0 as u8);
+        }
+        let z: string = zeros.to_string();
+        zeros.free();
         let ks: string = _chacha20_keystream(hp, counter, nonce, z);
         return ok(ks.substring(0, 5));
     }
@@ -150,7 +157,9 @@ c_raw! {
     }
     #endif
 }
+
 extern fn __glide_quic_hp_chacha(key: *void, counter4: *void, nonce12: *void) -> *void;
+
 extern fn __glide_string_from_buf(p: *void, n: i32) -> string;
 
 fn _chacha20_keystream(key: string, counter: string, nonce: string, zeros: string) -> string {

@@ -27,16 +27,15 @@
 // signals are delivered on a thread in an undefined state (faulting context);
 // this module's async-safe pipe handler does not cover that semantics. They
 // are left out of the enum on purpose.
-
 pub enum Signal {
-    Hup,        // SIGHUP  = 1
-    Int,        // SIGINT  = 2
-    Quit,       // SIGQUIT = 3
-    Kill,       // SIGKILL = 9
-    Usr1,       // SIGUSR1 = 10
-    Usr2,       // SIGUSR2 = 12
-    Pipe,       // SIGPIPE = 13
-    Term,       // SIGTERM = 15
+    Hup, // SIGHUP  = 1
+    Int, // SIGINT  = 2
+    Quit, // SIGQUIT = 3
+    Kill, // SIGKILL = 9
+    Usr1, // SIGUSR1 = 10
+    Usr2, // SIGUSR2 = 12
+    Pipe, // SIGPIPE = 13
+    Term, // SIGTERM = 15
     Other(i32), // any signum not listed above
 }
 
@@ -50,15 +49,33 @@ impl Signal {
     /// ```
     pub fn to_int(self: Signal) -> i32 {
         match self {
-            Hup     => { return 1; }
-            Int     => { return 2; }
-            Quit    => { return 3; }
-            Kill    => { return 9; }
-            Usr1    => { return 10; }
-            Usr2    => { return 12; }
-            Pipe    => { return 13; }
-            Term    => { return 15; }
-            Other(n) => { return n; }
+            Hup => {
+                return 1;
+            }
+            Int => {
+                return 2;
+            }
+            Quit => {
+                return 3;
+            }
+            Kill => {
+                return 9;
+            }
+            Usr1 => {
+                return 10;
+            }
+            Usr2 => {
+                return 12;
+            }
+            Pipe => {
+                return 13;
+            }
+            Term => {
+                return 15;
+            }
+            Other(n) => {
+                return n;
+            }
         }
         return 0;
     }
@@ -71,10 +88,10 @@ impl Signal {
     /// Signal::from_int(99);   // Signal::Other(99)
     /// ```
     pub fn from_int(n: i32) -> Signal {
-        if n == 1  { return Signal::Hup; }
-        if n == 2  { return Signal::Int; }
-        if n == 3  { return Signal::Quit; }
-        if n == 9  { return Signal::Kill; }
+        if n == 1 { return Signal::Hup; }
+        if n == 2 { return Signal::Int; }
+        if n == 3 { return Signal::Quit; }
+        if n == 9 { return Signal::Kill; }
         if n == 10 { return Signal::Usr1; }
         if n == 12 { return Signal::Usr2; }
         if n == 13 { return Signal::Pipe; }
@@ -91,15 +108,33 @@ impl Signal {
     /// ```
     pub fn name(self: Signal) -> string {
         match self {
-            Hup     => { return "SIGHUP"; }
-            Int     => { return "SIGINT"; }
-            Quit    => { return "SIGQUIT"; }
-            Kill    => { return "SIGKILL"; }
-            Usr1    => { return "SIGUSR1"; }
-            Usr2    => { return "SIGUSR2"; }
-            Pipe    => { return "SIGPIPE"; }
-            Term    => { return "SIGTERM"; }
-            Other(n) => { return "SIG#${n}"; }
+            Hup => {
+                return "SIGHUP";
+            }
+            Int => {
+                return "SIGINT";
+            }
+            Quit => {
+                return "SIGQUIT";
+            }
+            Kill => {
+                return "SIGKILL";
+            }
+            Usr1 => {
+                return "SIGUSR1";
+            }
+            Usr2 => {
+                return "SIGUSR2";
+            }
+            Pipe => {
+                return "SIGPIPE";
+            }
+            Term => {
+                return "SIGTERM";
+            }
+            Other(n) => {
+                return "SIG#${n}";
+            }
         }
         return "";
     }
@@ -113,8 +148,11 @@ pub fn _signal_push(c: chan<Signal>, n: i32) {
 }
 
 extern fn __glide_signal_chan(sig: i32) -> chan<Signal>;
+
 extern fn __glide_signal_default(sig: i32) -> i32;
+
 extern fn __glide_signal_ignore(sig: i32) -> i32;
+
 extern fn __glide_signal_raise(sig: i32) -> i32;
 
 c_raw! {

@@ -15,7 +15,6 @@
 //
 // let ok: !bool = rsa_pkcs1_verify(rsa_pubkey_der, RSA_SHA256_PREFIX, hash, sig);
 // ```
-
 import stdlib::crypto::asn1::*;
 import stdlib::bytes::*;
 
@@ -144,25 +143,27 @@ pub fn rsa_pkcs1_verify(pubkey_der: string, prefix: string, hash: string, signat
     let e: string = der_int_bytes(etlv.unwrap());
     let k: i32 = n.len();
     if signature.len() != k { return ok(false); }
-
     // T = prefix || hash; EM = 0x00 01 (FF * ps) 00 || T, total k bytes.
     let tlen: i32 = prefix.len() + hash.len();
-    if k < tlen + 11 { return ok(false); }          // room for >= 8 FF bytes
+    if k < tlen + 11 { return ok(false); } // room for >= 8 FF bytes
     let ps: i32 = k - tlen - 3;
     let em: *ByteBuffer = ByteBuffer::new();
     em.push(0 as u8);
     em.push(1 as u8);
-    for let i: i32 = 0; i < ps; i++ { em.push(255 as u8); }
+    for let i: i32 = 0; i < ps; i++ {
+        em.push(255 as u8);
+    }
     em.push(0 as u8);
     em.push_str(prefix);
     em.push_str(hash);
     let expected: string = em.to_string();
     em.free();
-
     let out: *void = malloc(k) as *void;
-    let rc: i32 = __glide_rsa_modexp(out, signature as *void, signature.len(),
-                                     n as *void, k, e as *void, e.len());
-    if rc != 0 { free(out); return ok(false); }
+    let rc: i32 = __glide_rsa_modexp(out, signature as *void, signature.len(), n as *void, k, e as *void, e.len());
+    if rc != 0 {
+        free(out);
+        return ok(false);
+    }
     let recovered: string = __glide_string_from_buf(out, k);
     free(out);
     return ok(recovered.eq(expected));
@@ -174,31 +175,40 @@ extern fn __glide_string_from_buf(p: *void, n: i32) -> string;
 // Needed for TLS 1.3 CertificateVerify from RSA server certs, which use
 // rsa_pss_rsae_sha{256,384,512}. Verify-only, public inputs, so the
 // EMSA-PSS decode is plain Glide over the shared modexp.
-
-import stdlib::crypto::*;          // sha256
-import stdlib::crypto::sha512::*;  // sha384, sha512
+import stdlib::crypto::*; // sha256
+import stdlib::crypto::sha512::*; // sha384, sha512
 
 pub const PSS_SHA256: i32 = 1;
 pub const PSS_SHA384: i32 = 2;
 pub const PSS_SHA512: i32 = 3;
 
-fn _rbyte(s: string, i: i32) -> i32 { return s.at(i).to_int() & 255; }
+fn _rbyte(s: string, i: i32) -> i32 {
+    return s.at(i).to_int() & 255;
+}
+
 fn _pss_hash(sel: i32, data: string) -> string {
     if sel == PSS_SHA384 { return sha384(data); }
     if sel == PSS_SHA512 { return sha512(data); }
     return sha256(data);
 }
+
 fn _pss_hlen(sel: i32) -> i32 {
     if sel == PSS_SHA384 { return 48; }
     if sel == PSS_SHA512 { return 64; }
     return 32;
 }
+
 fn _u32be(n: i32) -> string {
     let bb: *ByteBuffer = ByteBuffer::new();
-    bb.push(((n >> 24) & 255) as u8); bb.push(((n >> 16) & 255) as u8);
-    bb.push(((n >> 8) & 255) as u8); bb.push((n & 255) as u8);
-    let s: string = bb.to_string(); bb.free(); return s;
+    bb.push((n >> 24 & 255) as u8);
+    bb.push((n >> 16 & 255) as u8);
+    bb.push((n >> 8 & 255) as u8);
+    bb.push((n & 255) as u8);
+    let s: string = bb.to_string();
+    bb.free();
+    return s;
 }
+
 // MGF1 mask generation (RFC 8017 B.2.1).
 fn _mgf1(seed: string, mask_len: i32, sel: i32) -> string {
     let bb: *ByteBuffer = ByteBuffer::new();
@@ -211,9 +221,14 @@ fn _mgf1(seed: string, mask_len: i32, sel: i32) -> string {
     bb.free();
     return full.substring(0, mask_len);
 }
+
 fn _bitlen8(b: i32) -> i32 {
-    let mut n: i32 = 0; let mut x: i32 = b;
-    while x > 0 { n = n + 1; x = x >> 1; }
+    let mut n: i32 = 0;
+    let mut x: i32 = b;
+    while x > 0 {
+        n = n + 1;
+        x = x >> 1;
+    }
     return n;
 }
 
@@ -234,20 +249,19 @@ pub fn rsa_pss_verify(pubkey_der: string, sel: i32, message: string, signature: 
     let e: string = der_int_bytes(etlv.unwrap());
     let k: i32 = n.len();
     if signature.len() != k { return ok(false); }
-
     let modbits: i32 = (k - 1) * 8 + _bitlen8(_rbyte(n, 0));
     let embits: i32 = modbits - 1;
     let emlen: i32 = (embits + 7) / 8;
-
     let out: *void = malloc(k) as *void;
-    let rc: i32 = __glide_rsa_modexp(out, signature as *void, signature.len(),
-                                     n as *void, k, e as *void, e.len());
-    if rc != 0 { free(out); return ok(false); }
+    let rc: i32 = __glide_rsa_modexp(out, signature as *void, signature.len(), n as *void, k, e as *void, e.len());
+    if rc != 0 {
+        free(out);
+        return ok(false);
+    }
     let raw: string = __glide_string_from_buf(out, k);
     free(out);
     // EM is the low emlen bytes of the k-byte modexp result.
     let em: string = raw.substring(k - emlen, k);
-
     let hlen: i32 = _pss_hlen(sel);
     let slen: i32 = hlen;
     if emlen < hlen + slen + 2 { return ok(false); }
@@ -255,27 +269,29 @@ pub fn rsa_pss_verify(pubkey_der: string, sel: i32, message: string, signature: 
     let masked_db: string = em.substring(0, emlen - hlen - 1);
     let h: string = em.substring(emlen - hlen - 1, emlen - 1);
     let topbits: i32 = 8 * emlen - embits;
-    if (_rbyte(masked_db, 0) >> (8 - topbits)) != 0 { return ok(false); }
-
+    if _rbyte(masked_db, 0) >> 8 - topbits != 0 { return ok(false); }
     let db_mask: string = _mgf1(h, emlen - hlen - 1, sel);
     let db: *ByteBuffer = ByteBuffer::new();
     for let i: i32 = 0; i < masked_db.len(); i++ {
         let mut v: i32 = _rbyte(masked_db, i) ^ _rbyte(db_mask, i);
-        if i == 0 { v = v & (0xff >> topbits); }   // clear leftmost bits
+        if i == 0 { v = v & 0xff >> topbits; } // clear leftmost bits
         db.push(v as u8);
     }
     let dbs: string = db.to_string();
     db.free();
     // DB = 0x00.. || 0x01 || salt
     let ps_len: i32 = emlen - hlen - slen - 2;
-    for let i: i32 = 0; i < ps_len; i++ { if _rbyte(dbs, i) != 0 { return ok(false); } }
+    for let i: i32 = 0; i < ps_len; i++ {
+        if _rbyte(dbs, i) != 0 { return ok(false); }
+    }
     if _rbyte(dbs, ps_len) != 1 { return ok(false); }
     let salt: string = dbs.substring(dbs.len() - slen, dbs.len());
-
     // M' = 0x00 * 8 || Hash(message) || salt ; H' = Hash(M')
     let m_hash: string = _pss_hash(sel, message);
     let mp: *ByteBuffer = ByteBuffer::new();
-    for let i: i32 = 0; i < 8; i++ { mp.push(0 as u8); }
+    for let i: i32 = 0; i < 8; i++ {
+        mp.push(0 as u8);
+    }
     mp.push_str(m_hash);
     mp.push_str(salt);
     let mprime: string = mp.to_string();
@@ -291,10 +307,12 @@ pub fn rsa_pss_verify(pubkey_der: string, sel: i32, message: string, signature: 
 // key is a long-lived secret and this modexp leaks timing. Acceptable for
 // the current threat model (network attacker, not a local timing attacker
 // co-resident with the server); a constant-time RSA is a future hardening.
+import stdlib::crypto::csprng::*; // random_bytes (PSS salt)
 
-import stdlib::crypto::csprng::*;   // random_bytes (PSS salt)
-
-struct RsaPrivKey { n: string, d: string }
+struct RsaPrivKey {
+    n: string,
+    d: string,
+}
 
 // Parse a PKCS#1 "RSA PRIVATE KEY" or PKCS#8 "PRIVATE KEY" DER, extracting
 // the modulus n and private exponent d.
@@ -302,7 +320,7 @@ fn _rsa_priv_parse(der: string) -> !*RsaPrivKey {
     let d0: *Der = der_new(der);
     let seq: *Tlv = der_expect(d0, ASN1_SEQUENCE)?;
     let sd: *Der = der_into(seq);
-    let _ver: *Tlv = der_read(sd)?;                 // version
+    let _ver: *Tlv = der_read(sd)?; // version
     let second: *Tlv = der_read(sd)?;
     if second.tag == ASN1_SEQUENCE {
         // PKCS#8: third element is an OCTET STRING wrapping the PKCS#1 key.
@@ -311,8 +329,8 @@ fn _rsa_priv_parse(der: string) -> !*RsaPrivKey {
     }
     // PKCS#1: `second` is the modulus; then publicExponent; then d.
     let n: string = der_int_bytes(second);
-    let _e: *Tlv = der_read(sd)?;                   // publicExponent
-    let dexp: *Tlv = der_read(sd)?;                 // privateExponent
+    let _e: *Tlv = der_read(sd)?; // publicExponent
+    let dexp: *Tlv = der_read(sd)?; // privateExponent
     let k: *RsaPrivKey = malloc(sizeof(RsaPrivKey)) as *RsaPrivKey;
     k.n = n;
     k.d = der_int_bytes(dexp);
@@ -321,8 +339,12 @@ fn _rsa_priv_parse(der: string) -> !*RsaPrivKey {
 
 fn _pss_xor(a: string, b: string) -> string {
     let bb: *ByteBuffer = ByteBuffer::new();
-    for let i: i32 = 0; i < a.len(); i++ { bb.push((_rbyte(a, i) ^ _rbyte(b, i)) as u8); }
-    let s: string = bb.to_string(); bb.free(); return s;
+    for let i: i32 = 0; i < a.len(); i++ {
+        bb.push((_rbyte(a, i) ^ _rbyte(b, i)) as u8);
+    }
+    let s: string = bb.to_string();
+    bb.free();
+    return s;
 }
 
 /// Sign `message` with an RSA private key (PKCS#1/PKCS#8 DER) using
@@ -340,32 +362,35 @@ pub fn rsa_pss_sign(privkey_der: string, sel: i32, message: string) -> !string {
     let hlen: i32 = _pss_hlen(sel);
     let slen: i32 = hlen;
     if emlen < hlen + slen + 2 { return err("rsa-pss: key too small for this hash"); }
-
     // EMSA-PSS-ENCODE.
     let m_hash: string = _pss_hash(sel, message);
     let salt: string = random_bytes(slen)?;
     let mp: *ByteBuffer = ByteBuffer::new();
-    for let i: i32 = 0; i < 8; i++ { mp.push(0 as u8); }
+    for let i: i32 = 0; i < 8; i++ {
+        mp.push(0 as u8);
+    }
     mp.push_str(m_hash);
     mp.push_str(salt);
     let h: string = _pss_hash(sel, mp.to_string());
     mp.free();
-
     let db: *ByteBuffer = ByteBuffer::new();
     let ps_len: i32 = emlen - slen - hlen - 2;
-    for let i: i32 = 0; i < ps_len; i++ { db.push(0 as u8); }
+    for let i: i32 = 0; i < ps_len; i++ {
+        db.push(0 as u8);
+    }
     db.push(1 as u8);
     db.push_str(salt);
     let db_str: string = db.to_string();
     db.free();
-
     let db_mask: string = _mgf1(h, emlen - hlen - 1, sel);
     let masked_db: string = _pss_xor(db_str, db_mask);
     // clear the leftmost (8*emLen - emBits) bits of maskedDB[0].
     let topbits: i32 = 8 * emlen - embits;
     let em: *ByteBuffer = ByteBuffer::new();
-    em.push((_rbyte(masked_db, 0) & (0xff >> topbits)) as u8);
-    for let i: i32 = 1; i < masked_db.len(); i++ { em.push(_rbyte(masked_db, i) as u8); }
+    em.push((_rbyte(masked_db, 0) & 0xff >> topbits) as u8);
+    for let i: i32 = 1; i < masked_db.len(); i++ {
+        em.push(_rbyte(masked_db, i) as u8);
+    }
     em.push_str(h);
     em.push(0xbc as u8);
     // left-pad EM to k bytes (emLen is k for a top-bit-set modulus).
@@ -374,16 +399,20 @@ pub fn rsa_pss_sign(privkey_der: string, sel: i32, message: string) -> !string {
     let mut base: string = em_str;
     if base.len() < k {
         let pad: *ByteBuffer = ByteBuffer::new();
-        for let i: i32 = 0; i < k - base.len(); i++ { pad.push(0 as u8); }
+        for let i: i32 = 0; i < k - base.len(); i++ {
+            pad.push(0 as u8);
+        }
         pad.push_str(base);
         base = pad.to_string();
         pad.free();
     }
-
     // s = base^d mod n.
     let out: *void = malloc(k) as *void;
     let rc: i32 = __glide_rsa_modexp(out, base as *void, base.len(), n as *void, k, d as *void, d.len());
-    if rc != 0 { free(out); return err("rsa-pss: signing failed"); }
+    if rc != 0 {
+        free(out);
+        return err("rsa-pss: signing failed");
+    }
     let sig: string = __glide_string_from_buf(out, k);
     free(out);
     return ok(sig);
@@ -404,7 +433,9 @@ pub fn rsa_pkcs1_sign(privkey_der: string, prefix: string, hash: string) -> !str
     let em: *ByteBuffer = ByteBuffer::new();
     em.push(0 as u8);
     em.push(1 as u8);
-    for let i: i32 = 0; i < ps; i++ { em.push(255 as u8); }
+    for let i: i32 = 0; i < ps; i++ {
+        em.push(255 as u8);
+    }
     em.push(0 as u8);
     em.push_str(prefix);
     em.push_str(hash);
@@ -412,7 +443,10 @@ pub fn rsa_pkcs1_sign(privkey_der: string, prefix: string, hash: string) -> !str
     em.free();
     let out: *void = malloc(k) as *void;
     let rc: i32 = __glide_rsa_modexp(out, em_str as *void, em_str.len(), n as *void, k, key.d as *void, key.d.len());
-    if rc != 0 { free(out); return err("rsa-pkcs1: signing failed"); }
+    if rc != 0 {
+        free(out);
+        return err("rsa-pkcs1: signing failed");
+    }
     let sig: string = __glide_string_from_buf(out, k);
     free(out);
     return ok(sig);

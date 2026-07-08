@@ -10,7 +10,6 @@
 // let ct: !string = aead_encrypt(key32, nonce12, plaintext, aad);
 // let pt: !string = aead_decrypt(key32, nonce12, ct.unwrap(), aad);
 // ```
-
 c_raw! {
     #ifndef GLIDE_CHACHA20POLY1305_DEFINED
     #define GLIDE_CHACHA20POLY1305_DEFINED
@@ -241,7 +240,9 @@ c_raw! {
 }
 
 extern fn __glide_cc_seal(key: *void, nonce: *void, pt: *void, ptlen: i32, aad: *void, aadlen: i32) -> *void;
-extern fn __glide_cc_open(key: *void, nonce: *void, ct: *void, ctlen: i32, aad: *void, aadlen: i32, out: *(*void)) -> i32;
+
+extern fn __glide_cc_open(key: *void, nonce: *void, ct: *void, ctlen: i32, aad: *void, aadlen: i32, out: **void) -> i32;
+
 extern fn __glide_string_from_buf(p: *void, n: i32) -> string;
 
 /// AEAD encrypt. `key` is 32 bytes, `nonce` 12 bytes. Returns
@@ -253,9 +254,7 @@ extern fn __glide_string_from_buf(p: *void, n: i32) -> string;
 pub fn aead_encrypt(key: string, nonce: string, plaintext: string, aad: string) -> !string {
     if key.len() != 32 { return err("chacha20poly1305: key must be 32 bytes"); }
     if nonce.len() != 12 { return err("chacha20poly1305: nonce must be 12 bytes"); }
-    let p: *void = __glide_cc_seal(key as *void, nonce as *void,
-                                    plaintext as *void, plaintext.len(),
-                                    aad as *void, aad.len());
+    let p: *void = __glide_cc_seal(key as *void, nonce as *void, plaintext as *void, plaintext.len(), aad as *void, aad.len());
     if p == null { return err("chacha20poly1305: allocation failed"); }
     let s: string = __glide_string_from_buf(p, plaintext.len() + 16);
     free(p);
@@ -273,9 +272,7 @@ pub fn aead_decrypt(key: string, nonce: string, ciphertext: string, aad: string)
     if nonce.len() != 12 { return err("chacha20poly1305: nonce must be 12 bytes"); }
     if ciphertext.len() < 16 { return err("chacha20poly1305: ciphertext too short"); }
     let mut out: *void = null;
-    let n: i32 = __glide_cc_open(key as *void, nonce as *void,
-                                  ciphertext as *void, ciphertext.len(),
-                                  aad as *void, aad.len(), &mut out);
+    let n: i32 = __glide_cc_open(key as *void, nonce as *void, ciphertext as *void, ciphertext.len(), aad as *void, aad.len(), &mut out);
     if n < 0 { return err("chacha20poly1305: authentication failed"); }
     let s: string = __glide_string_from_buf(out, n);
     free(out);

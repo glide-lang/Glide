@@ -22,7 +22,6 @@
 //   - Body fully read before handler runs (no streaming uploads)
 //   - Pure-Glide parser; the C parser at bootstrap/runtime/http_parse.c
 //     is reserved for the upcoming throughput pass.
-
 import stdlib::net::listener::*;
 import stdlib::http_status::*;
 import stdlib::os::*;
@@ -30,7 +29,6 @@ import stdlib::hashmap::*;
 import stdlib::url::*;
 import stdlib::json::*;
 import stdlib::fs::*;
-
 import stdlib::net::tls::*;
 import stdlib::http::h2::*;
 
@@ -40,19 +38,25 @@ extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
 // per-byte concat the pure-Glide parser was paying — meaningful CPU
 // for the hot path on a hello-world handler.
 extern fn hp_parse_glide(buf: *void, len: i32) -> *void;
+
 extern fn hp_glide_method(g: *void) -> string;
+
 extern fn hp_glide_path(g: *void) -> string;
+
 extern fn hp_glide_version(g: *void) -> string;
+
 extern fn hp_glide_headers_block(g: *void) -> string;
+
 extern fn hp_glide_body(g: *void) -> string;
+
 extern fn hp_glide_free(g: *void);
+
 extern fn hp_glide_wants_close(g: *void) -> i32;
-extern fn hp_build_response_header(status: i32, status_txt: string,
-                                    body_len: i32,
-                                    extra_headers: string, keep_alive: i32) -> i32;
-extern fn hp_build_response(status: i32, status_txt: string,
-                            body: *void, body_len: i32,
-                            extra_headers: string, keep_alive: i32) -> i32;
+
+extern fn hp_build_response_header(status: i32, status_txt: string, body_len: i32, extra_headers: string, keep_alive: i32) -> i32;
+
+extern fn hp_build_response(status: i32, status_txt: string, body: *void, body_len: i32, extra_headers: string, keep_alive: i32) -> i32;
+
 extern fn hp_resp_buf_ptr() -> *void;
 
 // ---- request / response shapes ----------------------------------------
@@ -64,17 +68,17 @@ extern fn hp_resp_buf_ptr() -> *void;
 /// Use `req.header("name")` for case-insensitive lookups instead of
 /// poking at it directly.
 pub struct HttpRequest {
-    pub method:        string,
-    pub path:          string,
-    pub version:       string,
+    pub method: string,
+    pub path: string,
+    pub version: string,
     pub headers_block: string,
-    pub body:          string,
-    pub params:        *HashMap<string>,
-    pub queries:       *HashMap<string>,
+    pub body: string,
+    pub params: *HashMap<string>,
+    pub queries: *HashMap<string>,
     /// `true` when the request arrived over TLS (i.e. through
     /// `https_listen`). Reverse-proxy middleware uses this to stamp the
     /// right `X-Forwarded-Proto` value.
-    pub tls:           bool,
+    pub tls: bool,
     /// Lazy header cache. Built on the first `header()` lookup; reused
     /// after. Construction is O(headers); each subsequent lookup is
     /// O(1). Init `null` — the lookup builds it.
@@ -93,7 +97,7 @@ impl HttpRequest {
     /// ```glide
     /// let host: string = req.header("Host");
     /// ```
-    pub fn header(self: *HttpRequest, name: string) -> string {
+    pub fn header(self, name: string) -> string {
         if self.headers_cache == null {
             self.headers_cache = _build_header_cache(self.headers_block);
         }
@@ -111,7 +115,7 @@ impl HttpRequest {
     /// req.param("id");   // "42"
     /// req.param("zzz");  // ""
     /// ```
-    pub fn param(self: *HttpRequest, name: string) -> string {
+    pub fn param(self, name: string) -> string {
         if self.params == null { return ""; }
         if !self.params.contains(name) { return ""; }
         return self.params.get(name);
@@ -127,10 +131,8 @@ impl HttpRequest {
     /// req.query("page");   // "2"
     /// req.query("zzz");    // ""
     /// ```
-    pub fn query(self: *HttpRequest, name: string) -> string {
-        if self.queries == null {
-            self.queries = _parse_query(self.path);
-        }
+    pub fn query(self, name: string) -> string {
+        if self.queries == null { self.queries = _parse_query(self.path); }
         if !self.queries.contains(name) { return ""; }
         return self.queries.get(name);
     }
@@ -142,7 +144,7 @@ impl HttpRequest {
     /// // path = "/users/42?fields=name"
     /// req.path_only();   // "/users/42"
     /// ```
-    pub fn path_only(self: *HttpRequest) -> string {
+    pub fn path_only(self) -> string {
         let q: i32 = _find(self.path, "?", 0);
         if q < 0 { return self.path; }
         return self.path.substring(0, q);
@@ -155,7 +157,7 @@ impl HttpRequest {
     /// ```glide
     /// if req.is_method("GET") { /* ... */ }
     /// ```
-    pub fn is_method(self: *HttpRequest, m: string) -> bool {
+    pub fn is_method(self, m: string) -> bool {
         return self.method.to_upper().eq(m.to_upper());
     }
 
@@ -169,7 +171,7 @@ impl HttpRequest {
     /// if !v.ok { return HttpResponse::with_status(400).text(v.err); }
     /// let nome: !string = v.val.get_string("nome");
     /// ```
-    pub fn body_json(self: *HttpRequest) -> !*JsonValue {
+    pub fn body_json(self) -> !*JsonValue {
         if self.body.len() == 0 { return err("empty body"); }
         let v: *JsonValue = JsonValue::parse(self.body);
         if v == null { return err("invalid json"); }
@@ -178,9 +180,7 @@ impl HttpRequest {
         // garbage (`"not json"` matches because of the leading `n`).
         // Reject the pair "non-empty body parsed to JSON null but body
         // isn't literally `null`" — almost always a malformed payload.
-        if v.kind == JSON_NULL && !self.body.trim().eq("null") {
-            return err("invalid json");
-        }
+        if v.kind == JSON_NULL && !self.body.trim().eq("null") { return err("invalid json"); }
         return ok(v);
     }
 }
@@ -206,7 +206,7 @@ impl HttpRequest {
 /// }
 /// ```
 pub trait ChunkSource {
-    fn next_chunk(self: *Self) -> ?string;
+    fn next_chunk(self) -> ?string;
 }
 
 /// Outgoing response. Build with `HttpResponse::ok()` /
@@ -218,16 +218,16 @@ pub trait ChunkSource {
 /// wire one chunk at a time — the server emits
 /// `Transfer-Encoding: chunked` and ignores `body`.
 pub struct HttpResponse {
-    pub status:        i32,
+    pub status: i32,
     pub headers_block: string,
-    pub body:          string,
-    pub stream_src:    *dyn ChunkSource,
+    pub body: string,
+    pub stream_src: *dyn ChunkSource,
     /// When non-empty, the server transfers this file's contents
     /// directly from disk to socket via sendfile / TransmitFile — no
     /// userspace buffer, no body memcpy. `body` is ignored on this
     /// path; the file's size is used for Content-Length. See
     /// `HttpResponse::file(path, mime)`.
-    pub file_path:     string,
+    pub file_path: string,
 }
 
 impl HttpResponse {
@@ -239,13 +239,7 @@ impl HttpResponse {
     /// HttpResponse::with_status(301).set("Location", "/new");
     /// ```
     pub fn with_status(code: i32) -> HttpResponse {
-        return HttpResponse {
-            status: code,
-            headers_block: "",
-            body: "",
-            stream_src: null,
-            file_path: "",
-        };
+        return HttpResponse { status: code, headers_block: "", body: "", stream_src: null, file_path: "" };
     }
 
     /// Shortcut for 200 OK with no body. Chain `.body(s)` to add one.
@@ -253,7 +247,9 @@ impl HttpResponse {
     /// ```glide
     /// HttpResponse::ok().body("hello");
     /// ```
-    pub fn ok() -> HttpResponse { return HttpResponse::with_status(200); }
+    pub fn ok() -> HttpResponse {
+        return HttpResponse::with_status(200);
+    }
 
     /// Shortcut for 404 Not Found.
     ///
@@ -263,7 +259,9 @@ impl HttpResponse {
     ///     return HttpResponse::ok().body("...");
     /// }
     /// ```
-    pub fn not_found() -> HttpResponse { return HttpResponse::with_status(404); }
+    pub fn not_found() -> HttpResponse {
+        return HttpResponse::with_status(404);
+    }
 
     /// Set the body and the matching `Content-Length`. Returns the
     /// modified response so the call chains.
@@ -272,13 +270,7 @@ impl HttpResponse {
     /// HttpResponse::ok().body("{\"ok\":true}");
     /// ```
     pub fn body(self: HttpResponse, s: string) -> HttpResponse {
-        return HttpResponse {
-            status: self.status,
-            headers_block: self.headers_block,
-            body: s,
-            stream_src: self.stream_src,
-            file_path: self.file_path,
-        };
+        return HttpResponse { status: self.status, headers_block: self.headers_block, body: s, stream_src: self.stream_src, file_path: self.file_path };
     }
 
     /// Set a header, REPLACING any existing line with the same name
@@ -299,13 +291,7 @@ impl HttpResponse {
         let safe_name: string = _strip_crlf(name);
         let safe_value: string = _strip_crlf(value);
         let stripped: string = _drop_header(self.headers_block, safe_name);
-        return HttpResponse {
-            status: self.status,
-            headers_block: stripped.concat(safe_name).concat(": ").concat(safe_value).concat("\r\n"),
-            body: self.body,
-            stream_src: self.stream_src,
-            file_path: self.file_path,
-        };
+        return HttpResponse { status: self.status, headers_block: stripped.concat(safe_name).concat(": ").concat(safe_value).concat("\r\n"), body: self.body, stream_src: self.stream_src, file_path: self.file_path };
     }
 
     /// Append a header line — preserves any existing same-name line.
@@ -321,13 +307,7 @@ impl HttpResponse {
     pub fn add(self: HttpResponse, name: string, value: string) -> HttpResponse {
         let safe_name: string = _strip_crlf(name);
         let safe_value: string = _strip_crlf(value);
-        return HttpResponse {
-            status: self.status,
-            headers_block: self.headers_block.concat(safe_name).concat(": ").concat(safe_value).concat("\r\n"),
-            body: self.body,
-            stream_src: self.stream_src,
-            file_path: self.file_path,
-        };
+        return HttpResponse { status: self.status, headers_block: self.headers_block.concat(safe_name).concat(": ").concat(safe_value).concat("\r\n"), body: self.body, stream_src: self.stream_src, file_path: self.file_path };
     }
 
     /// Replace the status code. Chainable.
@@ -336,13 +316,7 @@ impl HttpResponse {
     /// HttpResponse::ok().status(204);
     /// ```
     pub fn status(self: HttpResponse, code: i32) -> HttpResponse {
-        return HttpResponse {
-            status: code,
-            headers_block: self.headers_block,
-            body: self.body,
-            stream_src: self.stream_src,
-            file_path: self.file_path,
-        };
+        return HttpResponse { status: code, headers_block: self.headers_block, body: self.body, stream_src: self.stream_src, file_path: self.file_path };
     }
 
     /// Stream the response body via `source`. The server emits
@@ -368,13 +342,7 @@ impl HttpResponse {
     /// }
     /// ```
     pub fn stream(self: HttpResponse, source: *dyn ChunkSource) -> HttpResponse {
-        return HttpResponse {
-            status: self.status,
-            headers_block: self.headers_block,
-            body: "",
-            stream_src: source,
-            file_path: "",
-        };
+        return HttpResponse { status: self.status, headers_block: self.headers_block, body: "", stream_src: source, file_path: "" };
     }
 
     /// Serve a file from disk via zero-copy sendfile. The body's
@@ -389,13 +357,7 @@ impl HttpResponse {
     /// }
     /// ```
     pub fn file(path: string, mime: string) -> HttpResponse {
-        return HttpResponse {
-            status: 200,
-            headers_block: "Content-Type: ".concat(mime).concat("\r\n"),
-            body: "",
-            stream_src: null,
-            file_path: path,
-        };
+        return HttpResponse { status: 200, headers_block: "Content-Type: ".concat(mime).concat("\r\n"), body: "", stream_src: null, file_path: path };
     }
 
     /// Set body + `Content-Type: text/plain; charset=utf-8`.
@@ -473,7 +435,7 @@ impl HttpResponse {
     /// let ct: string = resp.header("Content-Type");
     /// if ct.starts_with("application/json") { /* parse JSON */ }
     /// ```
-    pub fn header(self: *HttpResponse, name: string) -> string {
+    pub fn header(self, name: string) -> string {
         let want: string = name.to_lower();
         let lines: *Vector<string> = self.headers_block.split("\r\n");
         for let i: i32 = 0; i < lines.len(); i++ {
@@ -481,9 +443,7 @@ impl HttpResponse {
             let colon: i32 = _find(h, ":", 0);
             if colon < 0 { continue; }
             let n: string = h.substring(0, colon).trim().to_lower();
-            if n.eq(want) {
-                return h.substring(colon + 1, h.len()).trim();
-            }
+            if n.eq(want) { return h.substring(colon + 1, h.len()).trim(); }
         }
         return "";
     }
@@ -495,7 +455,7 @@ impl HttpResponse {
     /// let cookies: *Vector<string> = resp.headers("Set-Cookie");
     /// for let i: i32 = 0; i < cookies.len(); i++ { println!(cookies.get(i)); }
     /// ```
-    pub fn headers(self: *HttpResponse, name: string) -> *Vector<string> {
+    pub fn headers(self, name: string) -> *Vector<string> {
         let want: string = name.to_lower();
         let out: *Vector<string> = Vector::new();
         let lines: *Vector<string> = self.headers_block.split("\r\n");
@@ -504,9 +464,7 @@ impl HttpResponse {
             let colon: i32 = _find(h, ":", 0);
             if colon < 0 { continue; }
             let n: string = h.substring(0, colon).trim().to_lower();
-            if n.eq(want) {
-                out.push(h.substring(colon + 1, h.len()).trim());
-            }
+            if n.eq(want) { out.push(h.substring(colon + 1, h.len()).trim()); }
         }
         return out;
     }
@@ -560,7 +518,7 @@ fn _build_header_cache(block: string) -> *HashMap<string> {
         let colon: i32 = _find(line, ":", 0);
         if colon < 0 { continue; }
         let n: string = line.substring(0, colon).trim().to_lower();
-        if m.contains(n) { continue; }   // first wins
+        if m.contains(n) { continue; } // first wins
         m.insert(n, line.substring(colon + 1, line.len()).trim());
     }
     return m;
@@ -579,7 +537,7 @@ fn _drop_header(block: string, name: string) -> string {
     while i < lines.len() {
         let line: string = lines.get(i);
         i = i + 1;
-        if line.len() == 0 { continue; }   // empty trailing element from split
+        if line.len() == 0 { continue; } // empty trailing element from split
         let colon: i32 = _find(line, ":", 0);
         if colon < 0 {
             // Not a real header line — preserve as-is.
@@ -587,7 +545,7 @@ fn _drop_header(block: string, name: string) -> string {
             continue;
         }
         let n: string = line.substring(0, colon).trim().to_lower();
-        if n.eq(want) { continue; }   // drop the match
+        if n.eq(want) { continue; } // drop the match
         out = out.concat(line).concat("\r\n");
     }
     return out;
@@ -603,9 +561,7 @@ fn _strip_crlf(s: string) -> string {
     let mut i: i32 = 0;
     while i < n {
         let c: i32 = s.at(i).to_int();
-        if c != 13 && c != 10 {
-            out = out.concat(s.substring(i, i + 1));
-        }
+        if c != 13 && c != 10 { out = out.concat(s.substring(i, i + 1)); }
         i = i + 1;
     }
     return out;
@@ -624,7 +580,10 @@ fn _find(s: string, needle: string, from: i32) -> i32 {
         let mut k: i32 = 0;
         let mut hit: bool = true;
         while k < m {
-            if s.at(i + k).to_int() != needle.at(k).to_int() { hit = false; break; }
+            if s.at(i + k).to_int() != needle.at(k).to_int() {
+                hit = false;
+                break;
+            }
             k = k + 1;
         }
         if hit { return i; }
@@ -647,40 +606,29 @@ pub fn parse_http_request(raw: string) -> !HttpRequest {
     if header_end < 0 { return err("incomplete: no end-of-headers"); }
     let body_start: i32 = header_end + 4;
     let body: string = raw.substring(body_start, raw.len());
-
     // Pull the request line off the front; everything after it (up to
     // \r\n\r\n) is the raw header block we keep.
     let req_end: i32 = _find(raw, "\r\n", 0);
     if req_end < 0 || req_end > header_end { return err("bad request line"); }
     let line0: string = raw.substring(0, req_end);
     let headers_block: string = raw.substring(req_end + 2, header_end);
-
     let sp1: i32 = _find(line0, " ", 0);
     if sp1 < 0 { return err("bad request line: missing method"); }
     let sp2: i32 = _find(line0, " ", sp1 + 1);
     if sp2 < 0 { return err("bad request line: missing path"); }
-
-    return ok(HttpRequest {
-        method:        line0.substring(0, sp1),
-        path:          line0.substring(sp1 + 1, sp2),
-        version:       line0.substring(sp2 + 1, line0.len()),
-        headers_block: headers_block,
-        body:          body,
-        params:        null,
-        queries:       null,
-        tls:           false,
-        headers_cache: null,
-    });
+    return ok(HttpRequest { method: line0.substring(0, sp1), path: line0.substring(sp1 + 1, sp2), version: line0.substring(sp2 + 1, line0.len()), headers_block: headers_block, body: body, params: null, queries: null, tls: false, headers_cache: null });
 }
 
 // ---- response formatting ---------------------------------------------
-
 fn _int_str(n: i32) -> string {
     if n == 0 { return "0"; }
     let mut x: i32 = n;
     let mut s: string = "";
     let mut neg: bool = false;
-    if x < 0 { neg = true; x = -x; }
+    if x < 0 {
+        neg = true;
+        x = -x;
+    }
     while x > 0 {
         let d: i32 = x % 10;
         let ch: string = ((d + 48) as char).to_string();
@@ -695,18 +643,14 @@ fn _int_str(n: i32) -> string {
 // the right `Connection:` header for the persistence the loop chose.
 fn _format_response(r: *HttpResponse, keep_alive: bool) -> string {
     let body_len: i32 = r.body.len();
-    let mut out: string = "HTTP/1.1 ".concat(_int_str(r.status))
-                              .concat(" ").concat(status_text(r.status))
-                              .concat("\r\n");
+    let mut out: string = "HTTP/1.1 ".concat(_int_str(r.status)).concat(" ").concat(status_text(r.status)).concat("\r\n");
     out = out.concat("Content-Length: ").concat(_int_str(body_len)).concat("\r\n");
     if keep_alive {
         out = out.concat("Connection: keep-alive\r\n");
     } else {
         out = out.concat("Connection: close\r\n");
     }
-    if r.headers_block.len() > 0 {
-        out = out.concat(r.headers_block);
-    }
+    if r.headers_block.len() > 0 { out = out.concat(r.headers_block); }
     out = out.concat("\r\n");
     out = out.concat(r.body);
     return out;
@@ -731,12 +675,13 @@ fn _hex_len(n: i32) -> string {
 // chunked-encoded response. Same shape as `_format_response` minus
 // the body and minus Content-Length, plus `Transfer-Encoding: chunked`.
 fn _format_chunked_head(r: *HttpResponse, keep_alive: bool) -> string {
-    let mut out: string = "HTTP/1.1 ".concat(_int_str(r.status))
-                              .concat(" ").concat(status_text(r.status))
-                              .concat("\r\n");
+    let mut out: string = "HTTP/1.1 ".concat(_int_str(r.status)).concat(" ").concat(status_text(r.status)).concat("\r\n");
     out = out.concat("Transfer-Encoding: chunked\r\n");
-    if keep_alive { out = out.concat("Connection: keep-alive\r\n"); }
-    else          { out = out.concat("Connection: close\r\n"); }
+    if keep_alive {
+        out = out.concat("Connection: keep-alive\r\n");
+    } else {
+        out = out.concat("Connection: close\r\n");
+    }
     if r.headers_block.len() > 0 { out = out.concat(r.headers_block); }
     out = out.concat("\r\n");
     return out;
@@ -803,10 +748,7 @@ pub fn _write_response(c: *TcpStream, resp: *HttpResponse, keep: bool) {
     if resp.file_path.len() > 0 {
         let fsize: i32 = fs_size(resp.file_path);
         if fsize >= 0 {
-            let hlen: i32 = hp_build_response_header(resp.status,
-                                                       status_text(resp.status),
-                                                       fsize,
-                                                       resp.headers_block, keep_i);
+            let hlen: i32 = hp_build_response_header(resp.status, status_text(resp.status), fsize, resp.headers_block, keep_i);
             let _wh: !i32 = c.write_ptr(hp_resp_buf_ptr(), hlen);
             let _s: !i32 = c.sendfile(resp.file_path);
             return;
@@ -823,16 +765,11 @@ pub fn _write_response(c: *TcpStream, resp: *HttpResponse, keep: bool) {
     // and the SACK/Nagle interactions on a fully-built packet are
     // simpler.
     if body_len >= 512 {
-        let hlen: i32 = hp_build_response_header(resp.status,
-                                                   status_text(resp.status),
-                                                   body_len,
-                                                   resp.headers_block, keep_i);
+        let hlen: i32 = hp_build_response_header(resp.status, status_text(resp.status), body_len, resp.headers_block, keep_i);
         let _w2: !i32 = c.write2(hp_resp_buf_ptr(), hlen, resp.body as *void, body_len);
         return;
     }
-    let wlen: i32 = hp_build_response(resp.status, status_text(resp.status),
-                                      resp.body as *void, body_len,
-                                      resp.headers_block, keep_i);
+    let wlen: i32 = hp_build_response(resp.status, status_text(resp.status), resp.body as *void, body_len, resp.headers_block, keep_i);
     let _ww: !i32 = c.write_ptr(hp_resp_buf_ptr(), wlen);
 }
 
@@ -863,7 +800,6 @@ fn _wants_close(req: *HttpRequest) -> bool {
 }
 
 // ---- server loop ------------------------------------------------------
-
 fn _handle_conn(c: *TcpStream, handler: fn(*HttpRequest) -> HttpResponse) {
     let buf: *u8 = malloc(8192) as *u8;
     while true {
@@ -871,7 +807,6 @@ fn _handle_conn(c: *TcpStream, handler: fn(*HttpRequest) -> HttpResponse) {
         if !rr.is_ok() { break; }
         let n: i32 = rr.unwrap();
         if n <= 0 { break; }
-
         // Per-request arena: every .concat / .substring / header lookup
         // the handler triggers bumps into here and is reclaimed in bulk
         // when we restore + free. Without it those allocations fall
@@ -879,7 +814,6 @@ fn _handle_conn(c: *TcpStream, handler: fn(*HttpRequest) -> HttpResponse) {
         // 5-50KB/req depending on what the handler touches.
         let prev: *void = __glide_palloc_get();
         __glide_palloc_set(__glide_palloc_make());
-
         let g: *void = hp_parse_glide(buf as *void, n);
         let mut keep: bool = false;
         let mut resp: HttpResponse = HttpResponse::with_status(400).body("bad request");
@@ -888,22 +822,11 @@ fn _handle_conn(c: *TcpStream, handler: fn(*HttpRequest) -> HttpResponse) {
             // in Glide was four mallocs per call, which dominated the
             // hot path's allocation profile.
             keep = hp_glide_wants_close(g) == 0;
-            let req: HttpRequest = HttpRequest {
-                method:        hp_glide_method(g),
-                path:          hp_glide_path(g),
-                version:       hp_glide_version(g),
-                headers_block: hp_glide_headers_block(g),
-                body:          hp_glide_body(g),
-                params:        null,
-                queries:       null,
-                tls:           false,
-                headers_cache: null,
-            };
+            let req: HttpRequest = HttpRequest { method: hp_glide_method(g), path: hp_glide_path(g), version: hp_glide_version(g), headers_block: hp_glide_headers_block(g), body: hp_glide_body(g), params: null, queries: null, tls: false, headers_cache: null };
             resp = handler(&req);
             hp_glide_free(g);
         }
         _write_response(c, &resp, keep);
-
         // Re-read the active arena head: if the handler grew it,
         // palloc_chunk prepended new chunks and the make() return is
         // now buried at the tail of the list. Free has to start from
@@ -911,7 +834,6 @@ fn _handle_conn(c: *TcpStream, handler: fn(*HttpRequest) -> HttpResponse) {
         let arena_head: *void = __glide_palloc_get();
         __glide_palloc_set(prev);
         __glide_palloc_free(arena_head);
-
         if !keep { break; }
     }
     c.close();
@@ -977,8 +899,7 @@ fn _accept_loop(port: i32, handler: fn(*HttpRequest) -> HttpResponse) {
     _accept_loop_shared(lr.unwrap(), handler);
 }
 
-fn _accept_loop_shared(l: *TcpListener,
-                       handler: fn(*HttpRequest) -> HttpResponse) {
+fn _accept_loop_shared(l: *TcpListener, handler: fn(*HttpRequest) -> HttpResponse) {
     let has_reactor: bool = os_has_async_io();
     while true {
         let cr: !*TcpStream = l.accept();
@@ -998,7 +919,6 @@ fn _accept_loop_shared(l: *TcpListener,
 // request parser + C response builder; the wire bytes flow through
 // TlsStream instead of the raw Conn. Supports keep-alive and chunked
 // transfer encoding the same way the plain HTTP path does.
-
 fn _handle_tls_conn(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse) {
     let buf: *u8 = malloc(8192) as *u8;
     while true {
@@ -1006,36 +926,22 @@ fn _handle_tls_conn(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse) {
         if !rr.is_ok() { break; }
         let n: i32 = rr.unwrap();
         if n <= 0 { break; }
-
         // Per-request arena — see _handle_conn for rationale.
         let prev: *void = __glide_palloc_get();
         __glide_palloc_set(__glide_palloc_make());
-
         let g: *void = hp_parse_glide(buf as *void, n);
         let mut keep: bool = false;
         let mut resp: HttpResponse = HttpResponse::with_status(400).body("bad request");
         if g != null {
             keep = hp_glide_wants_close(g) == 0;
-            let req: HttpRequest = HttpRequest {
-                method:        hp_glide_method(g),
-                path:          hp_glide_path(g),
-                version:       hp_glide_version(g),
-                headers_block: hp_glide_headers_block(g),
-                body:          hp_glide_body(g),
-                params:        null,
-                queries:       null,
-                tls:           true,
-                headers_cache: null,
-            };
+            let req: HttpRequest = HttpRequest { method: hp_glide_method(g), path: hp_glide_path(g), version: hp_glide_version(g), headers_block: hp_glide_headers_block(g), body: hp_glide_body(g), params: null, queries: null, tls: true, headers_cache: null };
             resp = handler(&req);
             hp_glide_free(g);
         }
         _write_response_tls(s, &resp, keep);
-
         let arena_head: *void = __glide_palloc_get();
         __glide_palloc_set(prev);
         __glide_palloc_free(arena_head);
-
         if !keep { break; }
     }
     s.close();
@@ -1056,9 +962,7 @@ fn _write_response_tls(s: *TlsStream, resp: *HttpResponse, keep: bool) {
     }
     let mut keep_i: i32 = 0;
     if keep { keep_i = 1; }
-    let wlen: i32 = hp_build_response(resp.status, status_text(resp.status),
-                                      resp.body as *void, resp.body.len(),
-                                      resp.headers_block, keep_i);
+    let wlen: i32 = hp_build_response(resp.status, status_text(resp.status), resp.body as *void, resp.body.len(), resp.headers_block, keep_i);
     let _w: !i32 = s.write_bytes(hp_resp_buf_ptr() as *u8, wlen);
 }
 
@@ -1076,13 +980,11 @@ fn _write_response_tls(s: *TlsStream, resp: *HttpResponse, keep: bool) {
 ///     return 0;
 /// }
 /// ```
-pub fn https_listen(port: i32, cert_path: string, key_path: string,
-                    handler: fn(*HttpRequest) -> HttpResponse) -> !i32 {
+pub fn https_listen(port: i32, cert_path: string, key_path: string, handler: fn(*HttpRequest) -> HttpResponse) -> !i32 {
     // Advertise both protocols. Clients with h2 support negotiate the
     // binary protocol via ALPN; HTTP/1.1-only clients fall back
     // transparently. The accept loop branches on `s.alpn()`.
-    let lr: !*TlsListener = TlsListener::bind_alpn(port, cert_path, key_path,
-                                                    "h2,http/1.1");
+    let lr: !*TlsListener = TlsListener::bind_alpn(port, cert_path, key_path, "h2,http/1.1");
     if !lr.is_ok() { return err(lr.unwrap_err()); }
     let l: *TlsListener = lr.unwrap();
     println!("https: listening on :", port);
@@ -1137,14 +1039,11 @@ fn _handle_tls_dispatch(s: *TlsStream, handler: fn(*HttpRequest) -> HttpResponse
 ///     return 0;
 /// }
 /// ```
-pub fn http_listen_workers(port: i32, n: i32,
-                           handler: fn(*HttpRequest) -> HttpResponse) -> !i32 {
+pub fn http_listen_workers(port: i32, n: i32, handler: fn(*HttpRequest) -> HttpResponse) -> !i32 {
     // Try the SM fast path first. On Linux it'll succeed; on other
     // platforms the C side returns -1 and we fall through to the
     // coroutine-per-conn implementation below.
-    let sm_rc: i32 = __glide_http_sm_run_dispatch(port, n,
-                                                  _glide_sm_dispatch,
-                                                  handler as *void);
+    let sm_rc: i32 = __glide_http_sm_run_dispatch(port, n, _glide_sm_dispatch, handler as *void);
     if sm_rc >= 0 { return ok(0); }
     return http_listen_workers_blocking(port, n, handler);
 }
@@ -1162,8 +1061,7 @@ pub fn http_listen_workers(port: i32, n: i32,
 /// Linux balances → each worker owns its own listener; macOS /
 /// *BSD / Windows share a single listener fd across N accept
 /// threads.
-pub fn http_listen_workers_blocking(port: i32, n: i32,
-                                    handler: fn(*HttpRequest) -> HttpResponse) -> !i32 {
+pub fn http_listen_workers_blocking(port: i32, n: i32, handler: fn(*HttpRequest) -> HttpResponse) -> !i32 {
     if os_has_reuseport_balance() {
         let pr: !*TcpListener = TcpListener::bind_reuseport(port);
         if !pr.is_ok() { return err(pr.unwrap_err()); }
@@ -1191,12 +1089,12 @@ pub fn http_listen_workers_blocking(port: i32, n: i32,
 }
 
 extern fn __glide_http_sm_hello_run(port: i32) -> i32;
+
 extern fn __glide_http_sm_hello_run_n(port: i32, n: i32) -> i32;
-extern fn __glide_http_sm_run_with(port: i32, n: i32,
-                                   h: fn(string, string) -> string) -> i32;
-extern fn __glide_http_sm_run_dispatch(port: i32, n: i32,
-                                       dispatch: fn(*void, *void, i32) -> string,
-                                       user_handler: *void) -> i32;
+
+extern fn __glide_http_sm_run_with(port: i32, n: i32, h: fn(string, string) -> string) -> i32;
+
+extern fn __glide_http_sm_run_dispatch(port: i32, n: i32, dispatch: fn(*void, *void, i32) -> string, user_handler: *void) -> i32;
 
 /// Internal trampoline called by the C state-machine HTTP worker when
 /// a request finishes parsing. Builds the HttpRequest from the parser
@@ -1205,19 +1103,8 @@ extern fn __glide_http_sm_run_dispatch(port: i32, n: i32,
 /// be `@leaf` — runs inline on the SM worker's epoll thread; if it
 /// parks, the runtime aborts the worker via __glide_park guard.
 fn _glide_sm_dispatch(g: *void, user: *void, keep_alive: i32) -> string {
-    let h: fn(*HttpRequest) -> HttpResponse =
-        user as fn(*HttpRequest) -> HttpResponse;
-    let req: HttpRequest = HttpRequest {
-        method:        hp_glide_method(g),
-        path:          hp_glide_path(g),
-        version:       hp_glide_version(g),
-        headers_block: hp_glide_headers_block(g),
-        body:          hp_glide_body(g),
-        params:        null,
-        queries:       null,
-        tls:           false,
-        headers_cache: null,
-    };
+    let h: fn(*HttpRequest) -> HttpResponse = user as fn(*HttpRequest) -> HttpResponse;
+    let req: HttpRequest = HttpRequest { method: hp_glide_method(g), path: hp_glide_path(g), version: hp_glide_version(g), headers_block: hp_glide_headers_block(g), body: hp_glide_body(g), params: null, queries: null, tls: false, headers_cache: null };
     let resp: HttpResponse = h(&req);
     return _format_response(&resp, keep_alive != 0);
 }
@@ -1263,8 +1150,7 @@ pub fn http_listen_sm_hello_workers(port: i32, n: i32) -> !i32 {
 ///     return 0;
 /// }
 /// ```
-pub fn http_listen_sm_workers(port: i32, n: i32,
-                              h: fn(string, string) -> string) -> !i32 {
+pub fn http_listen_sm_workers(port: i32, n: i32, h: fn(string, string) -> string) -> !i32 {
     let rc: i32 = __glide_http_sm_run_with(port, n, h);
     if rc < 0 { return err("http_listen_sm_workers: bind/listen failed"); }
     return ok(0);

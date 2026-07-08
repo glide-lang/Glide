@@ -23,30 +23,29 @@
 //   * No attachments, no html → 7bit/qp body
 //   * No attachments, has html → multipart/alternative
 //   * Has attachments → multipart/mixed wrapping (alternative if both)
-
 import stdlib::base64::*;
 import stdlib::random::*;
 import stdlib::time::*;
 import stdlib::hashmap::*;
 
 pub struct Attachment {
-    pub filename:  string,
+    pub filename: string,
     pub mime_type: string,
-    pub data:      string,
+    pub data: string,
 }
 
 pub struct Mail {
-    pub from:        string,
-    pub to:          *Vector<string>,
-    pub cc:          *Vector<string>,
-    pub bcc:         *Vector<string>,
-    pub subject:     string,
-    pub body:        string,
-    pub html:        ?string,
+    pub from: string,
+    pub to: *Vector<string>,
+    pub cc: *Vector<string>,
+    pub bcc: *Vector<string>,
+    pub subject: string,
+    pub body: string,
+    pub html: ?string,
     pub attachments: *Vector<*Attachment>,
-    pub headers:     *HashMap<string>,    // extra headers (Reply-To, etc)
-    pub date:        string,               // empty = auto-fill at to_rfc5322
-    pub message_id:  string,               // empty = auto-fill
+    pub headers: *HashMap<string>, // extra headers (Reply-To, etc)
+    pub date: string, // empty = auto-fill at to_rfc5322
+    pub message_id: string, // empty = auto-fill
 }
 
 impl Mail {
@@ -92,7 +91,7 @@ impl Mail {
     /// let m: *Mail = Mail::new();
     /// defer m.free();
     /// ```
-    pub fn free(self: *Mail) {
+    pub fn free(self) {
         self.to.free();
         self.cc.free();
         self.bcc.free();
@@ -118,22 +117,14 @@ impl Mail {
     /// m.attachments.push(att);
     /// let wire: string = m.to_rfc5322();   // multipart/mixed envelope
     /// ```
-    pub fn to_rfc5322(self: *Mail) -> string {
+    pub fn to_rfc5322(self) -> string {
         let mut h: string = "";
-        if !self.from.eq("") {
-            h = h.concat("From: ").concat(self.from).concat("\r\n");
-        }
-        if self.to.len() > 0 {
-            h = h.concat("To: ").concat(_join(self.to, ", ")).concat("\r\n");
-        }
-        if self.cc.len() > 0 {
-            h = h.concat("Cc: ").concat(_join(self.cc, ", ")).concat("\r\n");
-        }
+        if !self.from.eq("") { h = h.concat("From: ").concat(self.from).concat("\r\n"); }
+        if self.to.len() > 0 { h = h.concat("To: ").concat(_join(self.to, ", ")).concat("\r\n"); }
+        if self.cc.len() > 0 { h = h.concat("Cc: ").concat(_join(self.cc, ", ")).concat("\r\n"); }
         // Bcc deliberately not emitted — recipients in DATA already
         // include them via SmtpSession's RCPT TO loop.
-        if !self.subject.eq("") {
-            h = h.concat("Subject: ").concat(self.subject).concat("\r\n");
-        }
+        if !self.subject.eq("") { h = h.concat("Subject: ").concat(self.subject).concat("\r\n"); }
         let mut date: string = self.date;
         if date.eq("") { date = _format_rfc5322_date_now(); }
         h = h.concat("Date: ").concat(date).concat("\r\n");
@@ -141,17 +132,14 @@ impl Mail {
         if mid.eq("") { mid = _gen_message_id(self.from); }
         h = h.concat("Message-Id: <").concat(mid).concat(">\r\n");
         h = h.concat("MIME-Version: 1.0\r\n");
-
         // Extra user-provided headers.
         let names: *Vector<string> = self.headers.keys();
         for let i: i32 = 0; i < names.len(); i++ {
             let n: string = names.get(i);
             h = h.concat(n).concat(": ").concat(self.headers.get(n)).concat("\r\n");
         }
-
         let has_attach: bool = self.attachments.len() > 0;
         let has_html: bool = self.html.has;
-
         if !has_attach && !has_html {
             // Simplest form: single text/plain body.
             h = h.concat("Content-Type: text/plain; charset=UTF-8\r\n");
@@ -160,22 +148,22 @@ impl Mail {
             if !_is_ascii(self.body) { cte = "quoted-printable"; }
             h = h.concat("Content-Transfer-Encoding: ").concat(cte).concat("\r\n");
             h = h.concat("\r\n");
-            if cte.eq("quoted-printable") { h = h.concat(qp); }
-            else                          { h = h.concat(self.body); }
+            if cte.eq("quoted-printable") {
+                h = h.concat(qp);
+            } else {
+                h = h.concat(self.body);
+            }
             return h;
         }
-
         // We need at least one MIME boundary.
         let outer: string = _gen_boundary("outer");
         if has_attach && has_html {
             // multipart/mixed { multipart/alternative {text, html}, attachments... }
             let inner: string = _gen_boundary("alt");
-            h = h.concat("Content-Type: multipart/mixed; boundary=\"")
-                  .concat(outer).concat("\"\r\n\r\n");
+            h = h.concat("Content-Type: multipart/mixed; boundary=\"").concat(outer).concat("\"\r\n\r\n");
             // alt section
             h = h.concat("--").concat(outer).concat("\r\n");
-            h = h.concat("Content-Type: multipart/alternative; boundary=\"")
-                  .concat(inner).concat("\"\r\n\r\n");
+            h = h.concat("Content-Type: multipart/alternative; boundary=\"").concat(inner).concat("\"\r\n\r\n");
             h = h.concat(_text_part(inner, self.body));
             h = h.concat(_html_part(inner, self.html.val));
             h = h.concat("--").concat(inner).concat("--\r\n");
@@ -189,8 +177,7 @@ impl Mail {
         }
         if has_attach {
             // multipart/mixed { text, attachments... }
-            h = h.concat("Content-Type: multipart/mixed; boundary=\"")
-                  .concat(outer).concat("\"\r\n\r\n");
+            h = h.concat("Content-Type: multipart/mixed; boundary=\"").concat(outer).concat("\"\r\n\r\n");
             h = h.concat(_text_part(outer, self.body));
             for let i: i32 = 0; i < self.attachments.len(); i++ {
                 let a: *Attachment = self.attachments.get(i);
@@ -200,8 +187,7 @@ impl Mail {
             return h;
         }
         // has_html only: multipart/alternative { text, html }
-        h = h.concat("Content-Type: multipart/alternative; boundary=\"")
-              .concat(outer).concat("\"\r\n\r\n");
+        h = h.concat("Content-Type: multipart/alternative; boundary=\"").concat(outer).concat("\"\r\n\r\n");
         h = h.concat(_text_part(outer, self.body));
         h = h.concat(_html_part(outer, self.html.val));
         h = h.concat("--").concat(outer).concat("--\r\n");
@@ -229,10 +215,8 @@ pub fn parse_mail(raw: string) -> !*Mail {
     if head_end < 0 { return err("mail: missing header/body separator"); }
     let head: string = raw.substring(0, head_end);
     let body: string = raw.substring(head_end + 4, raw.len());
-
     let m: *Mail = Mail::new();
     m.body = body;
-
     // Headers may have folded values (continuation lines starting with WSP).
     let lines: *Vector<string> = head.split("\r\n");
     let mut i: i32 = 0;
@@ -257,38 +241,39 @@ pub fn parse_mail(raw: string) -> !*Mail {
         let n: string = full.substring(0, colon).trim();
         let v: string = full.substring(colon + 1, full.len()).trim();
         let lower: string = n.to_lower();
-        if      lower.eq("from")         { m.from = v; }
-        else if lower.eq("subject")      { m.subject = v; }
-        else if lower.eq("date")         { m.date = v; }
-        else if lower.eq("message-id")   {
+        if lower.eq("from") {
+            m.from = v;
+        } else if lower.eq("subject") {
+            m.subject = v;
+        } else if lower.eq("date") {
+            m.date = v;
+        } else if lower.eq("message-id") {
             let mut mid: string = v;
-            if mid.starts_with("<") && mid.ends_with(">") {
-                mid = mid.substring(1, mid.len() - 1);
-            }
+            if mid.starts_with("<") && mid.ends_with(">") { mid = mid.substring(1, mid.len() - 1); }
             m.message_id = mid;
-        }
-        else if lower.eq("to") {
+        } else if lower.eq("to") {
             let parts: *Vector<string> = v.split(",");
             for let j: i32 = 0; j < parts.len(); j++ {
                 m.to.push(parts.get(j).trim());
             }
-        }
-        else if lower.eq("cc") {
+        } else if lower.eq("cc") {
             let parts: *Vector<string> = v.split(",");
             for let j: i32 = 0; j < parts.len(); j++ {
                 m.cc.push(parts.get(j).trim());
             }
+        } else if lower.eq("mime-version") {
+        } else if lower.eq("content-type") {
+            m.headers.insert(n, v);
+        } else if lower.eq("content-transfer-encoding") {
+            m.headers.insert(n, v);
+        } else {
+            m.headers.insert(n, v);
         }
-        else if lower.eq("mime-version") { /* ignore */ }
-        else if lower.eq("content-type") { /* keep in body for now */ m.headers.insert(n, v); }
-        else if lower.eq("content-transfer-encoding") { m.headers.insert(n, v); }
-        else { m.headers.insert(n, v); }
     }
     return ok(m);
 }
 
 // ---- helpers ----
-
 fn _join(v: *Vector<string>, sep: string) -> string {
     let mut s: string = "";
     for let i: i32 = 0; i < v.len(); i++ {
@@ -317,8 +302,12 @@ fn _qp_encode(s: string) -> string {
         let needs_esc: bool = c < 32 || c == 61 || c > 126;
         let is_eol: bool = c == 10 || c == 13;
         if is_eol {
-            if c == 10 { chunk = "\r\n"; col = 0; }
-            else        { chunk = ""; }   // CR alone — strip; LF follows
+            if c == 10 {
+                chunk = "\r\n";
+                col = 0;
+            } else {
+                chunk = "";
+            } // CR alone — strip; LF follows
         } else if needs_esc {
             chunk = "=".concat(_hex_byte(c));
         } else {
@@ -335,7 +324,7 @@ fn _qp_encode(s: string) -> string {
 }
 
 fn _hex_byte(b: i32) -> string {
-    return _hex_nibble((b >> 4) & 15).concat(_hex_nibble(b & 15));
+    return _hex_nibble(b >> 4 & 15).concat(_hex_nibble(b & 15));
 }
 
 fn _hex_nibble(n: i32) -> string {
@@ -349,8 +338,11 @@ fn _text_part(boundary: string, body: string) -> string {
     let mut cte: string = "7bit";
     if !_is_ascii(body) { cte = "quoted-printable"; }
     s = s.concat("Content-Transfer-Encoding: ").concat(cte).concat("\r\n\r\n");
-    if cte.eq("quoted-printable") { s = s.concat(_qp_encode(body)); }
-    else                          { s = s.concat(body); }
+    if cte.eq("quoted-printable") {
+        s = s.concat(_qp_encode(body));
+    } else {
+        s = s.concat(body);
+    }
     s = s.concat("\r\n");
     return s;
 }
@@ -361,18 +353,19 @@ fn _html_part(boundary: string, html: string) -> string {
     let mut cte: string = "7bit";
     if !_is_ascii(html) { cte = "quoted-printable"; }
     s = s.concat("Content-Transfer-Encoding: ").concat(cte).concat("\r\n\r\n");
-    if cte.eq("quoted-printable") { s = s.concat(_qp_encode(html)); }
-    else                          { s = s.concat(html); }
+    if cte.eq("quoted-printable") {
+        s = s.concat(_qp_encode(html));
+    } else {
+        s = s.concat(html);
+    }
     s = s.concat("\r\n");
     return s;
 }
 
 fn _attachment_part(boundary: string, a: *Attachment) -> string {
     let mut s: string = "--".concat(boundary).concat("\r\n");
-    s = s.concat("Content-Type: ").concat(a.mime_type)
-         .concat("; name=\"").concat(a.filename).concat("\"\r\n");
-    s = s.concat("Content-Disposition: attachment; filename=\"")
-         .concat(a.filename).concat("\"\r\n");
+    s = s.concat("Content-Type: ").concat(a.mime_type).concat("; name=\"").concat(a.filename).concat("\"\r\n");
+    s = s.concat("Content-Disposition: attachment; filename=\"").concat(a.filename).concat("\"\r\n");
     s = s.concat("Content-Transfer-Encoding: base64\r\n\r\n");
     let encoded: string = b64_encode(a.data);
     // Wrap base64 at 76 chars per RFC 2045.
@@ -433,7 +426,10 @@ fn _int_to_str(n: i32) -> string {
     if n == 0 { return "0"; }
     let mut x: i32 = n;
     let mut neg: bool = false;
-    if x < 0 { neg = true; x = 0 - x; }
+    if x < 0 {
+        neg = true;
+        x = 0 - x;
+    }
     let mut s: string = "";
     while x > 0 {
         let d: i32 = x % 10;

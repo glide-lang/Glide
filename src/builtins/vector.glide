@@ -95,7 +95,7 @@ impl<T> Vector<T> {
     /// v.push(10);
     /// v.push(20);
     /// ```
-    fn push(self: *Vector<T>, x: T) {
+    fn push(self, x: T) {
         if self.len == self.cap {
             let mut new_cap: i32 = 4;
             if self.cap > 0 { new_cap = self.cap * 2; }
@@ -128,7 +128,7 @@ impl<T> Vector<T> {
     /// v.push(1); v.push(2); v.push(3);
     /// let last: i32 = v.pop();   // 3
     /// ```
-    fn pop(self: *Vector<T>) -> T {
+    fn pop(self) -> T {
         self.len = self.len - 1;
         return self.data[self.len];
     }
@@ -139,7 +139,7 @@ impl<T> Vector<T> {
     /// ```glide
     /// let x: i32 = v.get(0);
     /// ```
-    fn get(self: *Vector<T>, i: i32) -> T {
+    fn get(self, i: i32) -> T {
         return self.data[i];
     }
 
@@ -149,7 +149,7 @@ impl<T> Vector<T> {
     /// ```glide
     /// v.set(0, 42);
     /// ```
-    fn set(self: *Vector<T>, i: i32, x: T) {
+    fn set(self, i: i32, x: T) {
         self.data[i] = x;
     }
 
@@ -160,7 +160,7 @@ impl<T> Vector<T> {
     /// v.push_all!(1, 2, 3);
     /// v.len();   // 3
     /// ```
-    fn len(self: *Vector<T>) -> i32 {
+    fn len(self) -> i32 {
         return self.len;
     }
 
@@ -171,7 +171,7 @@ impl<T> Vector<T> {
     /// defer v.free();
     /// if v.is_empty() { println!("nothing here"); }
     /// ```
-    fn is_empty(self: *Vector<T>) -> bool {
+    fn is_empty(self) -> bool {
         return self.len == 0;
     }
 
@@ -180,7 +180,7 @@ impl<T> Vector<T> {
     /// ```glide
     /// if !v.is_empty() { println!("head:", v.first()); }
     /// ```
-    fn first(self: *Vector<T>) -> T {
+    fn first(self) -> T {
         return self.data[0];
     }
 
@@ -189,7 +189,7 @@ impl<T> Vector<T> {
     /// ```glide
     /// if !v.is_empty() { println!("tail:", v.last()); }
     /// ```
-    fn last(self: *Vector<T>) -> T {
+    fn last(self) -> T {
         return self.data[self.len - 1];
     }
 
@@ -198,7 +198,7 @@ impl<T> Vector<T> {
     /// ```glide
     /// v.swap(0, v.len() - 1);   // bring last to front
     /// ```
-    fn swap(self: *Vector<T>, i: i32, j: i32) {
+    fn swap(self, i: i32, j: i32) {
         let tmp: T = self.data[i];
         self.data[i] = self.data[j];
         self.data[j] = tmp;
@@ -215,12 +215,10 @@ impl<T> Vector<T> {
     /// let removed: i32 = v.swap_remove(1);   // 20
     /// // v is now [10, 40, 30]
     /// ```
-    fn swap_remove(self: *Vector<T>, i: i32) -> T {
+    fn swap_remove(self, i: i32) -> T {
         let out: T = self.data[i];
         self.len = self.len - 1;
-        if i != self.len {
-            self.data[i] = self.data[self.len];
-        }
+        if i != self.len { self.data[i] = self.data[self.len]; }
         return out;
     }
 
@@ -232,7 +230,7 @@ impl<T> Vector<T> {
     /// v.push_all!(10, 20, 30, 40);
     /// let removed: i32 = v.remove(1);   // 20; v is now [10, 30, 40]
     /// ```
-    fn remove(self: *Vector<T>, i: i32) -> T {
+    fn remove(self, i: i32) -> T {
         let out: T = self.data[i];
         for let j: i32 = i; j < self.len - 1; j++ {
             self.data[j] = self.data[j + 1];
@@ -248,8 +246,8 @@ impl<T> Vector<T> {
     /// v.push_all!(1, 2, 4);
     /// v.insert(2, 3);   // v is now [1, 2, 3, 4]
     /// ```
-    fn insert(self: *Vector<T>, i: i32, x: T) {
-        self.push(x);                 // grow len + capacity by one
+    fn insert(self, i: i32, x: T) {
+        self.push(x); // grow len + capacity by one
         let mut j: i32 = self.len - 1;
         while j > i {
             self.data[j] = self.data[j - 1];
@@ -268,7 +266,7 @@ impl<T> Vector<T> {
     /// v.push_all!(3, 1, 2);
     /// v.sort_by(by_desc);   // v is now [3, 2, 1]
     /// ```
-    fn sort_by(self: *Vector<T>, cmp: fn(T, T) -> i32) {
+    fn sort_by(self, cmp: fn(T, T) -> i32) {
         for let i: i32 = 1; i < self.len; i++ {
             let key: T = self.data[i];
             let mut j: i32 = i - 1;
@@ -288,7 +286,7 @@ impl<T> Vector<T> {
     /// v.push_all!("a", "b");
     /// let e = v.enumerate();   // [Pair(0,"a"), Pair(1,"b")]
     /// ```
-    fn enumerate(self: *Vector<T>) -> *Vector<*Pair<i32, T>> {
+    fn enumerate(self) -> *Vector<*Pair<i32, T>> {
         let out: *Vector<*Pair<i32, T>> = Vector::new();
         for let i: i32 = 0; i < self.len; i++ {
             out.push(Pair::new(i, self.data[i]));
@@ -305,7 +303,7 @@ impl<T> Vector<T> {
     /// v.reverse();
     /// // v is now [3, 2, 1]
     /// ```
-    fn reverse(self: *Vector<T>) {
+    fn reverse(self) {
         let mut lo: i32 = 0;
         let mut hi: i32 = self.len - 1;
         while lo < hi {
@@ -325,7 +323,7 @@ impl<T> Vector<T> {
     /// v.truncate(0);          // same as clear()
     /// v.truncate(v.len());    // no-op
     /// ```
-    fn truncate(self: *Vector<T>, n: i32) {
+    fn truncate(self, n: i32) {
         if n < 0 { return; }
         if n < self.len { self.len = n; }
     }
@@ -340,7 +338,7 @@ impl<T> Vector<T> {
     /// a.extend(b);
     /// // a is now [1, 2, 3, 4]; b is unchanged
     /// ```
-    fn extend(self: *Vector<T>, other: *Vector<T>) {
+    fn extend(self, other: *Vector<T>) {
         for let i: i32 = 0; i < other.len; i++ {
             self.push(other.data[i]);
         }
@@ -355,7 +353,7 @@ impl<T> Vector<T> {
     /// v.len();        // 0
     /// v.is_empty();   // true
     /// ```
-    fn clear(self: *Vector<T>) {
+    fn clear(self) {
         self.len = 0;
     }
 
@@ -369,7 +367,7 @@ impl<T> Vector<T> {
     /// defer v.free();
     /// // ...use v...
     /// ```
-    fn free(self: *Vector<T>) {
+    fn free(self) {
         // Arena-allocated vectors are owned by the arena; the per-keystroke
         // reset frees them in bulk, so this method is a no-op for them.
         if self.is_arena { return; }
@@ -405,7 +403,7 @@ impl<T> Vector<T> {
     ///     }
     /// }
     /// ```
-    fn iter(self: *Vector<T>) -> *VecIter<T> {
+    fn iter(self) -> *VecIter<T> {
         let it: *VecIter<T> = malloc(sizeof(VecIter<T>)) as *VecIter<T>;
         it.vec = self;
         it.idx = 0;
@@ -438,7 +436,7 @@ impl<T> Vector<T> {
     /// let evens: *Vector<i32> = v.filter(is_even);   // [2, 4]
     /// defer evens.free();
     /// ```
-    fn filter(self: *Vector<T>, p: fn(T) -> bool) -> *Vector<T> {
+    fn filter(self, p: fn(T) -> bool) -> *Vector<T> {
         let out: *Vector<T> = Vector::new();
         for let i: i32 = 0; i < self.len; i++ {
             let item: T = self.data[i];
@@ -454,12 +452,14 @@ impl<T> Vector<T> {
     /// let head: *Vector<i32> = v.take(3);   // [1, 2, 3]
     /// v.take(99).len();                     // 5  (clamped)
     /// ```
-    fn take(self: *Vector<T>, n: i32) -> *Vector<T> {
+    fn take(self, n: i32) -> *Vector<T> {
         let out: *Vector<T> = Vector::new();
         let mut limit: i32 = n;
         if limit > self.len { limit = self.len; }
         if limit < 0 { limit = 0; }
-        for let i: i32 = 0; i < limit; i++ { out.push(self.data[i]); }
+        for let i: i32 = 0; i < limit; i++ {
+            out.push(self.data[i]);
+        }
         return out;
     }
 
@@ -469,11 +469,13 @@ impl<T> Vector<T> {
     /// v.push_all!(1, 2, 3, 4, 5);
     /// let tail: *Vector<i32> = v.skip(2);   // [3, 4, 5]
     /// ```
-    fn skip(self: *Vector<T>, n: i32) -> *Vector<T> {
+    fn skip(self, n: i32) -> *Vector<T> {
         let out: *Vector<T> = Vector::new();
         let mut start: i32 = n;
         if start < 0 { start = 0; }
-        for let i: i32 = start; i < self.len; i++ { out.push(self.data[i]); }
+        for let i: i32 = start; i < self.len; i++ {
+            out.push(self.data[i]);
+        }
         return out;
     }
 
@@ -484,7 +486,7 @@ impl<T> Vector<T> {
     /// v.push_all!(1, 3, 7, 2, 9);
     /// v.take_while(lt5);   // [1, 3]   (stops at 7)
     /// ```
-    fn take_while(self: *Vector<T>, p: fn(T) -> bool) -> *Vector<T> {
+    fn take_while(self, p: fn(T) -> bool) -> *Vector<T> {
         let out: *Vector<T> = Vector::new();
         for let i: i32 = 0; i < self.len; i++ {
             let item: T = self.data[i];
@@ -501,13 +503,16 @@ impl<T> Vector<T> {
     /// v.push_all!(1, 3, 7, 2, 9);
     /// v.skip_while(lt5);   // [7, 2, 9]
     /// ```
-    fn skip_while(self: *Vector<T>, p: fn(T) -> bool) -> *Vector<T> {
+    fn skip_while(self, p: fn(T) -> bool) -> *Vector<T> {
         let out: *Vector<T> = Vector::new();
         let mut skipping: bool = true;
         for let i: i32 = 0; i < self.len; i++ {
             let item: T = self.data[i];
             if skipping {
-                if !p(item) { skipping = false; out.push(item); }
+                if !p(item) {
+                    skipping = false;
+                    out.push(item);
+                }
             } else {
                 out.push(item);
             }
@@ -538,7 +543,7 @@ impl<T> Vector<T> {
     /// v.push_all!(1, 2, -3, 4);
     /// v.any(is_neg);   // true
     /// ```
-    fn any(self: *Vector<T>, p: fn(T) -> bool) -> bool {
+    fn any(self, p: fn(T) -> bool) -> bool {
         for let i: i32 = 0; i < self.len; i++ {
             if p(self.data[i]) { return true; }
         }
@@ -553,7 +558,7 @@ impl<T> Vector<T> {
     /// v.push_all!(1, 2, 3);
     /// v.all(is_pos);   // true
     /// ```
-    fn all(self: *Vector<T>, p: fn(T) -> bool) -> bool {
+    fn all(self, p: fn(T) -> bool) -> bool {
         for let i: i32 = 0; i < self.len; i++ {
             if !p(self.data[i]) { return false; }
         }
@@ -570,7 +575,7 @@ impl<T> Vector<T> {
     ///     none()  => println!("no even"),
     /// }
     /// ```
-    fn find(self: *Vector<T>, p: fn(T) -> bool) -> ?T {
+    fn find(self, p: fn(T) -> bool) -> ?T {
         for let i: i32 = 0; i < self.len; i++ {
             let item: T = self.data[i];
             if p(item) { return some(item); }
@@ -596,7 +601,7 @@ impl<T> VecIter<T> {
     ///     }
     /// }
     /// ```
-    pub fn next(self: *VecIter<T>) -> ?T {
+    pub fn next(self) -> ?T {
         if self.idx >= self.vec.len { return none(); }
         let v: T = self.vec.data[self.idx];
         self.idx = self.idx + 1;
@@ -615,9 +620,11 @@ impl Vector<i32> {
     /// v.push_all!(1, 2, 3, 4);
     /// v.sum();   // 10
     /// ```
-    pub fn sum(self: *Vector<i32>) -> i32 {
+    pub fn sum(self) -> i32 {
         let mut acc: i32 = 0;
-        for let i: i32 = 0; i < self.len; i++ { acc = acc + self.data[i]; }
+        for let i: i32 = 0; i < self.len; i++ {
+            acc = acc + self.data[i];
+        }
         return acc;
     }
 
@@ -630,7 +637,7 @@ impl Vector<i32> {
     ///     none()  => println!("empty"),
     /// }
     /// ```
-    pub fn max(self: *Vector<i32>) -> ?i32 {
+    pub fn max(self) -> ?i32 {
         if self.len == 0 { return none(); }
         let mut m: i32 = self.data[0];
         for let i: i32 = 1; i < self.len; i++ {
@@ -648,7 +655,7 @@ impl Vector<i32> {
     ///     none()  => {},
     /// }
     /// ```
-    pub fn min(self: *Vector<i32>) -> ?i32 {
+    pub fn min(self) -> ?i32 {
         if self.len == 0 { return none(); }
         let mut m: i32 = self.data[0];
         for let i: i32 = 1; i < self.len; i++ {
@@ -664,7 +671,7 @@ impl Vector<i32> {
     /// v.index_of(20);   // 1
     /// v.index_of(99);   // -1
     /// ```
-    pub fn index_of(self: *Vector<i32>, x: i32) -> i32 {
+    pub fn index_of(self, x: i32) -> i32 {
         for let i: i32 = 0; i < self.len; i++ {
             if self.data[i] == x { return i; }
         }
@@ -677,7 +684,7 @@ impl Vector<i32> {
     /// v.push_all!(10, 20, 30);
     /// v.contains(20);   // true
     /// ```
-    pub fn contains(self: *Vector<i32>, x: i32) -> bool {
+    pub fn contains(self, x: i32) -> bool {
         return self.index_of(x) >= 0;
     }
 
@@ -687,7 +694,7 @@ impl Vector<i32> {
     /// v.push_all!(3, 1, 2);
     /// v.sort();   // [1, 2, 3]
     /// ```
-    pub fn sort(self: *Vector<i32>) {
+    pub fn sort(self) {
         for let i: i32 = 1; i < self.len; i++ {
             let key: i32 = self.data[i];
             let mut j: i32 = i - 1;
@@ -708,9 +715,11 @@ impl Vector<f64> {
     /// v.push_all!(1.5, 2.5, 3.0);
     /// v.sum();   // 7.0
     /// ```
-    pub fn sum(self: *Vector<f64>) -> f64 {
+    pub fn sum(self) -> f64 {
         let mut acc: f64 = 0.0;
-        for let i: i32 = 0; i < self.len; i++ { acc = acc + self.data[i]; }
+        for let i: i32 = 0; i < self.len; i++ {
+            acc = acc + self.data[i];
+        }
         return acc;
     }
 
@@ -720,7 +729,7 @@ impl Vector<f64> {
     /// v.push_all!(1.0, 3.5, 2.0);
     /// v.max();   // some(3.5)
     /// ```
-    pub fn max(self: *Vector<f64>) -> ?f64 {
+    pub fn max(self) -> ?f64 {
         if self.len == 0 { return none(); }
         let mut m: f64 = self.data[0];
         for let i: i32 = 1; i < self.len; i++ {
@@ -735,7 +744,7 @@ impl Vector<f64> {
     /// v.push_all!(1.0, 3.5, 2.0);
     /// v.min();   // some(1.0)
     /// ```
-    pub fn min(self: *Vector<f64>) -> ?f64 {
+    pub fn min(self) -> ?f64 {
         if self.len == 0 { return none(); }
         let mut m: f64 = self.data[0];
         for let i: i32 = 1; i < self.len; i++ {
@@ -750,15 +759,17 @@ impl Vector<f64> {
     /// v.push_all!(2.0, 4.0, 6.0);
     /// v.avg();   // some(4.0)
     /// ```
-    pub fn avg(self: *Vector<f64>) -> ?f64 {
+    pub fn avg(self) -> ?f64 {
         if self.len == 0 { return none(); }
         let mut acc: f64 = 0.0;
-        for let i: i32 = 0; i < self.len; i++ { acc = acc + self.data[i]; }
-        return some(acc / (self.len as f64));
+        for let i: i32 = 0; i < self.len; i++ {
+            acc = acc + self.data[i];
+        }
+        return some(acc / self.len as f64);
     }
 
     /// Index of the first element equal to `x`, or -1 if absent.
-    pub fn index_of(self: *Vector<f64>, x: f64) -> i32 {
+    pub fn index_of(self, x: f64) -> i32 {
         for let i: i32 = 0; i < self.len; i++ {
             if self.data[i] == x { return i; }
         }
@@ -766,12 +777,12 @@ impl Vector<f64> {
     }
 
     /// True when some element equals `x`.
-    pub fn contains(self: *Vector<f64>, x: f64) -> bool {
+    pub fn contains(self, x: f64) -> bool {
         return self.index_of(x) >= 0;
     }
 
     /// Sort ascending in place (insertion sort, O(n^2)).
-    pub fn sort(self: *Vector<f64>) {
+    pub fn sort(self) {
         for let i: i32 = 1; i < self.len; i++ {
             let key: f64 = self.data[i];
             let mut j: i32 = i - 1;
@@ -794,7 +805,7 @@ impl Vector<string> {
     /// so a misclassification leaks rather than corrupting. This is a RECEIVER
     /// method (not a free fn taking `v`) so the synthesized scope-end call does
     /// not move-on-pass the vector — the buffer's `v.free()` still fires.
-    pub fn _drop_str_elems(self: *Vector<string>) {
+    pub fn _drop_str_elems(self) {
         for let i: i32 = 0; i < self.len; i++ {
             __glide_string_free(self.data[i]);
         }
@@ -809,23 +820,31 @@ impl Vector<string> {
     /// v.join(", ");   // "a, b, c"
     /// v.join("");     // "abc"
     /// ```
-    pub fn join(self: *Vector<string>, sep: string) -> string {
+    pub fn join(self, sep: string) -> string {
         if self.len == 0 { return ""; }
         let slen: i32 = sep.len();
         // Pass 1: exact output size = sum(parts) + sep between each pair.
         let mut total: i32 = slen * (self.len - 1);
-        for let i: i32 = 0; i < self.len; i++ { total = total + self.data[i].len(); }
+        for let i: i32 = 0; i < self.len; i++ {
+            total = total + self.data[i].len();
+        }
         let cap: i32 = if total > 0 { total } else { 1 };
         let buf: *u8 = malloc(cap as usize) as *u8;
         // Pass 2: copy parts and separators in one sweep.
         let mut w: i32 = 0;
         for let i: i32 = 0; i < self.len; i++ {
             if i > 0 {
-                for let k: i32 = 0; k < slen; k++ { buf[w] = sep.at(k).to_int() as u8; w = w + 1; }
+                for let k: i32 = 0; k < slen; k++ {
+                    buf[w] = sep.at(k).to_int() as u8;
+                    w = w + 1;
+                }
             }
             let p: string = self.data[i];
             let pl: i32 = p.len();
-            for let k: i32 = 0; k < pl; k++ { buf[w] = p.at(k).to_int() as u8; w = w + 1; }
+            for let k: i32 = 0; k < pl; k++ {
+                buf[w] = p.at(k).to_int() as u8;
+                w = w + 1;
+            }
         }
         let out: string = __glide_string_from_buf(buf as *void, w);
         free(buf as *void);
@@ -838,17 +857,22 @@ impl Vector<string> {
     /// v.push_all!("foo", "bar", "baz");
     /// v.concat();   // "foobarbaz"
     /// ```
-    pub fn concat(self: *Vector<string>) -> string {
+    pub fn concat(self) -> string {
         if self.len == 0 { return ""; }
         let mut total: i32 = 0;
-        for let i: i32 = 0; i < self.len; i++ { total = total + self.data[i].len(); }
+        for let i: i32 = 0; i < self.len; i++ {
+            total = total + self.data[i].len();
+        }
         if total == 0 { return ""; }
         let buf: *u8 = malloc(total as usize) as *u8;
         let mut w: i32 = 0;
         for let i: i32 = 0; i < self.len; i++ {
             let p: string = self.data[i];
             let pl: i32 = p.len();
-            for let k: i32 = 0; k < pl; k++ { buf[w] = p.at(k).to_int() as u8; w = w + 1; }
+            for let k: i32 = 0; k < pl; k++ {
+                buf[w] = p.at(k).to_int() as u8;
+                w = w + 1;
+            }
         }
         let out: string = __glide_string_from_buf(buf as *void, total);
         free(buf as *void);
@@ -861,7 +885,7 @@ impl Vector<string> {
     /// v.push_all!("apple", "banana", "cherry");
     /// v.max();   // some("cherry")
     /// ```
-    pub fn max(self: *Vector<string>) -> ?string {
+    pub fn max(self) -> ?string {
         if self.len == 0 { return none(); }
         let mut m: string = self.data[0];
         for let i: i32 = 1; i < self.len; i++ {
@@ -876,7 +900,7 @@ impl Vector<string> {
     /// v.push_all!("apple", "banana", "cherry");
     /// v.min();   // some("apple")
     /// ```
-    pub fn min(self: *Vector<string>) -> ?string {
+    pub fn min(self) -> ?string {
         if self.len == 0 { return none(); }
         let mut m: string = self.data[0];
         for let i: i32 = 1; i < self.len; i++ {
@@ -892,7 +916,7 @@ impl Vector<string> {
     /// v.push_all!("a", "b", "c");
     /// v.index_of("b");   // 1
     /// ```
-    pub fn index_of(self: *Vector<string>, x: string) -> i32 {
+    pub fn index_of(self, x: string) -> i32 {
         for let i: i32 = 0; i < self.len; i++ {
             if self.data[i].eq(x) { return i; }
         }
@@ -900,7 +924,7 @@ impl Vector<string> {
     }
 
     /// True when some element equals `x` (by value).
-    pub fn contains(self: *Vector<string>, x: string) -> bool {
+    pub fn contains(self, x: string) -> bool {
         return self.index_of(x) >= 0;
     }
 
@@ -910,7 +934,7 @@ impl Vector<string> {
     /// v.push_all!("cherry", "apple", "banana");
     /// v.sort();   // ["apple", "banana", "cherry"]
     /// ```
-    pub fn sort(self: *Vector<string>) {
+    pub fn sort(self) {
         for let i: i32 = 1; i < self.len; i++ {
             let key: string = self.data[i];
             let mut j: i32 = i - 1;
@@ -931,7 +955,7 @@ impl Vector<bool> {
     /// v.push_all!(true, false, true, true);
     /// v.count_true();    // 3
     /// ```
-    pub fn count_true(self: *Vector<bool>) -> i32 {
+    pub fn count_true(self) -> i32 {
         let mut n: i32 = 0;
         for let i: i32 = 0; i < self.len; i++ {
             if self.data[i] { n = n + 1; }
@@ -945,7 +969,7 @@ impl Vector<bool> {
     /// v.push_all!(true, false, true, true);
     /// v.count_false();   // 1
     /// ```
-    pub fn count_false(self: *Vector<bool>) -> i32 {
+    pub fn count_false(self) -> i32 {
         let mut n: i32 = 0;
         for let i: i32 = 0; i < self.len; i++ {
             if !self.data[i] { n = n + 1; }
@@ -962,7 +986,7 @@ impl Vector<bool> {
     /// v.push(false);
     /// v.all_true();   // false
     /// ```
-    pub fn all_true(self: *Vector<bool>) -> bool {
+    pub fn all_true(self) -> bool {
         for let i: i32 = 0; i < self.len; i++ {
             if !self.data[i] { return false; }
         }
@@ -976,7 +1000,7 @@ impl Vector<bool> {
     /// v.push_all!(false, false, true);
     /// v.any_true();   // true
     /// ```
-    pub fn any_true(self: *Vector<bool>) -> bool {
+    pub fn any_true(self) -> bool {
         for let i: i32 = 0; i < self.len; i++ {
             if self.data[i] { return true; }
         }
@@ -984,7 +1008,7 @@ impl Vector<bool> {
     }
 
     /// Index of the first element equal to `x`, or -1 if absent.
-    pub fn index_of(self: *Vector<bool>, x: bool) -> i32 {
+    pub fn index_of(self, x: bool) -> i32 {
         for let i: i32 = 0; i < self.len; i++ {
             if self.data[i] == x { return i; }
         }
@@ -992,7 +1016,7 @@ impl Vector<bool> {
     }
 
     /// True when some element equals `x`.
-    pub fn contains(self: *Vector<bool>, x: bool) -> bool {
+    pub fn contains(self, x: bool) -> bool {
         return self.index_of(x) >= 0;
     }
 }

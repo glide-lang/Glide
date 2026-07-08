@@ -25,15 +25,14 @@
 // let name: *JsonValue = parsed.get("name");
 // println!(name.as_string());    // alice
 // ```
-
 import stdlib::hashmap::*;
 
-pub const JSON_NULL:   i32 = 0;
-pub const JSON_BOOL:   i32 = 1;
-pub const JSON_INT:    i32 = 2;
-pub const JSON_FLOAT:  i32 = 3;
+pub const JSON_NULL: i32 = 0;
+pub const JSON_BOOL: i32 = 1;
+pub const JSON_INT: i32 = 2;
+pub const JSON_FLOAT: i32 = 3;
 pub const JSON_STRING: i32 = 4;
-pub const JSON_ARRAY:  i32 = 5;
+pub const JSON_ARRAY: i32 = 5;
 pub const JSON_OBJECT: i32 = 6;
 
 pub struct JsonValue {
@@ -70,16 +69,16 @@ fn _json_free_inner(v: *JsonValue) {
             }
             v.obj_vals.free();
         }
-        if v.obj_keys != null {
-            v.obj_keys.free();
-        }
+        if v.obj_keys != null { v.obj_keys.free(); }
     }
 }
 
 // Printing a JsonValue (e.g. `println!(v.to_json())`) emits the serialized
 // JSON text rather than a pointer or the internal field dump.
 impl Display for JsonValue {
-    fn to_string(self: *JsonValue) -> string { return self.emit(); }
+    fn to_string(self) -> string {
+        return self.emit();
+    }
 }
 
 fn _missing_key_err(key: string) -> string {
@@ -216,13 +215,21 @@ impl JsonValue {
         let n: i32 = s.len();
         for let i: i32 = 0; i < n; i++ {
             let c: i32 = s.at(i).to_int();
-            if c == 34       { out = out.concat("\\\""); }
-            else if c == 92  { out = out.concat("\\\\"); }
-            else if c == 10  { out = out.concat("\\n"); }
-            else if c == 13  { out = out.concat("\\r"); }
-            else if c == 9   { out = out.concat("\\t"); }
-            else if c < 32   { out = out.concat("?"); }
-            else             { out = out.concat(s.substring(i, i + 1)); }
+            if c == 34 {
+                out = out.concat("\\\"");
+            } else if c == 92 {
+                out = out.concat("\\\\");
+            } else if c == 10 {
+                out = out.concat("\\n");
+            } else if c == 13 {
+                out = out.concat("\\r");
+            } else if c == 9 {
+                out = out.concat("\\t");
+            } else if c < 32 {
+                out = out.concat("?");
+            } else {
+                out = out.concat(s.substring(i, i + 1));
+            }
         }
         return out.concat("\"");
     }
@@ -239,7 +246,7 @@ impl JsonValue {
     /// a.arr_push(JsonValue::string("second"));
     /// a.len();   // 2
     /// ```
-    pub fn arr_push(self: *JsonValue, v: *JsonValue) {
+    pub fn arr_push(self, v: *JsonValue) {
         if self == null || self.kind != JSON_ARRAY { return; }
         self.arr.push(*v);
         free(v as *void);
@@ -255,7 +262,7 @@ impl JsonValue {
     /// o.obj_set("y", JsonValue::int(2));
     /// o.emit();   // "{\"x\":1,\"y\":2}"
     /// ```
-    pub fn obj_set(self: *JsonValue, key: string, v: *JsonValue) {
+    pub fn obj_set(self, key: string, v: *JsonValue) {
         if self == null || self.kind != JSON_OBJECT { return; }
         self.obj_keys.push(key);
         self.obj_vals.push(*v);
@@ -271,7 +278,7 @@ impl JsonValue {
     /// o.get("name").as_string();   // "alice"
     /// o.get("missing");            // null
     /// ```
-    pub fn get(self: *JsonValue, key: string) -> *JsonValue {
+    pub fn get(self, key: string) -> *JsonValue {
         if self == null || self.kind != JSON_OBJECT { return null; }
         for let i: i32 = 0; i < self.obj_keys.len(); i++ {
             if self.obj_keys.get(i).eq(key) {
@@ -292,7 +299,7 @@ impl JsonValue {
     /// a.at(1).as_int();   // 20
     /// a.at(99);           // null
     /// ```
-    pub fn at(self: *JsonValue, idx: i32) -> *JsonValue {
+    pub fn at(self, idx: i32) -> *JsonValue {
         if self == null || self.kind != JSON_ARRAY { return null; }
         if idx < 0 || idx >= self.arr.len() { return null; }
         let val: JsonValue = self.arr.get(idx);
@@ -309,9 +316,9 @@ impl JsonValue {
     /// JsonValue::parse("{\"a\":1,\"b\":2}").len();    // 2
     /// JsonValue::int(7).len();                        // 0
     /// ```
-    pub fn len(self: *JsonValue) -> i32 {
+    pub fn len(self) -> i32 {
         if self == null { return 0; }
-        if self.kind == JSON_ARRAY  { return self.arr.len(); }
+        if self.kind == JSON_ARRAY { return self.arr.len(); }
         if self.kind == JSON_OBJECT { return self.obj_keys.len(); }
         return 0;
     }
@@ -320,7 +327,7 @@ impl JsonValue {
     /// the arr/obj Vectors of every node plus the root struct. Pair a parse with
     /// `defer v.free();`. Safe on null. (String payloads are arena-managed, so
     /// they are reclaimed with the arena, not here.)
-    pub fn free(self: *JsonValue) {
+    pub fn free(self) {
         if self == null { return; }
         _json_free_inner(self);
         free(self as *void);
@@ -332,7 +339,7 @@ impl JsonValue {
     /// JsonValue::string("hi").as_string();   // "hi"
     /// JsonValue::int(42).as_string();        // ""
     /// ```
-    pub fn as_string(self: *JsonValue) -> string {
+    pub fn as_string(self) -> string {
         if self == null || self.kind != JSON_STRING { return ""; }
         return self.s;
     }
@@ -345,7 +352,7 @@ impl JsonValue {
     /// JsonValue::float(3.9).as_int();        // 3
     /// JsonValue::string("nope").as_int();    // 0
     /// ```
-    pub fn as_int(self: *JsonValue) -> i32 {
+    pub fn as_int(self) -> i32 {
         if self == null { return 0; }
         if self.kind == JSON_INT { return self.i; }
         if self.kind == JSON_FLOAT { return self.f as i32; }
@@ -359,7 +366,7 @@ impl JsonValue {
     /// JsonValue::float(3.14).as_float();     // 3.14
     /// JsonValue::int(7).as_float();          // 7.0
     /// ```
-    pub fn as_float(self: *JsonValue) -> f64 {
+    pub fn as_float(self) -> f64 {
         if self == null { return 0.0; }
         if self.kind == JSON_FLOAT { return self.f; }
         if self.kind == JSON_INT { return self.i as f64; }
@@ -372,7 +379,7 @@ impl JsonValue {
     /// JsonValue::bool(true).as_bool();    // true
     /// JsonValue::int(1).as_bool();        // false  (no truthy coercion)
     /// ```
-    pub fn as_bool(self: *JsonValue) -> bool {
+    pub fn as_bool(self) -> bool {
         if self == null || self.kind != JSON_BOOL { return false; }
         return self.b;
     }
@@ -384,7 +391,7 @@ impl JsonValue {
     /// JsonValue::null().is_null();    // true
     /// JsonValue::int(0).is_null();    // false
     /// ```
-    pub fn is_null(self: *JsonValue) -> bool {
+    pub fn is_null(self) -> bool {
         if self == null { return true; }
         return self.kind == JSON_NULL;
     }
@@ -398,11 +405,14 @@ impl JsonValue {
     /// o.obj_set("y", JsonValue::array());
     /// o.emit();   // "{\"x\":1,\"y\":[]}"
     /// ```
-    pub fn emit(self: *JsonValue) -> string {
+    pub fn emit(self) -> string {
         if self == null { return "null"; }
-        if self.kind == JSON_NULL  { return "null"; }
-        if self.kind == JSON_BOOL  { if self.b { return "true"; } return "false"; }
-        if self.kind == JSON_INT   { return format!("{}", self.i); }
+        if self.kind == JSON_NULL { return "null"; }
+        if self.kind == JSON_BOOL {
+            if self.b { return "true"; }
+            return "false";
+        }
+        if self.kind == JSON_INT { return format!("{}", self.i); }
         if self.kind == JSON_FLOAT { return format!("{}", self.f); }
         if self.kind == JSON_STRING { return JsonValue::escape(self.s); }
         if self.kind == JSON_ARRAY {
@@ -440,7 +450,7 @@ impl JsonValue {
     /// let r: !string = v.get_string("nome");
     /// if r.ok { println!(r.val); }    // "alice"
     /// ```
-    pub fn get_string(self: *JsonValue, key: string) -> !string {
+    pub fn get_string(self, key: string) -> !string {
         if self.kind != JSON_OBJECT { return err("not an object"); }
         let f: *JsonValue = self.get(key);
         if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
@@ -457,7 +467,7 @@ impl JsonValue {
     /// let r: !i32 = v.get_int("idade");
     /// if r.ok { println!(r.val); }    // 12
     /// ```
-    pub fn get_int(self: *JsonValue, key: string) -> !i32 {
+    pub fn get_int(self, key: string) -> !i32 {
         if self.kind != JSON_OBJECT { return err("not an object"); }
         let f: *JsonValue = self.get(key);
         if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
@@ -472,7 +482,7 @@ impl JsonValue {
     /// let r: !bool = v.get_bool("active");
     /// if r.ok { println!(r.val); }    // true
     /// ```
-    pub fn get_bool(self: *JsonValue, key: string) -> !bool {
+    pub fn get_bool(self, key: string) -> !bool {
         if self.kind != JSON_OBJECT { return err("not an object"); }
         let f: *JsonValue = self.get(key);
         if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
@@ -489,12 +499,12 @@ impl JsonValue {
     /// let r: !f64 = v.get_float("score");
     /// if r.ok { println!(r.val); }    // 3.14
     /// ```
-    pub fn get_float(self: *JsonValue, key: string) -> !f64 {
+    pub fn get_float(self, key: string) -> !f64 {
         if self.kind != JSON_OBJECT { return err("not an object"); }
         let f: *JsonValue = self.get(key);
         if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
         if f.kind == JSON_FLOAT { return ok(f.f); }
-        if f.kind == JSON_INT   { return ok(f.i as f64); }
+        if f.kind == JSON_INT { return ok(f.i as f64); }
         return err(_wrong_type_err(key, "a number"));
     }
 
@@ -506,7 +516,7 @@ impl JsonValue {
     ///     none()  => println!("no nick"),
     /// }
     /// ```
-    pub fn opt_string(self: *JsonValue, key: string) -> ?string {
+    pub fn opt_string(self, key: string) -> ?string {
         if self.kind != JSON_OBJECT { return none(); }
         let f: *JsonValue = self.get(key);
         if f == null || f.kind != JSON_STRING { return none(); }
@@ -514,7 +524,7 @@ impl JsonValue {
     }
 
     /// Optional int. `none` on missing key, JSON null, or wrong type.
-    pub fn opt_int(self: *JsonValue, key: string) -> ?i32 {
+    pub fn opt_int(self, key: string) -> ?i32 {
         if self.kind != JSON_OBJECT { return none(); }
         let f: *JsonValue = self.get(key);
         if f == null || f.kind != JSON_INT { return none(); }
@@ -522,7 +532,7 @@ impl JsonValue {
     }
 
     /// Optional bool. `none` on missing key, JSON null, or wrong type.
-    pub fn opt_bool(self: *JsonValue, key: string) -> ?bool {
+    pub fn opt_bool(self, key: string) -> ?bool {
         if self.kind != JSON_OBJECT { return none(); }
         let f: *JsonValue = self.get(key);
         if f == null || f.kind != JSON_BOOL { return none(); }
@@ -530,12 +540,12 @@ impl JsonValue {
     }
 
     /// Optional float. JSON int promotes to f64.
-    pub fn opt_float(self: *JsonValue, key: string) -> ?f64 {
+    pub fn opt_float(self, key: string) -> ?f64 {
         if self.kind != JSON_OBJECT { return none(); }
         let f: *JsonValue = self.get(key);
         if f == null { return none(); }
         if f.kind == JSON_FLOAT { return some(f.f); }
-        if f.kind == JSON_INT   { return some(f.i as f64); }
+        if f.kind == JSON_INT { return some(f.i as f64); }
         return none();
     }
 
@@ -549,7 +559,7 @@ impl JsonValue {
     ///     let city: !string = addr.val.get_string("city");
     /// }
     /// ```
-    pub fn get_object(self: *JsonValue, key: string) -> !*JsonValue {
+    pub fn get_object(self, key: string) -> !*JsonValue {
         if self.kind != JSON_OBJECT { return err("not an object"); }
         let f: *JsonValue = self.get(key);
         if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
@@ -569,7 +579,7 @@ impl JsonValue {
     ///     }
     /// }
     /// ```
-    pub fn get_array(self: *JsonValue, key: string) -> !*JsonValue {
+    pub fn get_array(self, key: string) -> !*JsonValue {
         if self.kind != JSON_OBJECT { return err("not an object"); }
         let f: *JsonValue = self.get(key);
         if f == null || f.kind == JSON_NULL { return err(_missing_key_err(key)); }
@@ -585,14 +595,13 @@ impl JsonValue {
     /// let raw: *JsonValue = v.get_any("meta");
     /// if raw != null { println!(raw.emit()); }
     /// ```
-    pub fn get_any(self: *JsonValue, key: string) -> *JsonValue {
+    pub fn get_any(self, key: string) -> *JsonValue {
         if self.kind != JSON_OBJECT { return null; }
         return self.get(key);
     }
 }
 
 // ---- parser internals ---------------------------------------------------
-
 pub struct JsonParser {
     pub src: string,
     pub pos: i32,
@@ -607,20 +616,23 @@ fn _jp_peek(p: *JsonParser) -> i32 {
 fn _jp_skip_ws(p: *JsonParser) {
     while p.pos < p.n {
         let c: i32 = _jp_peek(p);
-        if c == 32 || c == 9 || c == 10 || c == 13 { p.pos = p.pos + 1; }
-        else { break; }
+        if c == 32 || c == 9 || c == 10 || c == 13 {
+            p.pos = p.pos + 1;
+        } else {
+            break;
+        }
     }
 }
 
 fn _jp_value(p: *JsonParser) -> *JsonValue {
     _jp_skip_ws(p);
     let c: i32 = _jp_peek(p);
-    if c == 123 { return _jp_object(p); }       // '{'
-    if c == 91  { return _jp_array(p); }        // '['
-    if c == 34  { return _jp_string_value(p); } // '"'
-    if c == 116 || c == 102 { return _jp_bool(p); }  // 't' / 'f'
-    if c == 110 { return _jp_null(p); }          // 'n'
-    if c == 45 || (c >= 48 && c <= 57) { return _jp_number(p); }
+    if c == 123 { return _jp_object(p); } // '{'
+    if c == 91 { return _jp_array(p); } // '['
+    if c == 34 { return _jp_string_value(p); } // '"'
+    if c == 116 || c == 102 { return _jp_bool(p); } // 't' / 'f'
+    if c == 110 { return _jp_null(p); } // 'n'
+    if c == 45 || c >= 48 && c <= 57 { return _jp_number(p); }
     return null;
 }
 
@@ -628,7 +640,10 @@ fn _jp_object(p: *JsonParser) -> *JsonValue {
     let obj: *JsonValue = JsonValue::object();
     p.pos = p.pos + 1; // consume '{'
     _jp_skip_ws(p);
-    if _jp_peek(p) == 125 { p.pos = p.pos + 1; return obj; }
+    if _jp_peek(p) == 125 {
+        p.pos = p.pos + 1;
+        return obj;
+    }
     while p.pos < p.n {
         _jp_skip_ws(p);
         let k: *JsonValue = _jp_string_value(p);
@@ -646,8 +661,14 @@ fn _jp_object(p: *JsonParser) -> *JsonValue {
         free(v as *void);
         _jp_skip_ws(p);
         let c: i32 = _jp_peek(p);
-        if c == 44 { p.pos = p.pos + 1; continue; } // ','
-        if c == 125 { p.pos = p.pos + 1; break; }   // '}'
+        if c == 44 {
+            p.pos = p.pos + 1;
+            continue;
+        } // ','
+        if c == 125 {
+            p.pos = p.pos + 1;
+            break;
+        } // '}'
         break;
     }
     return obj;
@@ -657,16 +678,25 @@ fn _jp_array(p: *JsonParser) -> *JsonValue {
     let arr: *JsonValue = JsonValue::array();
     p.pos = p.pos + 1;
     _jp_skip_ws(p);
-    if _jp_peek(p) == 93 { p.pos = p.pos + 1; return arr; }
+    if _jp_peek(p) == 93 {
+        p.pos = p.pos + 1;
+        return arr;
+    }
     while p.pos < p.n {
         let v: *JsonValue = _jp_value(p);
         if v == null { return arr; }
         arr.arr.push(*v);
-        free(v as *void);   // internal temp: push(*v) copied the struct into arr
+        free(v as *void); // internal temp: push(*v) copied the struct into arr
         _jp_skip_ws(p);
         let c: i32 = _jp_peek(p);
-        if c == 44 { p.pos = p.pos + 1; continue; }
-        if c == 93 { p.pos = p.pos + 1; break; }
+        if c == 44 {
+            p.pos = p.pos + 1;
+            continue;
+        }
+        if c == 93 {
+            p.pos = p.pos + 1;
+            break;
+        }
         break;
     }
     return arr;
@@ -700,17 +730,39 @@ fn _jp_unescape(raw: string) -> string {
     let mut i: i32 = 0;
     while i < n {
         let c: i32 = raw.at(i).to_int();
-        if c != 92 { out = out.concat(raw.substring(i, i + 1)); i = i + 1; continue; }
+        if c != 92 {
+            out = out.concat(raw.substring(i, i + 1));
+            i = i + 1;
+            continue;
+        }
         i = i + 1;
         if i >= n { break; }
         let e: i32 = raw.at(i).to_int();
         i = i + 1;
-        if e == 110 { out = out.concat("\n"); continue; }
-        if e == 116 { out = out.concat("\t"); continue; }
-        if e == 114 { out = out.concat("\r"); continue; }
-        if e == 34  { out = out.concat("\""); continue; }
-        if e == 92  { out = out.concat("\\"); continue; }
-        if e == 47  { out = out.concat("/"); continue; }
+        if e == 110 {
+            out = out.concat("\n");
+            continue;
+        }
+        if e == 116 {
+            out = out.concat("\t");
+            continue;
+        }
+        if e == 114 {
+            out = out.concat("\r");
+            continue;
+        }
+        if e == 34 {
+            out = out.concat("\"");
+            continue;
+        }
+        if e == 92 {
+            out = out.concat("\\");
+            continue;
+        }
+        if e == 47 {
+            out = out.concat("/");
+            continue;
+        }
         if e == 117 && i + 4 <= n {
             i = i + 4;
             out = out.concat("?");
@@ -722,7 +774,10 @@ fn _jp_unescape(raw: string) -> string {
 
 fn _jp_bool(p: *JsonParser) -> *JsonValue {
     let c: i32 = _jp_peek(p);
-    if c == 116 { p.pos = p.pos + 4; return JsonValue::bool(true); }
+    if c == 116 {
+        p.pos = p.pos + 4;
+        return JsonValue::bool(true);
+    }
     p.pos = p.pos + 5;
     return JsonValue::bool(false);
 }
@@ -736,16 +791,25 @@ fn _jp_pow10(n: i32) -> f64 {
     let mut r: f64 = 1.0;
     let mut k: i32 = n;
     if k >= 0 {
-        while k > 0 { r = r * 10.0; k = k - 1; }
+        while k > 0 {
+            r = r * 10.0;
+            k = k - 1;
+        }
     } else {
-        while k < 0 { r = r / 10.0; k = k + 1; }
+        while k < 0 {
+            r = r / 10.0;
+            k = k + 1;
+        }
     }
     return r;
 }
 
 fn _jp_number(p: *JsonParser) -> *JsonValue {
     let mut neg: bool = false;
-    if _jp_peek(p) == 45 { neg = true; p.pos = p.pos + 1; }
+    if _jp_peek(p) == 45 {
+        neg = true;
+        p.pos = p.pos + 1;
+    }
     let mut int_part: i32 = 0;
     while p.pos < p.n {
         let c: i32 = _jp_peek(p);
@@ -760,7 +824,6 @@ fn _jp_number(p: *JsonParser) -> *JsonValue {
         if neg { int_part = -int_part; }
         return JsonValue::int(int_part);
     }
-
     let mut frac_part: i32 = 0;
     let mut frac_digits: i32 = 0;
     if _jp_peek(p) == 46 {
@@ -791,8 +854,7 @@ fn _jp_number(p: *JsonParser) -> *JsonValue {
         }
     }
     if exp_neg { exp_val = -exp_val; }
-
-    let mut v: f64 = (int_part as f64) + (frac_part as f64) / _jp_pow10(frac_digits);
+    let mut v: f64 = int_part as f64 + frac_part as f64 / _jp_pow10(frac_digits);
     v = v * _jp_pow10(exp_val);
     if neg { v = -v; }
     return JsonValue::float(v);
@@ -831,7 +893,7 @@ fn _jp_number(p: *JsonParser) -> *JsonValue {
 /// ```
 pub trait JsonBind {
     fn from_json(v: *JsonValue) -> !Self;
-    fn to_json(self: *Self) -> *JsonValue;
+    fn to_json(self) -> *JsonValue;
 }
 
 /// Blanket: any `Vector<T>` whose `T` implements `JsonBind` is itself
@@ -860,9 +922,7 @@ pub trait JsonBind {
 /// ```
 impl<T: JsonBind> JsonBind for Vector<T> {
     fn from_json(v: *JsonValue) -> !Vector<T> {
-        if v == null || v.kind != JSON_ARRAY {
-            return err("expected array");
-        }
+        if v == null || v.kind != JSON_ARRAY { return err("expected array"); }
         let out: *Vector<T> = Vector::new();
         let mut i: i32 = 0;
         while i < v.len() {
@@ -873,7 +933,7 @@ impl<T: JsonBind> JsonBind for Vector<T> {
         return ok(*out);
     }
 
-    fn to_json(self: *Vector<T>) -> *JsonValue {
+    fn to_json(self) -> *JsonValue {
         let arr: *JsonValue = JsonValue::array();
         let mut i: i32 = 0;
         while i < self.len() {

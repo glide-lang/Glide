@@ -17,7 +17,6 @@
 // let key: !string = random_bytes(32);   // 256-bit key
 // let n:   !u64    = random_u64();
 // ```
-
 c_raw! {
     #ifndef GLIDE_CSPRNG_DEFINED
     #define GLIDE_CSPRNG_DEFINED
@@ -98,7 +97,9 @@ c_raw! {
 }
 
 extern fn __glide_csprng_raw(n: i32) -> *void;
+
 extern fn __glide_csprng_u64(ok: *i32) -> u64;
+
 extern fn __glide_string_from_buf(p: *void, n: i32) -> string;
 
 /// `n` cryptographically-secure random bytes as a binary-safe string.

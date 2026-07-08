@@ -61,7 +61,6 @@ pub fn url_decode(s: string) -> !string {
     let n: i32 = s.len();
     let b: *ByteBuffer = ByteBuffer::new();
     defer b.free();
-
     let mut i: i32 = 0;
     while i < n {
         let c: i32 = s.at(i).to_int();
@@ -77,7 +76,6 @@ pub fn url_decode(s: string) -> !string {
             i = i + 1;
         }
     }
-
     // `b.as_string()` aliases the internal buffer; `defer b.free()` would
     // leave the caller with a dangling pointer. Copy via `concat("")` so
     // the returned string outlives `b`.

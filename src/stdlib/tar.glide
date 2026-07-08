@@ -15,10 +15,10 @@ import stdlib::fs::*;
 // applying the entry name. Github tarballs always wrap content under
 // a top-level `<repo>-<sha>/` directory, so callers fetching from
 // codeload pass `strip_components = 1`.
-
 const _BLK: i32 = 512;
 
 extern fn __glide_buf_byte(s: string, i: i32) -> i32;
+
 extern fn __glide_buf_substring(s: string, start: i32, end: i32) -> string;
 
 c_raw! {
@@ -57,37 +57,33 @@ pub fn tar_extract(data: string, n: i32, out_dir: string, strip_components: i32)
     let mut pos: i32 = 0;
     let mut count: i32 = 0;
     let mut pending_long: string = "";
-
     while pos + _BLK <= n {
         if _block_all_zero(data, pos) { break; }
-
         let name: string = _entry_name(data, pos, pending_long);
         pending_long = "";
-
         let size: i32 = _read_octal(data, pos + 124, 12);
         let typeflag: i32 = __glide_buf_byte(data, pos + 156);
         pos = pos + _BLK;
-
         let payload: i32 = pos;
         let next: i32 = pos + _round_blk(size);
-
-        if typeflag == 76 {  // 'L'
+        if typeflag == 76 {
             pending_long = _slice_to_string(data, payload, size);
             pos = next;
             continue;
         }
-        if typeflag == 120 || typeflag == 103 {  // 'x' / 'g'
+        if typeflag == 120 || typeflag == 103 {
             pos = next;
             continue;
         }
-
         let stripped: string = _strip_components(name, strip_components);
-        if stripped.eq("") { pos = next; continue; }
+        if stripped.eq("") {
+            pos = next;
+            continue;
+        }
         let target: string = out_dir.concat("/").concat(stripped);
-
-        if typeflag == 53 {  // '5' directory
+        if typeflag == 53 {
             fs_mkdir_p(target);
-        } else if typeflag == 48 || typeflag == 0 {  // '0' or NUL = file
+        } else if typeflag == 48 || typeflag == 0 {
             _ensure_parent(target);
             if !fs_write_slice(target, data, payload, size) { return -1; }
             count = count + 1;
@@ -121,7 +117,9 @@ fn _entry_name(s: string, pos: i32, pending_long: string) -> string {
 fn _slice_cstr(s: string, pos: i32, max: i32) -> string {
     let mut end: i32 = pos;
     let limit: i32 = pos + max;
-    while end < limit && __glide_buf_byte(s, end) != 0 { end = end + 1; }
+    while end < limit && __glide_buf_byte(s, end) != 0 {
+        end = end + 1;
+    }
     if end == pos { return ""; }
     return __glide_buf_substring(s, pos, end);
 }
@@ -150,7 +148,7 @@ fn _read_octal(s: string, pos: i32, len: i32) -> i32 {
     while i < end {
         let b: i32 = __glide_buf_byte(s, i);
         if b < 48 || b > 55 { break; }
-        acc = (acc * 8) + (b - 48);
+        acc = acc * 8 + (b - 48);
         i = i + 1;
     }
     return acc;
@@ -158,7 +156,7 @@ fn _read_octal(s: string, pos: i32, len: i32) -> i32 {
 
 fn _round_blk(n: i32) -> i32 {
     if n <= 0 { return 0; }
-    return ((n + _BLK - 1) / _BLK) * _BLK;
+    return (n + _BLK - 1) / _BLK * _BLK;
 }
 
 // Skip `strip` leading `/`-separated segments. Returns "" if there

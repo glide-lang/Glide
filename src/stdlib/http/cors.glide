@@ -2,11 +2,11 @@ import stdlib::http::*;
 import stdlib::http::router::*;
 
 pub struct CorsConfig {
-    pub origin:      string,
-    pub methods:     string,
-    pub headers:     string,
+    pub origin: string,
+    pub methods: string,
+    pub headers: string,
     pub credentials: bool,
-    pub max_age:     i32,
+    pub max_age: i32,
 }
 
 c_raw! {
@@ -18,10 +18,15 @@ c_raw! {
 }
 
 extern fn __glide_cors_set(origin: string, methods: string, headers: string, credentials: bool, max_age: i32);
+
 extern fn __glide_cors_origin_get() -> string;
+
 extern fn __glide_cors_methods_get() -> string;
+
 extern fn __glide_cors_headers_get() -> string;
+
 extern fn __glide_cors_credentials_get() -> bool;
+
 extern fn __glide_cors_max_age_get() -> i32;
 
 c_raw! {
@@ -41,13 +46,7 @@ c_raw! {
 
 impl CorsConfig {
     pub fn permissive() -> CorsConfig {
-        return CorsConfig {
-            origin: "*",
-            methods: "GET, POST, PUT, DELETE, PATCH, OPTIONS",
-            headers: "Content-Type, Authorization",
-            credentials: false,
-            max_age: 0,
-        };
+        return CorsConfig { origin: "*", methods: "GET, POST, PUT, DELETE, PATCH, OPTIONS", headers: "Content-Type, Authorization", credentials: false, max_age: 0 };
     }
 }
 
@@ -56,23 +55,14 @@ pub fn install_cors(cfg: CorsConfig) {
 }
 
 fn _cors_headers(resp: HttpResponse) -> HttpResponse {
-    let mut out: HttpResponse = resp
-        .set("Access-Control-Allow-Origin", __glide_cors_origin_get())
-        .set("Access-Control-Allow-Methods", __glide_cors_methods_get())
-        .set("Access-Control-Allow-Headers", __glide_cors_headers_get());
-    if __glide_cors_credentials_get() {
-        out = out.set("Access-Control-Allow-Credentials", "true");
-    }
+    let mut out: HttpResponse = resp.set("Access-Control-Allow-Origin", __glide_cors_origin_get()).set("Access-Control-Allow-Methods", __glide_cors_methods_get()).set("Access-Control-Allow-Headers", __glide_cors_headers_get());
+    if __glide_cors_credentials_get() { out = out.set("Access-Control-Allow-Credentials", "true"); }
     let age: i32 = __glide_cors_max_age_get();
-    if age > 0 {
-        out = out.set("Access-Control-Max-Age", age.to_string());
-    }
+    if age > 0 { out = out.set("Access-Control-Max-Age", age.to_string()); }
     return out;
 }
 
 pub fn cors_mw(req: *HttpRequest, c: *Chain) -> HttpResponse {
-    if req.is_method("OPTIONS") {
-        return _cors_headers(HttpResponse::with_status(204));
-    }
+    if req.is_method("OPTIONS") { return _cors_headers(HttpResponse::with_status(204)); }
     return _cors_headers(chain_next(c));
 }

@@ -14,26 +14,40 @@
 //
 // The `fs_*` (prefixed) functions remain available for existing code; the new
 // API is additive.
-
 import stdlib::errors::*;
 import stdlib::bytes::*;
 import stdlib::time::*;
 
 extern fn read_file(path: string) -> string;
+
 extern fn write_file(path: string, content: string) -> bool;
+
 extern fn __glide_file_exists(path: string) -> bool;
+
 extern fn __glide_list_dir(path: string, suffix: string) -> string;
+
 extern fn __glide_fs_mkdir_p(path: string) -> bool;
+
 extern fn __glide_fs_write_bytes(path: string, data: *void, n: i32) -> bool;
+
 extern fn __glide_fs_write_slice(path: string, data: string, offset: i32, n: i32) -> bool;
+
 extern fn __glide_fs_is_dir(path: string) -> bool;
+
 extern fn __glide_fs_read_bytes(path: string, out_len: *i32) -> *void;
+
 extern fn __glide_fs_symlink(target: string, link: string) -> bool;
+
 extern fn __glide_fs_remove_file(path: string) -> bool;
+
 extern fn __glide_fs_remove_dir_rec(path: string) -> bool;
+
 extern fn __glide_fs_copy_file(src: string, dst: string) -> bool;
+
 extern fn __glide_fs_copy_dir_rec(src: string, dst: string) -> bool;
+
 extern fn __glide_fs_list_dirs(path: string) -> string;
+
 extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
 
 c_raw! {
@@ -465,9 +479,7 @@ c_raw! {
 pub fn fs_read(path: string) -> string {
     let mut n: i32 = 0;
     let buf: *void = __glide_read_file_buf(path, &n);
-    if buf == null {
-        return "";
-    }
+    if buf == null { return ""; }
     let s: string = __glide_string_from_buf(buf, n);
     free(buf);
     return s;
@@ -493,7 +505,9 @@ pub fn fs_write(path: string, content: string) -> bool {
 ///     // skip the slow recompute
 /// }
 /// ```
-pub fn fs_exists(path: string) -> bool { return __glide_file_exists(path); }
+pub fn fs_exists(path: string) -> bool {
+    return __glide_file_exists(path);
+}
 
 extern fn __glide_fs_size(path: string) -> i64;
 
@@ -504,7 +518,9 @@ extern fn __glide_fs_size(path: string) -> i64;
 /// let n: i64 = fs_size("favicon.ico");
 /// if n > 0 { /* serve it */ }
 /// ```
-pub fn fs_size(path: string) -> i64 { return __glide_fs_size(path); }
+pub fn fs_size(path: string) -> i64 {
+    return __glide_fs_size(path);
+}
 
 /// List filenames directly under `dir` (no recursion). Returns names
 /// only, not full paths. Filter by suffix (e.g. `".glide"`); pass `""`
@@ -542,7 +558,9 @@ pub fn fs_read_lines(path: string) -> *Vector<string> {
     let n: i32 = lines.len();
     if n > 0 && lines.get(n - 1).eq("") {
         let trimmed: *Vector<string> = Vector::new();
-        for let i: i32 = 0; i < n - 1; i++ { trimmed.push(lines.get(i)); }
+        for let i: i32 = 0; i < n - 1; i++ {
+            trimmed.push(lines.get(i));
+        }
         return trimmed;
     }
     return lines;
@@ -634,7 +652,9 @@ pub fn fs_read_or_default(path: string, fallback: string) -> string {
 /// ```glide
 /// if !fs_mkdir_p("cache/sub/leaf") { eprintln("can't make cache"); }
 /// ```
-pub fn fs_mkdir_p(path: string) -> bool { return __glide_fs_mkdir_p(path); }
+pub fn fs_mkdir_p(path: string) -> bool {
+    return __glide_fs_mkdir_p(path);
+}
 
 /// `true` if `path` is an existing directory. Distinguishes "directory"
 /// from "file" — `fs_exists` returns true for either.
@@ -642,7 +662,9 @@ pub fn fs_mkdir_p(path: string) -> bool { return __glide_fs_mkdir_p(path); }
 /// ```glide
 /// if fs_is_dir(".git") { /* it's a repo */ }
 /// ```
-pub fn fs_is_dir(path: string) -> bool { return __glide_fs_is_dir(path); }
+pub fn fs_is_dir(path: string) -> bool {
+    return __glide_fs_is_dir(path);
+}
 
 /// Write `n` bytes from `data` to `path` in binary mode, replacing any
 /// existing file. Returns `true` on success. Use this instead of
@@ -709,7 +731,9 @@ pub fn fs_symlink(target: string, link: string) -> bool {
 /// ```glide
 /// fs_remove_file("glide.lock");
 /// ```
-pub fn fs_remove_file(path: string) -> bool { return __glide_fs_remove_file(path); }
+pub fn fs_remove_file(path: string) -> bool {
+    return __glide_fs_remove_file(path);
+}
 
 /// Recursively delete `path` and everything under it. Idempotent —
 /// missing paths report success. Shells out to `rm -rf` (POSIX) or
@@ -718,7 +742,9 @@ pub fn fs_remove_file(path: string) -> bool { return __glide_fs_remove_file(path
 /// ```glide
 /// fs_remove_dir_rec("glide_modules");
 /// ```
-pub fn fs_remove_dir_rec(path: string) -> bool { return __glide_fs_remove_dir_rec(path); }
+pub fn fs_remove_dir_rec(path: string) -> bool {
+    return __glide_fs_remove_dir_rec(path);
+}
 
 /// Binary-safe file copy. Overwrites the destination if it exists.
 /// Returns `false` on any I/O error (missing source, write-protected
@@ -727,7 +753,9 @@ pub fn fs_remove_dir_rec(path: string) -> bool { return __glide_fs_remove_dir_re
 /// ```glide
 /// fs_copy_file("target/my_app", "/usr/local/bin/my_app");
 /// ```
-pub fn fs_copy_file(src: string, dst: string) -> bool { return __glide_fs_copy_file(src, dst); }
+pub fn fs_copy_file(src: string, dst: string) -> bool {
+    return __glide_fs_copy_file(src, dst);
+}
 
 /// Recursively copy `src` directory into `dst`, creating `dst` if
 /// missing. Shells out to `cp -r` (POSIX) or `xcopy /S` (Windows).
@@ -771,13 +799,11 @@ fn _walk_dir_into(out: *Vector<string>, dir: string, suffix: string) {
         if sub.eq("") { continue; }
         if sub.eq("glide_modules") { continue; }
         if sub.eq("build") { continue; }
-        if sub.eq("target") { continue; }  // build/subproject dirs
+        if sub.eq("target") { continue; } // build/subproject dirs
         if sub.eq("node_modules") { continue; }
         _walk_dir_into(out, dir.concat("/").concat(sub), suffix);
     }
 }
-
-
 
 // ============================================================================
 // New layer: File, Metadata, DirEntry/ReadDir, and fallible free functions.
@@ -790,23 +816,41 @@ fn _walk_dir_into(out: *Vector<string>, dir: string, suffix: string) {
 // Open: `glf` is an abstract bit set (1=read 2=write 4=append
 // 8=truncate 16=create 32=create_new); the C side maps to the right O_* flags.
 extern fn __glide_file_open(path: string, glf: i32, mode: i32) -> i64;
+
 extern fn __glide_fd_read(fd: i64, buf: *void, n: i64) -> i64;
+
 extern fn __glide_fd_write(fd: i64, buf: *void, n: i64) -> i64;
+
 extern fn __glide_fd_seek(fd: i64, off: i64, whence: i32) -> i64;
+
 extern fn __glide_fd_close(fd: i64) -> i32;
+
 extern fn __glide_fd_sync(fd: i64) -> i32;
+
 extern fn __glide_fd_truncate(fd: i64, len: i64) -> i32;
+
 extern fn __glide_stat(path: string, follow: i32, out_size: *i64, out_kind: *i32, out_mode: *i32, out_mtime: *i64, out_atime: *i64, out_ctime: *i64) -> i32;
+
 extern fn __glide_rename(from: string, to: string) -> i32;
+
 extern fn __glide_remove_file(path: string) -> i32;
+
 extern fn __glide_fd_write_str(fd: i64, data: string, n: i64) -> i64;
+
 extern fn __glide_hard_link(orig: string, link: string) -> i32;
+
 extern fn __glide_symlink2(orig: string, link: string) -> i32;
+
 extern fn __glide_create_dir(path: string, mode: i32) -> i32;
+
 extern fn __glide_remove_dir(path: string) -> i32;
+
 extern fn __glide_set_perms(path: string, mode: i32) -> i32;
+
 extern fn __glide_readlink(path: string, out_err: *i32) -> string;
+
 extern fn __glide_realpath(path: string, out_err: *i32) -> string;
+
 extern fn __glide_read_dir(path: string, out_err: *i32) -> string;
 
 c_raw! {
@@ -1067,23 +1111,69 @@ fn _fs_err(op: string, path: string, rc: i32) -> string {
 /// let m = fs::metadata("/etc")?;
 /// if m.file_type().is_dir() { println!("is a directory"); }
 /// ```
-pub enum FileType { File, Dir, Symlink, Other }
+pub enum FileType {
+    File,
+    Dir,
+    Symlink,
+    Other,
+}
 
 impl FileType {
     /// `true` if it is a regular file.
-    pub fn is_file(self: FileType) -> bool { match self { File => { return true; } _ => { return false; } } return false; }
+    pub fn is_file(self: FileType) -> bool {
+        match self {
+            File => {
+                return true;
+            }
+            _ => {
+                return false;
+            }
+        }
+        return false;
+    }
+
     /// `true` if it is a directory.
-    pub fn is_dir(self: FileType) -> bool { match self { Dir => { return true; } _ => { return false; } } return false; }
+    pub fn is_dir(self: FileType) -> bool {
+        match self {
+            Dir => {
+                return true;
+            }
+            _ => {
+                return false;
+            }
+        }
+        return false;
+    }
+
     /// `true` if it is a symbolic link (only via `symlink_metadata`; `metadata`
     /// follows the link and never reports `Symlink`).
-    pub fn is_symlink(self: FileType) -> bool { match self { Symlink => { return true; } _ => { return false; } } return false; }
+    pub fn is_symlink(self: FileType) -> bool {
+        match self {
+            Symlink => {
+                return true;
+            }
+            _ => {
+                return false;
+            }
+        }
+        return false;
+    }
+
     /// Human-readable name of the type.
     pub fn to_string(self: FileType) -> string {
         match self {
-            File    => { return "file"; }
-            Dir     => { return "dir"; }
-            Symlink => { return "symlink"; }
-            Other   => { return "other"; }
+            File => {
+                return "file";
+            }
+            Dir => {
+                return "dir";
+            }
+            Symlink => {
+                return "symlink";
+            }
+            Other => {
+                return "other";
+            }
         }
         return "other";
     }
@@ -1103,25 +1193,43 @@ fn _filetype_from(kind: i32) -> FileType {
 /// f.seek(SeekFrom::End(-16));     // 16 bytes before the end
 /// f.seek(SeekFrom::Current(4));   // 4 bytes forward
 /// ```
-pub enum SeekFrom { Start(i64), Current(i64), End(i64) }
+pub enum SeekFrom {
+    Start(i64),
+    Current(i64),
+    End(i64),
+}
 
 /// Permissions of a file (POSIX-style mode bits). On platforms
 /// without full POSIX modes, this reflects at least the read-only bit.
-pub struct Permissions { mode: i32 }
+pub struct Permissions {
+    mode: i32,
+}
 
 impl Permissions {
     /// The mode bits (e.g. `0644`).
-    pub fn mode(self: *Permissions) -> i32 { return self.mode; }
+    pub fn mode(self) -> i32 {
+        return self.mode;
+    }
+
     /// `true` if no write bit is set.
-    pub fn readonly(self: *Permissions) -> bool { return (self.mode & 146) == 0; }
+    pub fn readonly(self) -> bool {
+        return (self.mode & 146) == 0;
+    }
+
     /// Turns read-only on/off by adjusting the write bits. Only changes
     /// the in-memory value; use `fs::set_permissions` to write it to the file.
-    pub fn set_readonly(self: *Permissions, ro: bool) {
-        if ro { self.mode = self.mode - (self.mode & 146); }
-        else { self.mode = self.mode | 128; }
+    pub fn set_readonly(self, ro: bool) {
+        if ro {
+            self.mode = self.mode - (self.mode & 146);
+        } else {
+            self.mode = self.mode | 128;
+        }
     }
+
     /// Frees this structure.
-    pub fn free(self: *Permissions) { free(self as *void); }
+    pub fn free(self) {
+        free(self as *void);
+    }
 }
 
 /// Metadata of a file or directory: size, type, permissions, and the
@@ -1142,32 +1250,66 @@ pub struct Metadata {
 
 impl Metadata {
     /// Content size in bytes.
-    pub fn len(self: *Metadata) -> i64 { return self.size; }
-    /// Same as `len()` — size in bytes.
-    pub fn size(self: *Metadata) -> i64 { return self.size; }
-    /// The entry's type (file/directory/link).
-    pub fn file_type(self: *Metadata) -> FileType { return self.kind; }
-    /// `true` if it is a regular file.
-    pub fn is_file(self: *Metadata) -> bool { return self.kind.is_file(); }
-    /// `true` if it is a directory.
-    pub fn is_dir(self: *Metadata) -> bool { return self.kind.is_dir(); }
-    /// `true` if it is a symbolic link (only when obtained via `symlink_metadata`).
-    pub fn is_symlink(self: *Metadata) -> bool { return self.kind.is_symlink(); }
-    /// Time of the last content modification.
-    pub fn modified(self: *Metadata) -> Time { return self.mtime; }
-    /// Time of the last access.
-    pub fn accessed(self: *Metadata) -> Time { return self.atime; }
-    /// Creation time (or metadata-change time, depending on the platform).
-    pub fn created(self: *Metadata) -> Time { return self.ctime; }
-    /// The file's permissions.
-    pub fn permissions(self: *Metadata) -> *Permissions {
-        let p: *Permissions = malloc(sizeof(Permissions)) as *Permissions;
-        p.mode = self.mode; return p;
+    pub fn len(self) -> i64 {
+        return self.size;
     }
+
+    /// Same as `len()` — size in bytes.
+    pub fn size(self) -> i64 {
+        return self.size;
+    }
+
+    /// The entry's type (file/directory/link).
+    pub fn file_type(self) -> FileType {
+        return self.kind;
+    }
+
+    /// `true` if it is a regular file.
+    pub fn is_file(self) -> bool {
+        return self.kind.is_file();
+    }
+
+    /// `true` if it is a directory.
+    pub fn is_dir(self) -> bool {
+        return self.kind.is_dir();
+    }
+
+    /// `true` if it is a symbolic link (only when obtained via `symlink_metadata`).
+    pub fn is_symlink(self) -> bool {
+        return self.kind.is_symlink();
+    }
+
+    /// Time of the last content modification.
+    pub fn modified(self) -> Time {
+        return self.mtime;
+    }
+
+    /// Time of the last access.
+    pub fn accessed(self) -> Time {
+        return self.atime;
+    }
+
+    /// Creation time (or metadata-change time, depending on the platform).
+    pub fn created(self) -> Time {
+        return self.ctime;
+    }
+
+    /// The file's permissions.
+    pub fn permissions(self) -> *Permissions {
+        let p: *Permissions = malloc(sizeof(Permissions)) as *Permissions;
+        p.mode = self.mode;
+        return p;
+    }
+
     /// `true` if the file has no write bits.
-    pub fn readonly(self: *Metadata) -> bool { return (self.mode & 146) == 0; }
+    pub fn readonly(self) -> bool {
+        return (self.mode & 146) == 0;
+    }
+
     /// Frees this structure.
-    pub fn free(self: *Metadata) { free(self as *void); }
+    pub fn free(self) {
+        free(self as *void);
+    }
 }
 
 // stat/lstat -> Metadata, or a central error.
@@ -1181,7 +1323,9 @@ fn _stat_into(path: string, follow: i32, op: string) -> !*Metadata {
     let rc: i32 = __glide_stat(path, follow, &size, &kind, &mode, &mt, &at, &ct);
     if rc != 0 { return err(_fs_err(op, path, rc)); }
     let m: *Metadata = malloc(sizeof(Metadata)) as *Metadata;
-    m.size = size; m.kind = _filetype_from(kind); m.mode = mode;
+    m.size = size;
+    m.kind = _filetype_from(kind);
+    m.mode = mode;
     m.mtime = Time::from_unix_nanos(mt);
     m.atime = Time::from_unix_nanos(at);
     m.ctime = Time::from_unix_nanos(ct);
@@ -1196,11 +1340,15 @@ fn _stat_into(path: string, follow: i32, op: string) -> !*Metadata {
 /// let m = fs::metadata("foo.txt")?;
 /// println!(m.len());
 /// ```
-pub fn metadata(path: string) -> !*Metadata { return _stat_into(path, 1, "metadata"); }
+pub fn metadata(path: string) -> !*Metadata {
+    return _stat_into(path, 1, "metadata");
+}
 
 /// Like `metadata`, but does NOT follow links: if `path` is a symbolic link,
 /// the result describes the link itself (`file_type().is_symlink()` is `true`).
-pub fn symlink_metadata(path: string) -> !*Metadata { return _stat_into(path, 0, "symlink_metadata"); }
+pub fn symlink_metadata(path: string) -> !*Metadata {
+    return _stat_into(path, 0, "symlink_metadata");
+}
 
 /// `true` if something exists at `path` (following links). It does not tell
 /// "does not exist" from "error while checking" — for that use `try_exists`.
@@ -1209,8 +1357,12 @@ pub fn symlink_metadata(path: string) -> !*Metadata { return _stat_into(path, 0,
 /// if fs::exists("config.toml") { ... }
 /// ```
 pub fn exists(path: string) -> bool {
-    let mut size: i64 = 0; let mut kind: i32 = 0; let mut mode: i32 = 0;
-    let mut mt: i64 = 0; let mut at: i64 = 0; let mut ct: i64 = 0;
+    let mut size: i64 = 0;
+    let mut kind: i32 = 0;
+    let mut mode: i32 = 0;
+    let mut mt: i64 = 0;
+    let mut at: i64 = 0;
+    let mut ct: i64 = 0;
     return __glide_stat(path, 1, &size, &kind, &mode, &mt, &at, &ct) == 0;
 }
 
@@ -1218,8 +1370,12 @@ pub fn exists(path: string) -> bool {
 /// confirmed to not exist (`NotFound`), and `err(...)` when even that could
 /// not be determined (e.g. no permission on a parent directory).
 pub fn try_exists(path: string) -> !bool {
-    let mut size: i64 = 0; let mut kind: i32 = 0; let mut mode: i32 = 0;
-    let mut mt: i64 = 0; let mut at: i64 = 0; let mut ct: i64 = 0;
+    let mut size: i64 = 0;
+    let mut kind: i32 = 0;
+    let mut mode: i32 = 0;
+    let mut mt: i64 = 0;
+    let mut at: i64 = 0;
+    let mut ct: i64 = 0;
     let rc: i32 = __glide_stat(path, 1, &size, &kind, &mode, &mt, &at, &ct);
     if rc == 0 { return ok(true); }
     if ErrorKind::from_os(-rc) == ErrorKind::NotFound { return ok(false); }
@@ -1227,12 +1383,11 @@ pub fn try_exists(path: string) -> !bool {
 }
 
 // --- paths ---------------------------------------------------------------
-
 fn _last_sep(path: string) -> i32 {
     let mut i: i32 = path.len() - 1;
     while i >= 0 {
         let c: i32 = path.at(i).to_int();
-        if c == 47 || c == 92 { return i; }   // '/' ou '\'
+        if c == 47 || c == 92 { return i; } // '/' ou '\'
         i = i - 1;
     }
     return -1;
@@ -1329,30 +1484,67 @@ pub fn join(a: string, b: string) -> string {
 /// let f = fs::OpenOptions::new().write(true).append(true).open("log.txt")?;
 /// defer f.close();
 /// ```
-pub struct OpenOptions { rd: bool, wr: bool, ap: bool, tr: bool, cr: bool, cn: bool }
+pub struct OpenOptions {
+    rd: bool,
+    wr: bool,
+    ap: bool,
+    tr: bool,
+    cr: bool,
+    cn: bool,
+}
 
 impl OpenOptions {
     /// A blank set of options (everything off).
     pub fn new() -> *OpenOptions {
         let o: *OpenOptions = malloc(sizeof(OpenOptions)) as *OpenOptions;
-        o.rd = false; o.wr = false; o.ap = false; o.tr = false; o.cr = false; o.cn = false;
+        o.rd = false;
+        o.wr = false;
+        o.ap = false;
+        o.tr = false;
+        o.cr = false;
+        o.cn = false;
         return o;
     }
+
     /// Allows reading.
-    pub fn read(self: *OpenOptions, v: bool) -> *OpenOptions { self.rd = v; return self; }
+    pub fn read(self, v: bool) -> *OpenOptions {
+        self.rd = v;
+        return self;
+    }
+
     /// Allows writing.
-    pub fn write(self: *OpenOptions, v: bool) -> *OpenOptions { self.wr = v; return self; }
+    pub fn write(self, v: bool) -> *OpenOptions {
+        self.wr = v;
+        return self;
+    }
+
     /// Every write goes to the end of the file (append mode).
-    pub fn append(self: *OpenOptions, v: bool) -> *OpenOptions { self.ap = v; return self; }
+    pub fn append(self, v: bool) -> *OpenOptions {
+        self.ap = v;
+        return self;
+    }
+
     /// Truncates the file to zero on open (requires writing).
-    pub fn truncate(self: *OpenOptions, v: bool) -> *OpenOptions { self.tr = v; return self; }
+    pub fn truncate(self, v: bool) -> *OpenOptions {
+        self.tr = v;
+        return self;
+    }
+
     /// Creates the file if it does not exist (requires write/append).
-    pub fn create(self: *OpenOptions, v: bool) -> *OpenOptions { self.cr = v; return self; }
+    pub fn create(self, v: bool) -> *OpenOptions {
+        self.cr = v;
+        return self;
+    }
+
     /// Creates exclusively: fails with `AlreadyExists` if the file already
     /// exists. Avoids the check-then-create race.
-    pub fn create_new(self: *OpenOptions, v: bool) -> *OpenOptions { self.cn = v; return self; }
+    pub fn create_new(self, v: bool) -> *OpenOptions {
+        self.cn = v;
+        return self;
+    }
+
     /// Opens `path` with the chosen options.
-    pub fn open(self: *OpenOptions, path: string) -> !*File {
+    pub fn open(self, path: string) -> !*File {
         let mut glf: i32 = 0;
         if self.rd { glf = glf | _FS_RD; }
         if self.wr { glf = glf | _FS_WR; }
@@ -1362,8 +1554,11 @@ impl OpenOptions {
         if self.cn { glf = glf | _FS_CREATNEW; }
         return _open_file(path, glf, 420, "open");
     }
+
     /// Frees the options.
-    pub fn free(self: *OpenOptions) { free(self as *void); }
+    pub fn free(self) {
+        free(self as *void);
+    }
 }
 
 /// An open file. Supports incremental reading, writing, and seeking.
@@ -1374,34 +1569,41 @@ impl OpenOptions {
 /// defer f.close();
 /// f.write_all("olá")?;
 /// ```
-pub struct File { fd: i64, path: string }
+pub struct File {
+    fd: i64,
+    path: string,
+}
 
 fn _open_file(path: string, glf: i32, mode: i32, op: string) -> !*File {
     let fd: i64 = __glide_file_open(path, glf, mode);
     if fd < 0 { return err(_fs_err(op, path, fd as i32)); }
     let f: *File = malloc(sizeof(File)) as *File;
-    f.fd = fd; f.path = path;
+    f.fd = fd;
+    f.path = path;
     return ok(f);
 }
 
 /// Read bytes from a source. `File` implements this contract, so functions
 /// can be generic over "something you can read".
 pub trait Read {
-    fn read(self: *Self, max: i32) -> !*ByteBuffer;
+    fn read(self, max: i32) -> !*ByteBuffer;
 }
 
 /// Write bytes to a sink.
 pub trait Write {
-    fn write(self: *Self, data: string) -> !i64;
+    fn write(self, data: string) -> !i64;
 }
 
 impl Read for File {
     /// Reads up to `max` bytes at the current position, advancing the cursor. An
     /// empty buffer (len 0) signals end of file.
-    fn read(self: *File, max: i32) -> !*ByteBuffer {
+    fn read(self, max: i32) -> !*ByteBuffer {
         let b: *ByteBuffer = ByteBuffer::with_capacity(max);
         let n: i64 = __glide_fd_read(self.fd, b.data as *void, max as i64);
-        if n < 0 { b.free(); return err(_fs_err("read", self.path, n as i32)); }
+        if n < 0 {
+            b.free();
+            return err(_fs_err("read", self.path, n as i32));
+        }
         b.len = n as i32;
         return ok(b);
     }
@@ -1411,7 +1613,7 @@ impl Write for File {
     /// Writes the bytes of `data`, advancing the cursor. Returns how many bytes
     /// were written (may be fewer than the total in one call; use
     /// `write_all` to guarantee all of it).
-    fn write(self: *File, data: string) -> !i64 {
+    fn write(self, data: string) -> !i64 {
         let n: i64 = __glide_fd_write_str(self.fd, data, data.len() as i64);
         if n < 0 { return err(_fs_err("write", self.path, n as i32)); }
         return ok(n);
@@ -1420,103 +1622,148 @@ impl Write for File {
 
 impl File {
     /// Opens an existing file for reading only.
-    pub fn open(path: string) -> !*File { return _open_file(path, _FS_RD, 420, "open"); }
+    pub fn open(path: string) -> !*File {
+        return _open_file(path, _FS_RD, 420, "open");
+    }
+
     /// Creates (or truncates) a file for writing.
-    pub fn create(path: string) -> !*File { return _open_file(path, _FS_WR | _FS_CREAT | _FS_TRUNC, 420, "create"); }
+    pub fn create(path: string) -> !*File {
+        return _open_file(path, _FS_WR | _FS_CREAT | _FS_TRUNC, 420, "create");
+    }
+
     /// Creates a NEW file for writing; fails with `AlreadyExists` if it already
     /// exists (atomic, with no check-then-create race).
-    pub fn create_new(path: string) -> !*File { return _open_file(path, _FS_WR | _FS_CREATNEW, 420, "create_new"); }
+    pub fn create_new(path: string) -> !*File {
+        return _open_file(path, _FS_WR | _FS_CREATNEW, 420, "create_new");
+    }
+
     /// A blank open builder (equivalent to `OpenOptions::new()`).
-    pub fn options() -> *OpenOptions { return OpenOptions::new(); }
+    pub fn options() -> *OpenOptions {
+        return OpenOptions::new();
+    }
 
     /// Reads the whole file (from the cursor) into a single byte buffer.
-    pub fn read_to_end(self: *File) -> !*ByteBuffer {
+    pub fn read_to_end(self) -> !*ByteBuffer {
         let out: *ByteBuffer = ByteBuffer::new();
         while true {
             let r: !*ByteBuffer = self.read(65536);
-            if !r.ok { out.free(); return err(r.err); }
+            if !r.ok {
+                out.free();
+                return err(r.err);
+            }
             let chunk: *ByteBuffer = r.val;
-            if chunk.len() == 0 { chunk.free(); break; }
+            if chunk.len() == 0 {
+                chunk.free();
+                break;
+            }
             out.push_buf(chunk);
             chunk.free();
         }
         return ok(out);
     }
+
     /// Reads the whole file as text (the bytes become a string).
-    pub fn read_to_string(self: *File) -> !string {
+    pub fn read_to_string(self) -> !string {
         let r: !*ByteBuffer = self.read_to_end();
         if !r.ok { return err(r.err); }
         let s: string = r.val.to_string();
         r.val.free();
         return ok(s);
     }
+
     /// Reads EXACTLY `n` bytes. Fails with `UnexpectedEof` if the file ends
     /// before that.
-    pub fn read_exact(self: *File, n: i32) -> !*ByteBuffer {
+    pub fn read_exact(self, n: i32) -> !*ByteBuffer {
         let out: *ByteBuffer = ByteBuffer::new();
         while out.len() < n {
             let r: !*ByteBuffer = self.read(n - out.len());
-            if !r.ok { out.free(); return err(r.err); }
+            if !r.ok {
+                out.free();
+                return err(r.err);
+            }
             let chunk: *ByteBuffer = r.val;
             if chunk.len() == 0 {
-                chunk.free(); out.free();
+                chunk.free();
+                out.free();
                 return err(Error::new("fs", "read_exact", ErrorKind::UnexpectedEof, "reached end of file", self.path, 0).emit());
             }
-            out.push_buf(chunk); chunk.free();
+            out.push_buf(chunk);
+            chunk.free();
         }
         return ok(out);
     }
+
     /// Writes the bytes of a `ByteBuffer`.
-    pub fn write_bytes(self: *File, buf: *ByteBuffer) -> !i64 {
+    pub fn write_bytes(self, buf: *ByteBuffer) -> !i64 {
         let n: i64 = __glide_fd_write(self.fd, buf.data as *void, buf.len() as i64);
         if n < 0 { return err(_fs_err("write", self.path, n as i32)); }
         return ok(n);
     }
+
     /// Writes ALL of `data`, looping until nothing is left.
-    pub fn write_all(self: *File, data: string) -> ! {
+    pub fn write_all(self, data: string) -> ! {
         let total: i32 = data.len();
         let mut off: i32 = 0;
         while off < total {
             let n: i64 = __glide_fd_write_str(self.fd, data.substring(off, total), (total - off) as i64);
             if n < 0 { return err(_fs_err("write", self.path, n as i32)); }
-            off = off + (n as i32);
+            off = off + n as i32;
         }
         return ok();
     }
+
     /// Moves the read/write cursor. Returns the new position from the
     /// start of the file.
-    pub fn seek(self: *File, from: SeekFrom) -> !i64 {
+    pub fn seek(self, from: SeekFrom) -> !i64 {
         let mut off: i64 = 0;
         let mut whence: i32 = _SEEK_SET;
         match from {
-            Start(n)   => { off = n; whence = _SEEK_SET; }
-            Current(n) => { off = n; whence = _SEEK_CUR; }
-            End(n)     => { off = n; whence = _SEEK_END; }
+            Start(n) => {
+                off = n;
+                whence = _SEEK_SET;
+            }
+            Current(n) => {
+                off = n;
+                whence = _SEEK_CUR;
+            }
+            End(n) => {
+                off = n;
+                whence = _SEEK_END;
+            }
         }
         let r: i64 = __glide_fd_seek(self.fd, off, whence);
         if r < 0 { return err(_fs_err("seek", self.path, r as i32)); }
         return ok(r);
     }
+
     /// The current cursor position (bytes from the start).
-    pub fn stream_position(self: *File) -> !i64 { return self.seek(SeekFrom::Current(0)); }
+    pub fn stream_position(self) -> !i64 {
+        return self.seek(SeekFrom::Current(0));
+    }
+
     /// Ensures written data reaches the disk.
-    pub fn sync_all(self: *File) -> ! {
+    pub fn sync_all(self) -> ! {
         let rc: i32 = __glide_fd_sync(self.fd);
         if rc != 0 { return err(_fs_err("sync_all", self.path, rc)); }
         return ok();
     }
+
     /// Sets the file size to `len` bytes (truncates, or extends with
     /// zeros).
-    pub fn set_len(self: *File, len: i64) -> ! {
+    pub fn set_len(self, len: i64) -> ! {
         let rc: i32 = __glide_fd_truncate(self.fd, len);
         if rc != 0 { return err(_fs_err("set_len", self.path, rc)); }
         return ok();
     }
+
     /// The metadata of the open file.
-    pub fn metadata(self: *File) -> !*Metadata { return _stat_into(self.path, 1, "metadata"); }
+    pub fn metadata(self) -> !*Metadata {
+        return _stat_into(self.path, 1, "metadata");
+    }
+
     /// Closes the descriptor and frees the handle. After this the `File` must
     /// not be used again.
-    pub fn close(self: *File) {
+    pub fn close(self) {
         let _rc: i32 = __glide_fd_close(self.fd);
         free(self as *void);
     }
@@ -1531,16 +1778,26 @@ impl File {
 ///     println!(e.file_name(), e.file_type()?.to_string());
 /// }
 /// ```
-pub struct DirEntry { name: string, dir: string, kind: i32 }
+pub struct DirEntry {
+    name: string,
+    dir: string,
+    kind: i32,
+}
 
 impl DirEntry {
     /// The entry's name (without the directory).
-    pub fn file_name(self: *DirEntry) -> string { return self.name; }
+    pub fn file_name(self) -> string {
+        return self.name;
+    }
+
     /// The full path of the entry (directory + name).
-    pub fn path(self: *DirEntry) -> string { return join(self.dir, self.name); }
+    pub fn path(self) -> string {
+        return join(self.dir, self.name);
+    }
+
     /// The entry's type. Cheap when the OS reported the type in the listing;
     /// otherwise it queries the disk.
-    pub fn file_type(self: *DirEntry) -> !FileType {
+    pub fn file_type(self) -> !FileType {
         if self.kind != 3 { return ok(_filetype_from(self.kind)); }
         let m: !*Metadata = symlink_metadata(self.path());
         if !m.ok { return err(m.err); }
@@ -1548,22 +1805,35 @@ impl DirEntry {
         m.val.free();
         return ok(ft);
     }
+
     /// The entry's metadata (without following the link).
-    pub fn metadata(self: *DirEntry) -> !*Metadata { return symlink_metadata(self.path()); }
+    pub fn metadata(self) -> !*Metadata {
+        return symlink_metadata(self.path());
+    }
 }
 
 /// The result of `read_dir`: the list of a directory's entries. It is
 /// iterable with `for e in dir` and indexable with `.len()`/`.get(i)`.
-pub struct ReadDir { entries: *Vector<*DirEntry> }
+pub struct ReadDir {
+    entries: *Vector<*DirEntry>,
+}
 
 impl ReadDir {
     /// How many entries the directory has.
-    pub fn len(self: *ReadDir) -> i32 { return self.entries.len(); }
+    pub fn len(self) -> i32 {
+        return self.entries.len();
+    }
+
     /// The i-th entry.
-    pub fn get(self: *ReadDir, i: i32) -> *DirEntry { return self.entries.get(i); }
+    pub fn get(self, i: i32) -> *DirEntry {
+        return self.entries.get(i);
+    }
+
     /// Frees the entries and the list.
-    pub fn free(self: *ReadDir) {
-        for let i: i32 = 0; i < self.entries.len(); i++ { free(self.entries.get(i) as *void); }
+    pub fn free(self) {
+        for let i: i32 = 0; i < self.entries.len(); i++ {
+            free(self.entries.get(i) as *void);
+        }
         self.entries.free();
         free(self as *void);
     }
@@ -1739,10 +2009,16 @@ pub fn remove_dir_all(path: string) -> ! {
         let ft: !FileType = de.file_type();
         if ft.ok && ft.val.is_dir() {
             let r: ! = remove_dir_all(child);
-            if !r.ok { rd.val.free(); return err(r.err); }
+            if !r.ok {
+                rd.val.free();
+                return err(r.err);
+            }
         } else {
             let r: ! = remove_file(child);
-            if !r.ok { rd.val.free(); return err(r.err); }
+            if !r.ok {
+                rd.val.free();
+                return err(r.err);
+            }
         }
     }
     rd.val.free();

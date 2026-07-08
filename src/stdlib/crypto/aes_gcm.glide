@@ -17,7 +17,6 @@
 // let ct: !string = aes_gcm_encrypt(key, nonce12, plaintext, aad);
 // let pt: !string = aes_gcm_decrypt(key, nonce12, ct.unwrap(), aad);
 // ```
-
 c_raw! {
     #ifndef GLIDE_AES_GCM_DEFINED
     #define GLIDE_AES_GCM_DEFINED
@@ -262,7 +261,9 @@ pub fn aes_ecb_block(key: string, block: string) -> !string {
 }
 
 extern fn __glide_aes_gcm_seal(key: *void, keylen: i32, nonce: *void, pt: *void, ptlen: i32, aad: *void, aadlen: i32) -> *void;
-extern fn __glide_aes_gcm_open(key: *void, keylen: i32, nonce: *void, ct: *void, ctlen: i32, aad: *void, aadlen: i32, out: *(*void)) -> i32;
+
+extern fn __glide_aes_gcm_open(key: *void, keylen: i32, nonce: *void, ct: *void, ctlen: i32, aad: *void, aadlen: i32, out: **void) -> i32;
+
 extern fn __glide_string_from_buf(p: *void, n: i32) -> string;
 
 /// AES-GCM encrypt. `key` is 16 (AES-128) or 32 (AES-256) bytes, `nonce`
@@ -270,9 +271,7 @@ extern fn __glide_string_from_buf(p: *void, n: i32) -> string;
 pub fn aes_gcm_encrypt(key: string, nonce: string, plaintext: string, aad: string) -> !string {
     if key.len() != 16 && key.len() != 32 { return err("aes-gcm: key must be 16 or 32 bytes"); }
     if nonce.len() != 12 { return err("aes-gcm: nonce must be 12 bytes"); }
-    let p: *void = __glide_aes_gcm_seal(key as *void, key.len(), nonce as *void,
-                                         plaintext as *void, plaintext.len(),
-                                         aad as *void, aad.len());
+    let p: *void = __glide_aes_gcm_seal(key as *void, key.len(), nonce as *void, plaintext as *void, plaintext.len(), aad as *void, aad.len());
     if p == null { return err("aes-gcm: allocation failed"); }
     let s: string = __glide_string_from_buf(p, plaintext.len() + 16);
     free(p);
@@ -286,9 +285,7 @@ pub fn aes_gcm_decrypt(key: string, nonce: string, ciphertext: string, aad: stri
     if nonce.len() != 12 { return err("aes-gcm: nonce must be 12 bytes"); }
     if ciphertext.len() < 16 { return err("aes-gcm: ciphertext too short"); }
     let mut out: *void = null;
-    let n: i32 = __glide_aes_gcm_open(key as *void, key.len(), nonce as *void,
-                                       ciphertext as *void, ciphertext.len(),
-                                       aad as *void, aad.len(), &mut out);
+    let n: i32 = __glide_aes_gcm_open(key as *void, key.len(), nonce as *void, ciphertext as *void, ciphertext.len(), aad as *void, aad.len(), &mut out);
     if n < 0 { return err("aes-gcm: authentication failed"); }
     let s: string = __glide_string_from_buf(out, n);
     free(out);

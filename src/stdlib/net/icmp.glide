@@ -13,7 +13,6 @@
 // let r: !i64 = ping("example.com", 2000);
 // if r.ok { println!("rtt:", r.val, "ms"); } else { println!(r.err); }
 // ```
-
 import stdlib::net::raw::*;
 import stdlib::net::ip::*;
 import stdlib::net::dns::*;
@@ -27,14 +26,14 @@ pub fn icmp_checksum(buf: *u8, n: i32) -> i32 {
     let mut sum: i32 = 0;
     let mut i: i32 = 0;
     while i + 1 < n {
-        let w: i32 = ((buf[i] as i32) << 8) | (buf[i + 1] as i32);
+        let w: i32 = buf[i] as i32 << 8 | buf[i + 1] as i32;
         sum = sum + w;
         i = i + 2;
     }
     if i < n {
-        sum = sum + ((buf[i] as i32) << 8);   // trailing odd byte
+        sum = sum + (buf[i] as i32 << 8); // trailing odd byte
     }
-    while (sum >> 16) != 0 {
+    while sum >> 16 != 0 {
         sum = (sum & 65535) + (sum >> 16);
     }
     return (sum ^ 65535) & 65535;
@@ -44,27 +43,27 @@ pub fn icmp_checksum(buf: *u8, n: i32) -> i32 {
 /// bytes) and return the total length. Layout: type(8) code(0) checksum(2)
 /// id(2) seq(2) payload. Payload is an A..Z filler.
 pub fn icmp_build_echo(buf: *u8, id: i32, seq: i32, payload_len: i32) -> i32 {
-    buf[0] = 8 as u8;                      // type: echo request
-    buf[1] = 0 as u8;                      // code
-    buf[2] = 0 as u8;                      // checksum (zero before compute)
+    buf[0] = 8 as u8; // type: echo request
+    buf[1] = 0 as u8; // code
+    buf[2] = 0 as u8; // checksum (zero before compute)
     buf[3] = 0 as u8;
-    buf[4] = ((id >> 8) & 255) as u8;
+    buf[4] = (id >> 8 & 255) as u8;
     buf[5] = (id & 255) as u8;
-    buf[6] = ((seq >> 8) & 255) as u8;
+    buf[6] = (seq >> 8 & 255) as u8;
     buf[7] = (seq & 255) as u8;
     for let i: i32 = 0; i < payload_len; i++ {
-        buf[8 + i] = (65 + (i % 26)) as u8;   // 'A'..'Z'
+        buf[8 + i] = (65 + i % 26) as u8; // 'A'..'Z'
     }
     let total: i32 = 8 + payload_len;
     let ck: i32 = icmp_checksum(buf, total);
-    buf[2] = ((ck >> 8) & 255) as u8;
+    buf[2] = (ck >> 8 & 255) as u8;
     buf[3] = (ck & 255) as u8;
     return total;
 }
 
 // Read a 16-bit big-endian field at `off`.
 fn _be16(buf: *u8, off: i32) -> i32 {
-    return ((buf[off] as i32) << 8) | (buf[off + 1] as i32);
+    return buf[off] as i32 << 8 | buf[off + 1] as i32;
 }
 
 /// Ping `host` once, returning the round-trip time in milliseconds.
@@ -74,32 +73,35 @@ pub fn ping(host: string, timeout_ms: i32) -> !i64 {
     if !res.is_ok() { return err(res.unwrap_err()); }
     if res.unwrap().len() == 0 { return err("icmp: no address for ".concat(host)); }
     let dst: *SocketAddr = SocketAddr::new(res.unwrap().get(0), 0);
-
     let rs: !*RawSocket = RawSocket::open_icmp();
     if !rs.is_ok() { return err(rs.unwrap_err()); }
     let sock: *RawSocket = rs.unwrap();
     let _to: !i32 = sock.set_timeout_ms(timeout_ms);
-
     let id: i32 = 4321;
     let seq: i32 = 1;
     let pkt: *u8 = malloc(64) as *u8;
     let plen: i32 = icmp_build_echo(pkt, id, seq, 32);
-
     let t0: i64 = Time::now().unix_millis();
     let sent: !i32 = sock.send_to(pkt as *void, plen, dst);
     free(pkt as *void);
-    if !sent.is_ok() { sock.close(); return err(sent.unwrap_err()); }
-
+    if !sent.is_ok() {
+        sock.close();
+        return err(sent.unwrap_err());
+    }
     let rbuf: *u8 = malloc(1500) as *u8;
     let mut tries: i32 = 0;
     while tries < 8 {
         tries = tries + 1;
         let rr: !*RawRecv = sock.recv_from(rbuf as *void, 1500);
-        if !rr.is_ok() { free(rbuf as *void); sock.close(); return err("icmp: timeout"); }
+        if !rr.is_ok() {
+            free(rbuf as *void);
+            sock.close();
+            return err("icmp: timeout");
+        }
         let n: i32 = rr.unwrap().n;
-        let ihl: i32 = ((rbuf[0] as i32) & 15) * 4;   // IP header length
+        let ihl: i32 = (rbuf[0] as i32 & 15) * 4; // IP header length
         if n < ihl + 8 { continue; }
-        let ty: i32 = rbuf[ihl] as i32;               // ICMP type (0 = echo reply)
+        let ty: i32 = rbuf[ihl] as i32; // ICMP type (0 = echo reply)
         let rid: i32 = _be16(rbuf, ihl + 4);
         let rseq: i32 = _be16(rbuf, ihl + 6);
         if ty == 0 && rid == id && rseq == seq {
@@ -129,23 +131,22 @@ pub fn traceroute(host: string, max_hops: i32, timeout_ms: i32) -> !*Vector<stri
     if !res.is_ok() { return err(res.unwrap_err()); }
     if res.unwrap().len() == 0 { return err("icmp: no address for ".concat(host)); }
     let dst: *SocketAddr = SocketAddr::new(res.unwrap().get(0), 0);
-
     let rs: !*RawSocket = RawSocket::open_icmp();
     if !rs.is_ok() { return err(rs.unwrap_err()); }
     let sock: *RawSocket = rs.unwrap();
     let _to: !i32 = sock.set_timeout_ms(timeout_ms);
-
     let id: i32 = 4321;
     let hops: *Vector<string> = Vector::new();
     let pkt: *u8 = malloc(64) as *u8;
     let rbuf: *u8 = malloc(1500) as *u8;
-
     for let ttl: i32 = 1; ttl <= max_hops; ttl++ {
         let _st: !i32 = sock.set_ttl(ttl);
         let plen: i32 = icmp_build_echo(pkt, id, ttl, 32);
         let sent: !i32 = sock.send_to(pkt as *void, plen, dst);
-        if !sent.is_ok() { hops.push(ttl.to_string().concat(" !send")); continue; }
-
+        if !sent.is_ok() {
+            hops.push(ttl.to_string().concat(" !send"));
+            continue;
+        }
         let rr: !*RawRecv = sock.recv_from(rbuf as *void, 1500);
         if !rr.is_ok() {
             hops.push(ttl.to_string().concat(" *"));
@@ -153,10 +154,10 @@ pub fn traceroute(host: string, max_hops: i32, timeout_ms: i32) -> !*Vector<stri
         }
         let from: string = rr.unwrap().from.ip.to_string();
         hops.push(ttl.to_string().concat(" ").concat(from));
-        let ihl: i32 = ((rbuf[0] as i32) & 15) * 4;
+        let ihl: i32 = (rbuf[0] as i32 & 15) * 4;
         if rr.unwrap().n >= ihl + 1 {
             let ty: i32 = rbuf[ihl] as i32;
-            if ty == 0 { ttl = max_hops + 1; }   // echo reply: reached dest, stop
+            if ty == 0 { ttl = max_hops + 1; } // echo reply: reached dest, stop
         }
     }
     free(pkt as *void);

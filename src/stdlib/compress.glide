@@ -71,16 +71,12 @@ fn _inf_construct(h: Huff, lengths: *Vector<i32>, n: i32) -> i32 {
         let l: i32 = lengths.get(sym);
         h.count.set(l, h.count.get(l) + 1);
     }
-    if h.count.get(0) == n {
-        return 0;
-    }
+    if h.count.get(0) == n { return 0; }
     let mut left: i32 = 1;
     for let len: i32 = 1; len <= 15; len++ {
         left = left * 2;
         left = left - h.count.get(len);
-        if left < 0 {
-            return left;
-        }
+        if left < 0 { return left; }
     }
     let offs: *Vector<i32> = _vec_zeros(16);
     for let len: i32 = 1; len < 15; len++ {
@@ -103,13 +99,9 @@ fn _inf_decode(s: *Inf, h: Huff) -> i32 {
     let mut index: i32 = 0;
     for let len: i32 = 1; len <= 15; len++ {
         code = code | _inf_bits(s, 1);
-        if s.err {
-            return -1;
-        }
+        if s.err { return -1; }
         let count: i32 = h.count.get(len);
-        if code - count < first {
-            return h.symbol.get(index + (code - first));
-        }
+        if code - count < first { return h.symbol.get(index + (code - first)); }
         index = index + count;
         first = first + count;
         first = first << 1;
@@ -124,15 +116,11 @@ fn _inf_decode(s: *Inf, h: Huff) -> i32 {
 fn _inf_codes(s: *Inf, lencode: Huff, distcode: Huff) {
     while true {
         let sym: i32 = _inf_decode(s, lencode);
-        if s.err {
-            return;
-        }
+        if s.err { return; }
         if sym < 256 {
             s.out.push((sym & 255) as u8);
         } else {
-            if sym == 256 {
-                return;
-            }
+            if sym == 256 { return; }
             let li: i32 = sym - 257;
             if li >= 29 {
                 s.err = true;
@@ -140,9 +128,7 @@ fn _inf_codes(s: *Inf, lencode: Huff, distcode: Huff) {
             }
             let length: i32 = s.lbase.get(li) + _inf_bits(s, s.lext.get(li));
             let dsym: i32 = _inf_decode(s, distcode);
-            if s.err {
-                return;
-            }
+            if s.err { return; }
             if dsym >= 30 {
                 s.err = true;
                 return;
@@ -186,16 +172,12 @@ fn _inf_fixed(s: *Inf) {
     for let i: i32 = 0; i < 288; i++ {
         if i < 144 {
             litlen.push(8);
+        } else if i < 256 {
+            litlen.push(9);
+        } else if i < 280 {
+            litlen.push(7);
         } else {
-            if i < 256 {
-                litlen.push(9);
-            } else {
-                if i < 280 {
-                    litlen.push(7);
-                } else {
-                    litlen.push(8);
-                }
-            }
+            litlen.push(8);
         }
     }
     let distlen: *Vector<i32> = Vector::new();
@@ -234,34 +216,28 @@ fn _inf_dynamic(s: *Inf) {
     let total: i32 = nlen + ndist;
     while lengths.len() < total {
         let sym: i32 = _inf_decode(s, clcode);
-        if s.err {
-            return;
-        }
+        if s.err { return; }
         if sym < 16 {
             lengths.push(sym);
+        } else if sym == 16 {
+            if lengths.len() == 0 {
+                s.err = true;
+                return;
+            }
+            let prev: i32 = lengths.get(lengths.len() - 1);
+            let rep: i32 = 3 + _inf_bits(s, 2);
+            for let k: i32 = 0; k < rep; k++ {
+                lengths.push(prev);
+            }
+        } else if sym == 17 {
+            let rep: i32 = 3 + _inf_bits(s, 3);
+            for let k: i32 = 0; k < rep; k++ {
+                lengths.push(0);
+            }
         } else {
-            if sym == 16 {
-                if lengths.len() == 0 {
-                    s.err = true;
-                    return;
-                }
-                let prev: i32 = lengths.get(lengths.len() - 1);
-                let rep: i32 = 3 + _inf_bits(s, 2);
-                for let k: i32 = 0; k < rep; k++ {
-                    lengths.push(prev);
-                }
-            } else {
-                if sym == 17 {
-                    let rep: i32 = 3 + _inf_bits(s, 3);
-                    for let k: i32 = 0; k < rep; k++ {
-                        lengths.push(0);
-                    }
-                } else {
-                    let rep: i32 = 11 + _inf_bits(s, 7);
-                    for let k: i32 = 0; k < rep; k++ {
-                        lengths.push(0);
-                    }
-                }
+            let rep: i32 = 11 + _inf_bits(s, 7);
+            for let k: i32 = 0; k < rep; k++ {
+                lengths.push(0);
             }
         }
     }
@@ -371,23 +347,25 @@ fn _inflate_raw(src: string, inlen: i32, start: i32) -> *ByteBuffer {
         last = _inf_bits(s, 1);
         let btype: i32 = _inf_bits(s, 2);
         if s.err {
-            s.out.free(); _inf_drop(s); return null;
+            s.out.free();
+            _inf_drop(s);
+            return null;
         }
         if btype == 0 {
             _inf_stored(s);
+        } else if btype == 1 {
+            _inf_fixed(s);
+        } else if btype == 2 {
+            _inf_dynamic(s);
         } else {
-            if btype == 1 {
-                _inf_fixed(s);
-            } else {
-                if btype == 2 {
-                    _inf_dynamic(s);
-                } else {
-                    s.out.free(); _inf_drop(s); return null;
-                }
-            }
+            s.out.free();
+            _inf_drop(s);
+            return null;
         }
         if s.err {
-            s.out.free(); _inf_drop(s); return null;
+            s.out.free();
+            _inf_drop(s);
+            return null;
         }
     }
     let out: *ByteBuffer = s.out;
@@ -398,23 +376,17 @@ fn _inflate_raw(src: string, inlen: i32, start: i32) -> *ByteBuffer {
 // Locate the start of the DEFLATE payload: skip a gzip (RFC 1952) or zlib
 // (RFC 1950) wrapper, or assume raw DEFLATE. Returns the byte offset, or -1.
 fn _deflate_start(src: string, n: i32) -> i32 {
-    if n < 2 {
-        return -1;
-    }
+    if n < 2 { return -1; }
     let b0: i32 = src.at(0).to_int() & 255;
     let b1: i32 = src.at(1).to_int() & 255;
     if b0 == 31 && b1 == 139 {
         // gzip: 10-byte header + optional fields.
-        if n < 10 {
-            return -1;
-        }
+        if n < 10 { return -1; }
         let flg: i32 = src.at(3).to_int() & 255;
         let mut p: i32 = 10;
         if (flg & 4) != 0 {
             // FEXTRA: 2-byte length then that many bytes.
-            if p + 2 > n {
-                return -1;
-            }
+            if p + 2 > n { return -1; }
             let xlen: i32 = src.at(p).to_int() & 255 | (src.at(p + 1).to_int() & 255) << 8;
             p = p + 2 + xlen;
         }
@@ -439,9 +411,7 @@ fn _deflate_start(src: string, n: i32) -> i32 {
     }
     if (b0 & 15) == 8 && (b0 << 8 | b1) % 31 == 0 {
         // zlib wrapper: 2-byte header (+ 4 if a preset dictionary is present).
-        if (b1 & 32) != 0 {
-            return 6;
-        }
+        if (b1 & 32) != 0 { return 6; }
         return 2;
     }
     return 0; // assume raw DEFLATE
@@ -533,16 +503,12 @@ fn _rev_bits(code: i32, len: i32) -> i32 {
 fn _emit_litlen(w: *BitW, sym: i32) {
     if sym < 144 {
         _bw_bits(w, _rev_bits(48 + sym, 8), 8);
+    } else if sym < 256 {
+        _bw_bits(w, _rev_bits(400 + (sym - 144), 9), 9);
+    } else if sym < 280 {
+        _bw_bits(w, _rev_bits(sym - 256, 7), 7);
     } else {
-        if sym < 256 {
-            _bw_bits(w, _rev_bits(400 + (sym - 144), 9), 9);
-        } else {
-            if sym < 280 {
-                _bw_bits(w, _rev_bits(sym - 256, 7), 7);
-            } else {
-                _bw_bits(w, _rev_bits(192 + (sym - 280), 8), 8);
-            }
-        }
+        _bw_bits(w, _rev_bits(192 + (sym - 280), 8), 8);
     }
 }
 
@@ -624,7 +590,8 @@ pub fn gzip_encode(input: string, in_len: i32, out_len: *i32) -> *void {
             while cand >= 0 && chain < 32 {
                 if pos - cand <= 32768 {
                     let mut l: i32 = 0;
-                    while l < 258 && pos + l < in_len && (input.at(cand + l).to_int() & 255) == (input.at(pos + l).to_int() & 255) {
+                    while l < 258 && pos + l < in_len
+                        && (input.at(cand + l).to_int() & 255) == (input.at(pos + l).to_int() & 255) {
                         l = l + 1;
                     }
                     if l > best_len {
@@ -647,9 +614,7 @@ pub fn gzip_encode(input: string, in_len: i32, out_len: *i32) -> *void {
                 }
             }
             _emit_litlen(w, 257 + li);
-            if lext.get(li) > 0 {
-                _bw_bits(w, best_len - lbase.get(li), lext.get(li));
-            }
+            if lext.get(li) > 0 { _bw_bits(w, best_len - lbase.get(li), lext.get(li)); }
             let mut di: i32 = 29;
             for let i: i32 = 0; i < 29; i++ {
                 if best_dist < dbase.get(i + 1) {
@@ -658,9 +623,7 @@ pub fn gzip_encode(input: string, in_len: i32, out_len: *i32) -> *void {
                 }
             }
             _bw_bits(w, _rev_bits(di, 5), 5);
-            if dext.get(di) > 0 {
-                _bw_bits(w, best_dist - dbase.get(di), dext.get(di));
-            }
+            if dext.get(di) > 0 { _bw_bits(w, best_dist - dbase.get(di), dext.get(di)); }
             let end: i32 = pos + best_len;
             pos = pos + 1;
             while pos < end {

@@ -38,7 +38,6 @@
 //     return r.listen(8080).val;
 // }
 // ```
-
 import stdlib::http::*;
 import stdlib::http_status::*;
 import stdlib::net::listener::*;
@@ -53,6 +52,7 @@ extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
 // (If/when multi-router needs surface, replace with a TLS slot keyed
 // per-worker-thread or by listening fd.)
 extern fn __glide_router_sm_set(r: *void);
+
 extern fn __glide_router_sm_get() -> *void;
 
 c_raw! {
@@ -65,16 +65,23 @@ c_raw! {
 // here so the router can run its own accept loop without round-tripping
 // through a fn-pointer handler.
 extern fn hp_parse_glide(buf: *void, len: i32) -> *void;
+
 extern fn hp_glide_method(g: *void) -> string;
+
 extern fn hp_glide_path(g: *void) -> string;
+
 extern fn hp_glide_version(g: *void) -> string;
+
 extern fn hp_glide_headers_block(g: *void) -> string;
+
 extern fn hp_glide_body(g: *void) -> string;
+
 extern fn hp_glide_free(g: *void);
+
 extern fn hp_glide_wants_close(g: *void) -> i32;
-extern fn hp_build_response(status: i32, status_txt: string,
-                            body: *void, body_len: i32,
-                            extra_headers: string, keep_alive: i32) -> i32;
+
+extern fn hp_build_response(status: i32, status_txt: string, body: *void, body_len: i32, extra_headers: string, keep_alive: i32) -> i32;
+
 extern fn hp_resp_buf_ptr() -> *void;
 
 // ---- shared state pointer ---------------------------------------------
@@ -83,12 +90,12 @@ extern fn hp_resp_buf_ptr() -> *void;
 // `Router::state(p)`, read by `State::extract(req)` in extract.glide.
 // One slot keeps the API simple and matches the common single-router
 // shape; multi-router apps must coordinate manually.
-
 c_raw! {
     static void* __glide_router_state_ptr = 0;
 }
 
 extern fn __glide_router_state_get() -> *void;
+
 extern fn __glide_router_state_set(p: *void);
 
 c_raw! {
@@ -97,9 +104,8 @@ c_raw! {
 }
 
 // ---- segment kinds ----------------------------------------------------
-
-pub const RS_LITERAL:  i32 = 0;
-pub const RS_PARAM:    i32 = 1;
+pub const RS_LITERAL: i32 = 0;
+pub const RS_PARAM: i32 = 1;
 pub const RS_WILDCARD: i32 = 2;
 
 /// One piece of a compiled route pattern.
@@ -120,10 +126,10 @@ pub struct RouteSegment {
 /// middleware runs first, then `local_mws` (in registration order),
 /// then the handler.
 pub struct Route {
-    pub method:    string,
-    pub pattern:   string,
-    pub segments:  *Vector<RouteSegment>,
-    pub handler:   fn(*HttpRequest) -> HttpResponse,
+    pub method: string,
+    pub pattern: string,
+    pub segments: *Vector<RouteSegment>,
+    pub handler: fn(*HttpRequest) -> HttpResponse,
     pub local_mws: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse>,
 }
 
@@ -137,8 +143,8 @@ pub const ANY_METHOD: string = "*";
 /// no-match dispatches; defaults to a plain 404 with body
 /// `"not found"`.
 pub struct Router {
-    pub routes:    *Vector<Route>,
-    pub mw:        *Vector<fn(*HttpRequest, *Chain) -> HttpResponse>,
+    pub routes: *Vector<Route>,
+    pub mw: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse>,
     pub not_found: fn(*HttpRequest) -> HttpResponse,
 }
 
@@ -149,10 +155,10 @@ pub struct Router {
 /// circuits the chain — the rest of the middleware AND the route
 /// handler are skipped.
 pub struct Chain {
-    pub idx:     i32,
-    pub mws:     *Vector<fn(*HttpRequest, *Chain) -> HttpResponse>,
+    pub idx: i32,
+    pub mws: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse>,
     pub handler: fn(*HttpRequest) -> HttpResponse,
-    pub req:     *HttpRequest,
+    pub req: *HttpRequest,
 }
 
 /// Advance the middleware chain. The first call from inside
@@ -179,7 +185,6 @@ pub fn chain_next(c: *Chain) -> HttpResponse {
 }
 
 // ---- pattern compilation / matching -----------------------------------
-
 fn _split_nonempty(s: string) -> *Vector<string> {
     let parts: *Vector<string> = s.split("/");
     let out: *Vector<string> = Vector::new();
@@ -210,8 +215,7 @@ fn _compile_pattern(pattern: string) -> *Vector<RouteSegment> {
 // Try to match `path` against the compiled `route_segs`. On match,
 // fills `out` with captured `:name` / `*name` segments and returns
 // true. On miss, leaves `out` empty and returns false.
-fn _match_path(route_segs: *Vector<RouteSegment>, path: string,
-               out: *HashMap<string>) -> bool {
+fn _match_path(route_segs: *Vector<RouteSegment>, path: string, out: *HashMap<string>) -> bool {
     let parts: *Vector<string> = _split_nonempty(path);
     let np: i32 = parts.len();
     let ns: i32 = route_segs.len();
@@ -269,7 +273,6 @@ fn _has_dotdot(path: string) -> bool {
 }
 
 // ---- default handlers -------------------------------------------------
-
 fn _default_not_found(_req: *HttpRequest) -> HttpResponse {
     return HttpResponse::with_status(404).text("not found");
 }
@@ -278,10 +281,7 @@ fn _default_not_found(_req: *HttpRequest) -> HttpResponse {
 // and kick it off. Concatenating per-dispatch is small relative to
 // the rest of the request cost; deferring a more aggressive
 // per-route precomputation until profiling demands it.
-fn _run_chain(parent_mws: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse>,
-              local_mws:  *Vector<fn(*HttpRequest, *Chain) -> HttpResponse>,
-              handler:    fn(*HttpRequest) -> HttpResponse,
-              req:        *HttpRequest) -> HttpResponse {
+fn _run_chain(parent_mws: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse>, local_mws: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse>, handler: fn(*HttpRequest) -> HttpResponse, req: *HttpRequest) -> HttpResponse {
     let mut plen: i32 = 0;
     if parent_mws != null { plen = parent_mws.len(); }
     let mut llen: i32 = 0;
@@ -292,9 +292,15 @@ fn _run_chain(parent_mws: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse>,
     }
     let combined: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse> = Vector::new();
     let mut i: i32 = 0;
-    while i < plen { combined.push(parent_mws.get(i)); i = i + 1; }
+    while i < plen {
+        combined.push(parent_mws.get(i));
+        i = i + 1;
+    }
     i = 0;
-    while i < llen { combined.push(local_mws.get(i)); i = i + 1; }
+    while i < llen {
+        combined.push(local_mws.get(i));
+        i = i + 1;
+    }
     let c: *Chain = malloc(sizeof(Chain)) as *Chain;
     c.idx = 0;
     c.mws = combined;
@@ -318,7 +324,6 @@ fn _normalise_prefix(p: string) -> string {
 }
 
 // ---- Router methods ---------------------------------------------------
-
 impl Router {
     /// Empty router with a default 404 handler.
     ///
@@ -360,8 +365,7 @@ impl Router {
     /// r.use_mw(auth);
     /// r.get("/me", whoami);
     /// ```
-    pub fn use_mw(self: *Router,
-                  mw: fn(*HttpRequest, *Chain) -> HttpResponse) -> *Router {
+    pub fn use_mw(self, mw: fn(*HttpRequest, *Chain) -> HttpResponse) -> *Router {
         self.mw.push(mw);
         return self;
     }
@@ -387,7 +391,7 @@ impl Router {
     /// Returns `self` for chaining. Doesn't borrow `sub` — copies the
     /// route entries — so the caller is free to drop or reuse the
     /// sub-router after the call.
-    pub fn scope(self: *Router, prefix: string, sub: *Router) -> *Router {
+    pub fn scope(self, prefix: string, sub: *Router) -> *Router {
         let normalised: string = _normalise_prefix(prefix);
         let mut i: i32 = 0;
         while i < sub.routes.len() {
@@ -408,13 +412,7 @@ impl Router {
                 mws.push(r.local_mws.get(j));
                 j = j + 1;
             }
-            self.routes.push(Route {
-                method:    r.method,
-                pattern:   new_pattern,
-                segments:  _compile_pattern(new_pattern),
-                handler:   r.handler,
-                local_mws: mws,
-            });
+            self.routes.push(Route { method: r.method, pattern: new_pattern, segments: _compile_pattern(new_pattern), handler: r.handler, local_mws: mws });
             i = i + 1;
         }
         return self;
@@ -441,7 +439,7 @@ impl Router {
     ///
     /// Returns `self` so the call chains. v1 supports a single global
     /// state slot — multiple Routers in the same process share it.
-    pub fn state(self: *Router, p: *void) -> *Router {
+    pub fn state(self, p: *void) -> *Router {
         __glide_router_state_set(p);
         return self;
     }
@@ -454,16 +452,9 @@ impl Router {
     /// r.route("GET", "/users/:id", get_user);
     /// r.route("*",   "/health",    health);
     /// ```
-    pub fn route(self: *Router, method: string, pattern: string,
-                 handler: fn(*HttpRequest) -> HttpResponse) {
+    pub fn route(self, method: string, pattern: string, handler: fn(*HttpRequest) -> HttpResponse) {
         let empty: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse> = Vector::new();
-        self.routes.push(Route {
-            method:    method.to_upper(),
-            pattern:   pattern,
-            segments:  _compile_pattern(pattern),
-            handler:   handler,
-            local_mws: empty,
-        });
+        self.routes.push(Route { method: method.to_upper(), pattern: pattern, segments: _compile_pattern(pattern), handler: handler, local_mws: empty });
     }
 
     /// Shortcut for `route("GET", ...)`.
@@ -471,44 +462,37 @@ impl Router {
     /// ```glide
     /// r.get("/users/:id", get_user);
     /// ```
-    pub fn get(self: *Router, pattern: string,
-               handler: fn(*HttpRequest) -> HttpResponse) {
+    pub fn get(self, pattern: string, handler: fn(*HttpRequest) -> HttpResponse) {
         self.route("GET", pattern, handler);
     }
 
     /// Shortcut for `route("POST", ...)`.
-    pub fn post(self: *Router, pattern: string,
-                handler: fn(*HttpRequest) -> HttpResponse) {
+    pub fn post(self, pattern: string, handler: fn(*HttpRequest) -> HttpResponse) {
         self.route("POST", pattern, handler);
     }
 
     /// Shortcut for `route("PUT", ...)`.
-    pub fn put(self: *Router, pattern: string,
-               handler: fn(*HttpRequest) -> HttpResponse) {
+    pub fn put(self, pattern: string, handler: fn(*HttpRequest) -> HttpResponse) {
         self.route("PUT", pattern, handler);
     }
 
     /// Shortcut for `route("DELETE", ...)`.
-    pub fn delete(self: *Router, pattern: string,
-                  handler: fn(*HttpRequest) -> HttpResponse) {
+    pub fn delete(self, pattern: string, handler: fn(*HttpRequest) -> HttpResponse) {
         self.route("DELETE", pattern, handler);
     }
 
     /// Shortcut for `route("PATCH", ...)`.
-    pub fn patch(self: *Router, pattern: string,
-                 handler: fn(*HttpRequest) -> HttpResponse) {
+    pub fn patch(self, pattern: string, handler: fn(*HttpRequest) -> HttpResponse) {
         self.route("PATCH", pattern, handler);
     }
 
     /// Shortcut for `route("HEAD", ...)`.
-    pub fn head(self: *Router, pattern: string,
-                handler: fn(*HttpRequest) -> HttpResponse) {
+    pub fn head(self, pattern: string, handler: fn(*HttpRequest) -> HttpResponse) {
         self.route("HEAD", pattern, handler);
     }
 
     /// Shortcut for `route("OPTIONS", ...)`.
-    pub fn options(self: *Router, pattern: string,
-                   handler: fn(*HttpRequest) -> HttpResponse) {
+    pub fn options(self, pattern: string, handler: fn(*HttpRequest) -> HttpResponse) {
         self.route("OPTIONS", pattern, handler);
     }
 
@@ -519,8 +503,7 @@ impl Router {
     ///     return HttpResponse::ok().text("ok");
     /// });
     /// ```
-    pub fn any(self: *Router, pattern: string,
-               handler: fn(*HttpRequest) -> HttpResponse) {
+    pub fn any(self, pattern: string, handler: fn(*HttpRequest) -> HttpResponse) {
         self.route(ANY_METHOD, pattern, handler);
     }
 
@@ -528,16 +511,8 @@ impl Router {
     /// router-level `use_mw` chain runs first, then `mws` (in order),
     /// then `handler`. Used by the `@middleware(...)` proc-attr to wire
     /// route-scoped middlewares without losing the global chain.
-    pub fn route_with(self: *Router, method: string, pattern: string,
-                      mws: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse>,
-                      handler: fn(*HttpRequest) -> HttpResponse) {
-        self.routes.push(Route {
-            method:    method.to_upper(),
-            pattern:   pattern,
-            segments:  _compile_pattern(pattern),
-            handler:   handler,
-            local_mws: mws,
-        });
+    pub fn route_with(self, method: string, pattern: string, mws: *Vector<fn(*HttpRequest, *Chain) -> HttpResponse>, handler: fn(*HttpRequest) -> HttpResponse) {
+        self.routes.push(Route { method: method.to_upper(), pattern: pattern, segments: _compile_pattern(pattern), handler: handler, local_mws: mws });
     }
 
     /// Override the default 404 handler.
@@ -547,8 +522,7 @@ impl Router {
     ///     return HttpResponse::with_status(404).json("{\"err\":\"missing\"}");
     /// });
     /// ```
-    pub fn not_found_with(self: *Router,
-                          handler: fn(*HttpRequest) -> HttpResponse) {
+    pub fn not_found_with(self, handler: fn(*HttpRequest) -> HttpResponse) {
         self.not_found = handler;
     }
 
@@ -562,7 +536,7 @@ impl Router {
     /// let req: HttpRequest = ...;
     /// let resp: HttpResponse = r.dispatch(&req);
     /// ```
-    pub fn dispatch(self: *Router, req: *HttpRequest) -> HttpResponse {
+    pub fn dispatch(self, req: *HttpRequest) -> HttpResponse {
         let path: string = req.path_only();
         // Reject `..` segments before the route table. A literal-text
         // pattern can't normally hit them (each segment is matched
@@ -570,9 +544,7 @@ impl Router {
         // them flow through into the captured `rest` and a careless
         // file-server handler could read outside its root. Cheap to
         // block once here than to remember everywhere downstream.
-        if _has_dotdot(path) {
-            return HttpResponse::with_status(400).text("bad path");
-        }
+        if _has_dotdot(path) { return HttpResponse::with_status(400).text("bad path"); }
         let method: string = req.method.to_upper();
         for let i: i32 = 0; i < self.routes.len(); i++ {
             let route: Route = self.routes.get(i);
@@ -580,8 +552,7 @@ impl Router {
             let params: *HashMap<string> = HashMap::new();
             if _match_path(route.segments, path, params) {
                 req.params = params;
-                return _run_chain(self.mw, route.local_mws,
-                                  route.handler, req);
+                return _run_chain(self.mw, route.local_mws, route.handler, req);
             }
             params.free();
         }
@@ -590,7 +561,7 @@ impl Router {
     }
 
     /// Release the route table and the router struct. Pair with `defer`.
-    pub fn free(self: *Router) {
+    pub fn free(self) {
         for let i: i32 = 0; i < self.routes.len(); i++ {
             let r: Route = self.routes.get(i);
             r.segments.free();
@@ -610,7 +581,7 @@ impl Router {
     /// r.get("/", index);
     /// r.listen(8080);
     /// ```
-    pub fn listen(self: *Router, port: i32) -> !i32 {
+    pub fn listen(self, port: i32) -> !i32 {
         let lr: !*TcpListener = TcpListener::bind(port);
         if !lr.ok { return err(lr.err); }
         let l: *TcpListener = lr.val;
@@ -639,7 +610,7 @@ impl Router {
     /// ```glide
     /// r.listen_workers(8080, 4);
     /// ```
-    pub fn listen_workers(self: *Router, port: i32, n: i32) -> !i32 {
+    pub fn listen_workers(self, port: i32, n: i32) -> !i32 {
         __glide_router_sm_set(self as *void);
         return http_listen_workers(port, n, _router_sm_dispatch);
     }
@@ -648,7 +619,7 @@ impl Router {
     /// need to block (database queries, downstream HTTP calls, chan
     /// synchronisation). Slower than `listen_workers` (~107k vs ~159k
     /// req/s on the reference 4-core box) but unrestricted.
-    pub fn listen_workers_blocking(self: *Router, port: i32, n: i32) -> !i32 {
+    pub fn listen_workers_blocking(self, port: i32, n: i32) -> !i32 {
         if os_has_reuseport_balance() {
             let pr: !*TcpListener = TcpListener::bind_reuseport(port);
             if !pr.ok { return err(pr.err); }
@@ -662,7 +633,6 @@ impl Router {
             _router_accept_loop(port, self);
             return ok(0);
         }
-
         let sr: !*TcpListener = TcpListener::bind(port);
         if !sr.ok { return err(sr.err); }
         let shared: *TcpListener = sr.val;
@@ -687,7 +657,6 @@ fn _router_sm_dispatch(req: *HttpRequest) -> HttpResponse {
 }
 
 // ---- server loop (mirror of http.glide _handle_conn but with router) --
-
 fn _router_handle_conn(c: *TcpStream, r: *Router) {
     let buf: *u8 = malloc(8192) as *u8;
     while true {
@@ -695,39 +664,25 @@ fn _router_handle_conn(c: *TcpStream, r: *Router) {
         if !rr.is_ok() { break; }
         let n: i32 = rr.unwrap();
         if n <= 0 { break; }
-
         // Per-request arena — see http.glide::_handle_conn for the
         // rationale. The router does extra path-segment splits and
         // param HashMap builds per dispatch so it actually allocates
         // more per request than the bare handler does.
         let prev: *void = __glide_palloc_get();
         __glide_palloc_set(__glide_palloc_make());
-
         let g: *void = hp_parse_glide(buf as *void, n);
         let mut keep: bool = false;
         let mut resp: HttpResponse = HttpResponse::with_status(400).body("bad request");
         if g != null {
             keep = hp_glide_wants_close(g) == 0;
-            let req: HttpRequest = HttpRequest {
-                method:        hp_glide_method(g),
-                path:          hp_glide_path(g),
-                version:       hp_glide_version(g),
-                headers_block: hp_glide_headers_block(g),
-                body:          hp_glide_body(g),
-                params:        null,
-                queries:       null,
-                tls:           false,
-                headers_cache: null,
-            };
+            let req: HttpRequest = HttpRequest { method: hp_glide_method(g), path: hp_glide_path(g), version: hp_glide_version(g), headers_block: hp_glide_headers_block(g), body: hp_glide_body(g), params: null, queries: null, tls: false, headers_cache: null };
             resp = r.dispatch(&req);
             hp_glide_free(g);
         }
         _write_response(c, &resp, keep);
-
         let arena_head: *void = __glide_palloc_get();
         __glide_palloc_set(prev);
         __glide_palloc_free(arena_head);
-
         if !keep { break; }
     }
     c.close();

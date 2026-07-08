@@ -40,7 +40,6 @@
 // Run them on the coro-per-conn server: `r.listen_workers_blocking(...)`
 // or `http_listen_workers_blocking(...)`. The fast SM path is for
 // non-blocking handlers only.
-
 import stdlib::http::*;
 
 /// One Server-Sent Event. Fields map directly to wire lines:
@@ -48,8 +47,8 @@ import stdlib::http::*;
 ///   `data:` (one or many lines), `retry:` (ms before client retry, 0 = omit).
 pub struct SseEvent {
     pub event: string,
-    pub id:    string,
-    pub data:  string,
+    pub id: string,
+    pub data: string,
     pub retry: i32,
 }
 
@@ -76,19 +75,11 @@ impl SseEvent {
 /// // -> "event: tick\ndata: 1\n\n"
 /// ```
 pub fn sse_format(e: SseEvent) -> string {
-    if e.event.len() == 0 && e.id.len() == 0 && e.data.len() == 0 && e.retry == 0 {
-        return "\n";
-    }
+    if e.event.len() == 0 && e.id.len() == 0 && e.data.len() == 0 && e.retry == 0 { return "\n"; }
     let mut out: string = "";
-    if e.event.len() > 0 {
-        out = out.concat("event: ").concat(e.event).concat("\n");
-    }
-    if e.id.len() > 0 {
-        out = out.concat("id: ").concat(e.id).concat("\n");
-    }
-    if e.retry > 0 {
-        out = out.concat("retry: ").concat(e.retry.to_string()).concat("\n");
-    }
+    if e.event.len() > 0 { out = out.concat("event: ").concat(e.event).concat("\n"); }
+    if e.id.len() > 0 { out = out.concat("id: ").concat(e.id).concat("\n"); }
+    if e.retry > 0 { out = out.concat("retry: ").concat(e.retry.to_string()).concat("\n"); }
     if e.data.len() > 0 {
         let lines: *Vector<string> = e.data.split("\n");
         let mut i: i32 = 0;
@@ -135,12 +126,7 @@ pub fn sse_last_event_id(req: *HttpRequest) -> string {
 ///   * `X-Accel-Buffering: no` — disables buffering on nginx proxies
 ///   * `Connection: keep-alive`
 pub fn sse_response(source: *dyn ChunkSource) -> HttpResponse {
-    return HttpResponse::ok()
-        .set("Content-Type", "text/event-stream")
-        .set("Cache-Control", "no-cache")
-        .set("X-Accel-Buffering", "no")
-        .set("Connection", "keep-alive")
-        .stream(source);
+    return HttpResponse::ok().set("Content-Type", "text/event-stream").set("Cache-Control", "no-cache").set("X-Accel-Buffering", "no").set("Connection", "keep-alive").stream(source);
 }
 
 /// Fan-out source over a chan. Each event sent into the chan becomes
@@ -172,7 +158,7 @@ impl SseChannel {
 }
 
 impl ChunkSource for SseChannel {
-    fn next_chunk(self: *SseChannel) -> ?string {
+    fn next_chunk(self) -> ?string {
         let ev: SseEvent = self.ch.recv();
         if ev.event.eq(SSE_END) { return none(); }
         return some(sse_format(ev));

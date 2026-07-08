@@ -13,7 +13,6 @@
 // c.user_agent = "myapp/0.1";
 // let resp: !*HttpResponse = c.get("http://localhost:8080/health");
 // ```
-
 import stdlib::net::tcp::*;
 import stdlib::net::tls::*;
 import stdlib::net::ip::*;
@@ -29,7 +28,7 @@ import stdlib::env::*;
 pub struct HttpClientRequest {
     pub method: string,
     pub url: string,
-    pub headers: string,        // raw "Name: Value\r\n" lines
+    pub headers: string, // raw "Name: Value\r\n" lines
     pub body: string,
 }
 
@@ -58,7 +57,7 @@ impl HttpClientRequest {
     /// req.set("Authorization", "Bearer xyz");
     /// req.set("Accept", "application/json");
     /// ```
-    pub fn set(self: *HttpClientRequest, name: string, value: string) {
+    pub fn set(self, name: string, value: string) {
         self.headers = self.headers.concat(name).concat(": ").concat(value).concat("\r\n");
     }
 
@@ -68,7 +67,7 @@ impl HttpClientRequest {
     /// req.set("Content-Type", "application/json");
     /// req.body_str("{\"name\":\"alice\"}");
     /// ```
-    pub fn body_str(self: *HttpClientRequest, s: string) {
+    pub fn body_str(self, s: string) {
         self.body = s;
         self.set("Content-Length", _hcli_itos(s.len()));
     }
@@ -76,7 +75,7 @@ impl HttpClientRequest {
     /// Free the request envelope (the malloc'd struct). The header/body
     /// strings it holds are managed by Glide's allocator, not freed here.
     /// Pair with `new` via `defer req.free();`.
-    pub fn free(self: *HttpClientRequest) {
+    pub fn free(self) {
         free(self as *void);
     }
 }
@@ -139,15 +138,14 @@ impl HttpClient {
     /// let r: !*HttpResponse = client.do(req);
     /// if r.ok { println!(r.val.status, r.val.body); }
     /// ```
-    pub fn do(self: *HttpClient, req: *HttpClientRequest) -> !*HttpResponse {
+    pub fn do(self, req: *HttpClientRequest) -> !*HttpResponse {
         let mut current_url: string = req.url;
         let mut current_method: string = req.method;
         let mut current_body: string = req.body;
         let mut current_headers: string = req.headers;
         let mut hops: i32 = 0;
         while true {
-            let r: !*HttpResponse = self._do_once(current_method, current_url,
-                                                  current_headers, current_body);
+            let r: !*HttpResponse = self._do_once(current_method, current_url, current_headers, current_body);
             if !r.ok { return err(r.err); }
             let resp: *HttpResponse = r.val;
             // Decide whether to follow.
@@ -159,8 +157,10 @@ impl HttpClient {
             let loc: string = resp.header("Location");
             if loc.eq("") { return ok(resp); }
             let next_url: !string = _hcli_resolve_url(current_url, loc);
-            if !next_url.ok { free(resp as *void); return err(next_url.err); }
-
+            if !next_url.ok {
+                free(resp as *void);
+                return err(next_url.err);
+            }
             // 303 → GET, no body. 301/302 historically also dropped body
             // for non-GET; we follow that convention here. 307/308
             // preserve method + body.
@@ -188,17 +188,17 @@ impl HttpClient {
     /// Send one request and return the response without following
     /// redirects. Useful for reverse proxies and crawlers that need to
     /// preserve 30x responses exactly as the upstream emitted them.
-    pub fn do_once(self: *HttpClient, req: *HttpClientRequest) -> !*HttpResponse {
+    pub fn do_once(self, req: *HttpClientRequest) -> !*HttpResponse {
         return self._do_once(req.method, req.url, req.headers, req.body);
     }
 
-    fn _do_h2(self: *HttpClient, stream: *TlsStream, method: string,
-              url: *ParsedUrl, extra_headers: string,
-              body: string) -> !*HttpResponse {
+    fn _do_h2(self, stream: *TlsStream, method: string, url: *ParsedUrl, extra_headers: string, body: string) -> !*HttpResponse {
         let cr: !*H2Conn = H2Conn::over(stream);
-        if !cr.ok { stream.close(); return err(cr.err); }
+        if !cr.ok {
+            stream.close();
+            return err(cr.err);
+        }
         let conn: *H2Conn = cr.val;
-
         let extras: *Vector<*HpackHeader> = Vector::new();
         // Default headers — h2 doesn't use Connection:close, the
         // request ends when END_STREAM lands instead.
@@ -234,14 +234,10 @@ impl HttpClient {
             h.value = v;
             extras.push(h);
         }
-
-        let r: !*H2Response = conn.request(method, url.path,
-                                             url.host_header(), "https",
-                                             extras, body);
+        let r: !*H2Response = conn.request(method, url.path, url.host_header(), "https", extras, body);
         conn.close();
         if !r.ok { return err(r.err); }
         let h2r: *H2Response = r.val;
-
         // Lower the h2 response into the existing HttpResponse shape so
         // callers don't have to learn two response types. Headers go
         // into the raw `headers_block` formatted as "Name: Value\r\n".
@@ -260,7 +256,6 @@ impl HttpClient {
         }
         h2r.headers.free();
         free(h2r as *void);
-
         if self.jar != null {
             let lines: *Vector<string> = resp.headers("Set-Cookie");
             if lines.len() > 0 { self.jar.ingest(url.host, lines); }
@@ -268,8 +263,7 @@ impl HttpClient {
         return ok(resp);
     }
 
-    fn _do_once(self: *HttpClient, method: string, url_s: string,
-                extra_headers: string, body: string) -> !*HttpResponse {
+    fn _do_once(self, method: string, url_s: string, extra_headers: string, body: string) -> !*HttpResponse {
         let u: !*ParsedUrl = _hcli_parse_url(url_s);
         if !u.ok { return err(u.err); }
         let url: *ParsedUrl = u.val;
@@ -277,7 +271,6 @@ impl HttpClient {
         if !url.scheme.eq("http") && !url.scheme.eq("https") {
             return err("http_client: scheme must be http or https (got `".concat(url.scheme).concat("`)"));
         }
-
         // Forward-proxy routing. An http request through a proxy uses the
         // absolute-form request-target; an https request tunnels via CONNECT
         // (see the connect branch below). Empty = direct connection.
@@ -292,28 +285,25 @@ impl HttpClient {
         wire = wire.concat("Accept: */*\r\n");
         wire = wire.concat("Connection: close\r\n");
         if self.jar != null {
-            let cookies: string = self.jar.header_value(url.host, url.path,
-                                                        url.scheme.eq("https"));
-            if cookies.len() > 0 {
-                wire = wire.concat("Cookie: ").concat(cookies).concat("\r\n");
-            }
+            let cookies: string = self.jar.header_value(url.host, url.path, url.scheme.eq("https"));
+            if cookies.len() > 0 { wire = wire.concat("Cookie: ").concat(cookies).concat("\r\n"); }
         }
         wire = wire.concat(extra_headers);
         wire = wire.concat("\r\n");
         wire = wire.concat(body);
-
         let mut raw_body: string = "";
         if url.scheme.eq("https") {
             let cfg: *TlsConfig;
-            if self.tls_insecure { cfg = TlsConfig::client_insecure(); }
-            else                  { cfg = TlsConfig::client(); }
+            if self.tls_insecure {
+                cfg = TlsConfig::client_insecure();
+            } else {
+                cfg = TlsConfig::client();
+            }
             if self.http2 { cfg.alpn = "h2,http/1.1"; }
             let stream: *TlsStream;
             if proxy.len() > 0 {
                 // CONNECT tunnel to the origin through the proxy, then TLS.
-                let ts: !*TlsStream = _hcli_tls_via_proxy(proxy, url.host,
-                                                           url.port, cfg,
-                                                           self.timeout_ms);
+                let ts: !*TlsStream = _hcli_tls_via_proxy(proxy, url.host, url.port, cfg, self.timeout_ms);
                 if !ts.ok { return err(ts.err); }
                 stream = ts.val;
             } else {
@@ -323,17 +313,17 @@ impl HttpClient {
                 stream = s.val;
                 if self.timeout_ms > 0 { stream.set_timeout_ms(self.timeout_ms); }
             }
-
             // ALPN agreed on h2? Use the binary frame transport instead.
             let alpn: string = stream.alpn();
             if alpn.eq("h2") {
-                let r: !*HttpResponse = self._do_h2(stream, method, url,
-                                                     extra_headers, body);
+                let r: !*HttpResponse = self._do_h2(stream, method, url, extra_headers, body);
                 return r;
             }
-
             let w: !i32 = stream.write_all(wire);
-            if !w.ok { stream.close(); return err(w.err); }
+            if !w.ok {
+                stream.close();
+                return err(w.err);
+            }
             let raw: !string = stream.read_to_end();
             stream.close();
             if !raw.ok { return err(raw.err); }
@@ -353,7 +343,10 @@ impl HttpClient {
             let stream: *TcpStream = s.val;
             if self.timeout_ms > 0 { stream.set_timeout_ms(self.timeout_ms); }
             let w: !i32 = stream.write_all(wire);
-            if !w.ok { stream.close(); return err(w.err); }
+            if !w.ok {
+                stream.close();
+                return err(w.err);
+            }
             let raw: !string = stream.read_to_end();
             stream.close();
             if !raw.ok { return err(raw.err); }
@@ -364,9 +357,7 @@ impl HttpClient {
         let resp: *HttpResponse = parsed.val;
         if self.jar != null {
             let lines: *Vector<string> = resp.headers("Set-Cookie");
-            if lines.len() > 0 {
-                self.jar.ingest(url.host, lines);
-            }
+            if lines.len() > 0 { self.jar.ingest(url.host, lines); }
         }
         return ok(resp);
     }
@@ -377,7 +368,7 @@ impl HttpClient {
     /// let r: !*HttpResponse = client.get("https://example.com/");
     /// if r.ok && r.val.status == 200 { print!(r.val.body); }
     /// ```
-    pub fn get(self: *HttpClient, url: string) -> !*HttpResponse {
+    pub fn get(self, url: string) -> !*HttpResponse {
         let req: *HttpClientRequest = HttpClientRequest::new("GET", url);
         let r: !*HttpResponse = self.do(req);
         free(req as *void);
@@ -391,8 +382,7 @@ impl HttpClient {
     /// let r: !*HttpResponse = client.post(
     ///     "https://api/upload", "raw=text", "application/x-www-form-urlencoded");
     /// ```
-    pub fn post(self: *HttpClient, url: string, body: string,
-                content_type: string) -> !*HttpResponse {
+    pub fn post(self, url: string, body: string, content_type: string) -> !*HttpResponse {
         let req: *HttpClientRequest = HttpClientRequest::new("POST", url);
         req.set("Content-Type", content_type);
         req.body_str(body);
@@ -408,7 +398,7 @@ impl HttpClient {
     /// let r: !*HttpResponse = client.post_json("https://api/users",
     ///                                          "{\"name\":\"alice\"}");
     /// ```
-    pub fn post_json(self: *HttpClient, url: string, body: string) -> !*HttpResponse {
+    pub fn post_json(self, url: string, body: string) -> !*HttpResponse {
         return self.post(url, body, "application/json");
     }
 
@@ -419,8 +409,7 @@ impl HttpClient {
     ///                                    "{\"name\":\"new\"}",
     ///                                    "application/json");
     /// ```
-    pub fn put(self: *HttpClient, url: string, body: string,
-               content_type: string) -> !*HttpResponse {
+    pub fn put(self, url: string, body: string, content_type: string) -> !*HttpResponse {
         let req: *HttpClientRequest = HttpClientRequest::new("PUT", url);
         req.set("Content-Type", content_type);
         req.body_str(body);
@@ -435,7 +424,7 @@ impl HttpClient {
     /// let r: !*HttpResponse = client.delete("https://api/items/42");
     /// if r.ok { println!("status:", r.val.status); }
     /// ```
-    pub fn delete(self: *HttpClient, url: string) -> !*HttpResponse {
+    pub fn delete(self, url: string) -> !*HttpResponse {
         let req: *HttpClientRequest = HttpClientRequest::new("DELETE", url);
         let r: !*HttpResponse = self.do(req);
         free(req as *void);
@@ -444,7 +433,7 @@ impl HttpClient {
 
     /// Free the client (the malloc'd struct). Pair with `new` via
     /// `defer client.free();`.
-    pub fn free(self: *HttpClient) {
+    pub fn free(self) {
         free(self as *void);
     }
 }
@@ -479,12 +468,11 @@ pub fn http_post_json(url: string, body: string) -> !*HttpResponse {
 }
 
 // ---- URL parser (internal, http://-only) ----
-
 pub struct ParsedUrl {
     pub scheme: string,
-    pub host:   string,
-    pub port:   i32,
-    pub path:   string,
+    pub host: string,
+    pub port: i32,
+    pub path: string,
 }
 
 impl ParsedUrl {
@@ -495,7 +483,7 @@ impl ParsedUrl {
     /// // For an https URL on port 443: returns just "example.com"
     /// // For "https://example.com:8443/foo": returns "example.com:8443"
     /// ```
-    pub fn host_header(self: *ParsedUrl) -> string {
+    pub fn host_header(self) -> string {
         let mut default_port: i32 = 80;
         if self.scheme.eq("https") { default_port = 443; }
         if self.port == default_port { return self.host; }
@@ -564,12 +552,24 @@ fn _hcli_read_headers(tcp: *TcpStream) -> !string {
     let bb: *ByteBuffer = ByteBuffer::new();
     while true {
         let r: !string = tcp.read_str(1024);
-        if !r.is_ok() { bb.free(); return err(r.unwrap_err()); }
-        if r.unwrap().len() == 0 { bb.free(); return err("http_client: proxy closed before CONNECT reply"); }
+        if !r.is_ok() {
+            bb.free();
+            return err(r.unwrap_err());
+        }
+        if r.unwrap().len() == 0 {
+            bb.free();
+            return err("http_client: proxy closed before CONNECT reply");
+        }
         bb.push_str(r.unwrap());
         let acc: string = bb.to_string();
-        if acc.index_of("\r\n\r\n") >= 0 { bb.free(); return ok(acc); }
-        if acc.len() > 65536 { bb.free(); return err("http_client: proxy CONNECT header too large"); }
+        if acc.index_of("\r\n\r\n") >= 0 {
+            bb.free();
+            return ok(acc);
+        }
+        if acc.len() > 65536 {
+            bb.free();
+            return err("http_client: proxy CONNECT header too large");
+        }
     }
     bb.free();
     return err("http_client: proxy CONNECT read failed");
@@ -577,26 +577,37 @@ fn _hcli_read_headers(tcp: *TcpStream) -> !string {
 
 // Open a CONNECT tunnel through `proxy` to `host:port`, then run the TLS
 // handshake to the origin over it. `cfg` is consumed by the attach.
-fn _hcli_tls_via_proxy(proxy: string, host: string, port: i32,
-                       cfg: *TlsConfig, timeout_ms: i32) -> !*TlsStream {
+fn _hcli_tls_via_proxy(proxy: string, host: string, port: i32, cfg: *TlsConfig, timeout_ms: i32) -> !*TlsStream {
     let pa: *ParsedUrl = _hcli_hostport(proxy, 8080);
     let ts: !*TcpStream = TcpStream::connect_host(pa.host, pa.port);
     free(pa as *void);
-    if !ts.is_ok() { cfg.free(); return err(ts.unwrap_err()); }
+    if !ts.is_ok() {
+        cfg.free();
+        return err(ts.unwrap_err());
+    }
     let tcp: *TcpStream = ts.unwrap();
     if timeout_ms > 0 { tcp.set_timeout_ms(timeout_ms); }
     let auth: string = host.concat(":").concat(_hcli_itos(port));
     let creq: string = "CONNECT ".concat(auth).concat(" HTTP/1.1\r\nHost: ").concat(auth).concat("\r\n\r\n");
     let w: !i32 = tcp.write_all(creq);
-    if !w.is_ok() { tcp.close(); cfg.free(); return err(w.unwrap_err()); }
+    if !w.is_ok() {
+        tcp.close();
+        cfg.free();
+        return err(w.unwrap_err());
+    }
     let hdr: !string = _hcli_read_headers(tcp);
-    if !hdr.is_ok() { tcp.close(); cfg.free(); return err(hdr.unwrap_err()); }
+    if !hdr.is_ok() {
+        tcp.close();
+        cfg.free();
+        return err(hdr.unwrap_err());
+    }
     // The CONNECT status line is "HTTP/1.1 200 ...". Accept any 2xx.
     let line_end: i32 = hdr.unwrap().index_of("\r\n");
     let mut status_line: string = hdr.unwrap();
     if line_end >= 0 { status_line = hdr.unwrap().substring(0, line_end); }
     if status_line.index_of(" 2") < 0 {
-        tcp.close(); cfg.free();
+        tcp.close();
+        cfg.free();
         return err("http_client: proxy CONNECT rejected: ".concat(status_line));
     }
     // Hand the tunneled fd to TLS (attach consumes cfg's verify/alpn).
@@ -609,14 +620,12 @@ fn _hcli_parse_url(s: string) -> !*ParsedUrl {
     if scheme_end < 0 { return err("url: missing scheme"); }
     let scheme: string = s.substring(0, scheme_end);
     let rest: string = s.substring(scheme_end + 3, s.len());
-
     // Find the first slash that ends authority.
     let mut slash: i32 = rest.index_of("/");
     if slash < 0 { slash = rest.len(); }
     let authority: string = rest.substring(0, slash);
     let mut path: string = rest.substring(slash, rest.len());
     if path.eq("") { path = "/"; }
-
     // host:port split (only the last `:` — IPv6 literals would need
     // bracket-aware parsing; a v6 host is wrapped in `[...]` per RFC 3986).
     let mut host: string = authority;
@@ -643,7 +652,6 @@ fn _hcli_parse_url(s: string) -> !*ParsedUrl {
             port = pr.unwrap();
         }
     }
-
     let u: *ParsedUrl = malloc(sizeof(ParsedUrl)) as *ParsedUrl;
     u.scheme = scheme;
     u.host = host;
@@ -661,13 +669,11 @@ fn _hcli_last_colon(s: string) -> i32 {
 }
 
 // ---- response parser ----
-
 fn _hcli_parse_response(raw: string) -> !*HttpResponse {
     let head_end: i32 = raw.index_of("\r\n\r\n");
     if head_end < 0 { return err("http_client: malformed response (no header terminator)"); }
     let head: string = raw.substring(0, head_end);
     let mut body: string = raw.substring(head_end + 4, raw.len());
-
     let lines: *Vector<string> = head.split("\r\n");
     if lines.len() == 0 { return err("http_client: empty header"); }
     let status_line: string = lines.get(0);
@@ -680,14 +686,12 @@ fn _hcli_parse_response(raw: string) -> !*HttpResponse {
     if p2 >= 0 { code_s = after.substring(0, p2); }
     let cr: !i32 = code_s.try_parse_int();
     if !cr.is_ok() { return err("http_client: bad status code"); }
-
     // Headers block: every line after the status line, joined with \r\n.
     let mut hdr: string = "";
     for let i: i32 = 1; i < lines.len(); i++ {
         if hdr.len() > 0 { hdr = hdr.concat("\r\n"); }
         hdr = hdr.concat(lines.get(i));
     }
-
     // Decode the body per its framing. The client always sends
     // `Connection: close`, so `body` is everything up to EOF — but a
     // chunked response still needs de-chunking, and a Content-Length one
@@ -707,7 +711,6 @@ fn _hcli_parse_response(raw: string) -> !*HttpResponse {
             }
         }
     }
-
     let r: *HttpResponse = malloc(sizeof(HttpResponse)) as *HttpResponse;
     r.status = cr.unwrap();
     r.headers_block = hdr;
@@ -722,9 +725,7 @@ fn _hcli_find_header(block_lower: string, name_lower: string) -> string {
     let pfx: string = name_lower.concat(":");
     for let i: i32 = 0; i < lines.len(); i++ {
         let l: string = lines.get(i);
-        if l.starts_with(pfx) {
-            return l.substring(pfx.len(), l.len()).trim();
-        }
+        if l.starts_with(pfx) { return l.substring(pfx.len(), l.len()).trim(); }
     }
     return "";
 }
@@ -747,9 +748,11 @@ fn _hcli_parse_hex(s: string) -> !i32 {
     for let i: i32 = 0; i < s.len(); i++ {
         let c: i32 = s.at(i).to_int();
         let mut d: i32 = 0 - 1;
-        if c >= 48 && c <= 57 { d = c - 48; }
-        else { if c >= 97 && c <= 102 { d = c - 87; }
-        else { if c >= 65 && c <= 70 { d = c - 55; } } }
+        if c >= 48 && c <= 57 {
+            d = c - 48;
+        } else if c >= 97 && c <= 102 {
+            d = c - 87;
+        } else if c >= 65 && c <= 70 { d = c - 55; }
         if d < 0 { return err("http_client: bad hex in chunk size"); }
         v = v * 16 + d;
     }
@@ -766,12 +769,18 @@ fn _hcli_dechunk(body: string) -> !string {
     let mut pos: i32 = 0;
     while pos < n {
         let le: i32 = _hcli_find_crlf(body, pos);
-        if le < 0 { bb.free(); return err("http_client: malformed chunk header"); }
+        if le < 0 {
+            bb.free();
+            return err("http_client: malformed chunk header");
+        }
         let mut size_line: string = body.substring(pos, le);
         let semi: i32 = size_line.index_of(";");
         if semi >= 0 { size_line = size_line.substring(0, semi); }
         let sz: !i32 = _hcli_parse_hex(size_line.trim());
-        if !sz.is_ok() { bb.free(); return err(sz.unwrap_err()); }
+        if !sz.is_ok() {
+            bb.free();
+            return err(sz.unwrap_err());
+        }
         let size: i32 = sz.unwrap();
         let data_start: i32 = le + 2;
         if size == 0 {
@@ -779,9 +788,12 @@ fn _hcli_dechunk(body: string) -> !string {
             bb.free();
             return ok(out);
         }
-        if data_start + size > n { bb.free(); return err("http_client: truncated chunk body"); }
+        if data_start + size > n {
+            bb.free();
+            return err("http_client: truncated chunk body");
+        }
         bb.push_str(body.substring(data_start, data_start + size));
-        pos = data_start + size + 2;   // skip the chunk's trailing CRLF
+        pos = data_start + size + 2; // skip the chunk's trailing CRLF
     }
     let out: string = bb.to_string();
     bb.free();
@@ -789,8 +801,7 @@ fn _hcli_dechunk(body: string) -> !string {
 }
 
 fn _hcli_is_redirect(status: i32) -> bool {
-    return status == 301 || status == 302 || status == 303
-        || status == 307 || status == 308;
+    return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
 }
 
 /// Resolve `loc` against `base`. Handles three cases:
@@ -799,31 +810,21 @@ fn _hcli_is_redirect(status: i32) -> bool {
 ///   * path-absolute (`/path`) — keep base scheme + host, replace path
 ///   * path-relative (`path`)  — anchor on base's path directory
 fn _hcli_resolve_url(base: string, loc: string) -> !string {
-    if loc.starts_with("http://") || loc.starts_with("https://") {
-        return ok(loc);
-    }
+    if loc.starts_with("http://") || loc.starts_with("https://") { return ok(loc); }
     let base_url: !*ParsedUrl = _hcli_parse_url(base);
     if !base_url.is_ok() { return err(base_url.unwrap_err()); }
     let bu: *ParsedUrl = base_url.unwrap();
     defer free(bu as *void);
-    if loc.starts_with("//") {
-        return ok(bu.scheme.concat(":").concat(loc));
-    }
+    if loc.starts_with("//") { return ok(bu.scheme.concat(":").concat(loc)); }
     let mut auth: string = bu.host;
     let mut def: i32 = 80;
     if bu.scheme.eq("https") { def = 443; }
-    if bu.port != def {
-        auth = auth.concat(":").concat(_hcli_itos(bu.port));
-    }
-    if loc.starts_with("/") {
-        return ok(bu.scheme.concat("://").concat(auth).concat(loc));
-    }
+    if bu.port != def { auth = auth.concat(":").concat(_hcli_itos(bu.port)); }
+    if loc.starts_with("/") { return ok(bu.scheme.concat("://").concat(auth).concat(loc)); }
     // Path-relative: drop the basename of bu.path and append loc.
     let mut dir: string = "/";
     let last_slash: i32 = _last_index_of(bu.path, "/");
-    if last_slash >= 0 {
-        dir = bu.path.substring(0, last_slash + 1);
-    }
+    if last_slash >= 0 { dir = bu.path.substring(0, last_slash + 1); }
     return ok(bu.scheme.concat("://").concat(auth).concat(dir).concat(loc));
 }
 
@@ -836,7 +837,10 @@ fn _last_index_of(s: string, needle: string) -> i32 {
         let mut k: i32 = 0;
         let mut hit: bool = true;
         while k < m {
-            if s.at(i + k).to_int() != needle.at(k).to_int() { hit = false; break; }
+            if s.at(i + k).to_int() != needle.at(k).to_int() {
+                hit = false;
+                break;
+            }
             k = k + 1;
         }
         if hit { return i; }
@@ -866,7 +870,10 @@ fn _hcli_itos(n: i32) -> string {
     if n == 0 { return "0"; }
     let mut x: i32 = n;
     let mut neg: bool = false;
-    if x < 0 { neg = true; x = 0 - x; }
+    if x < 0 {
+        neg = true;
+        x = 0 - x;
+    }
     let mut s: string = "";
     while x > 0 {
         let d: i32 = x % 10;

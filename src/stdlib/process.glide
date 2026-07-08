@@ -20,7 +20,6 @@
 // Streaming Child handles (live stdin/stdout/stderr read/write while the
 // process runs) are NOT in v1. Spawn returns a `Child` with pid + wait + kill
 // only. To pipe data live between processes, that's v2.
-
 import stdlib::os::*;
 
 // Wrap a raw, headerless C string (e.g. one written back through a `*string`
@@ -29,42 +28,24 @@ import stdlib::os::*;
 // don't read a bogus SDS header.
 extern fn __glide_string_adopt(s: string) -> string;
 
-extern fn __glide_proc_run(
-    prog: string,
-    args_packed: string, args_n: i32,
-    env_packed: string, env_n: i32,
-    cwd: string,
-    stdin_data: string, stdin_len: i32,
-    capture_flags: i32,
-    exit_out: *i32, signaled_out: *i32, signal_out: *i32,
-    stdout_out: *string, stderr_out: *string
-) -> i32;
+extern fn __glide_proc_run(prog: string, args_packed: string, args_n: i32, env_packed: string, env_n: i32, cwd: string, stdin_data: string, stdin_len: i32, capture_flags: i32, exit_out: *i32, signaled_out: *i32, signal_out: *i32, stdout_out: *string, stderr_out: *string) -> i32;
 
-extern fn __glide_proc_spawn(
-    prog: string,
-    args_packed: string, args_n: i32,
-    env_packed: string, env_n: i32,
-    cwd: string,
-    env_clear: i32
-) -> i32;
+extern fn __glide_proc_spawn(prog: string, args_packed: string, args_n: i32, env_packed: string, env_n: i32, cwd: string, env_clear: i32) -> i32;
 
-extern fn __glide_proc_spawn_pipes(
-    prog: string,
-    args_packed: string, args_n: i32,
-    env_packed: string, env_n: i32,
-    cwd: string,
-    env_clear: i32,
-    pipe_flags: i32,
-    out_stdin: *i64, out_stdout: *i64, out_stderr: *i64
-) -> i32;
+extern fn __glide_proc_spawn_pipes(prog: string, args_packed: string, args_n: i32, env_packed: string, env_n: i32, cwd: string, env_clear: i32, pipe_flags: i32, out_stdin: *i64, out_stdout: *i64, out_stderr: *i64) -> i32;
 
 extern fn __glide_pipe_write(handle: i64, data: string, len: i32) -> i32;
+
 extern fn __glide_pipe_read(handle: i64, max: i32, out: *string) -> i32;
+
 extern fn __glide_pipe_read_all(handle: i64, out: *string) -> i32;
+
 extern fn __glide_pipe_close(handle: i64) -> i32;
 
 extern fn __glide_proc_wait(pid: i32, exit_out: *i32, signaled_out: *i32, signal_out: *i32) -> i32;
+
 extern fn __glide_proc_kill(pid: i32, sig: i32) -> i32;
+
 extern fn __glide_proc_exists(pid: i32) -> i32;
 
 c_raw! {
@@ -912,11 +893,11 @@ c_raw! {
 
 /// Result of a finished subprocess run.
 pub struct ProcessResult {
-    pub exit_code: i32,        // 0 = success
-    pub stdout: string,        // empty if not captured
-    pub stderr: string,        // empty if not captured
-    pub signaled: bool,        // true if child died from a signal (POSIX)
-    pub signal: i32,           // signal number; 0 if !signaled
+    pub exit_code: i32, // 0 = success
+    pub stdout: string, // empty if not captured
+    pub stderr: string, // empty if not captured
+    pub signaled: bool, // true if child died from a signal (POSIX)
+    pub signal: i32, // signal number; 0 if !signaled
 }
 
 /// Builder for a subprocess command. Chain methods to configure, then call
@@ -924,30 +905,34 @@ pub struct ProcessResult {
 pub struct Command {
     pub program: string,
     pub args: *Vector<string>,
-    pub env_kv: *Vector<string>,        // entries are "KEY=VAL" strings
+    pub env_kv: *Vector<string>, // entries are "KEY=VAL" strings
     pub cwd_path: string,
     pub stdin_payload: string,
-    pub flags: i32,                     // bit 0 = capture stdout, bit 1 = capture stderr,
-                                        // bit 2 = env_clear (don't inherit parent env),
-                                        // bit 3 = pipe stdin, bit 4 = pipe stdout, bit 5 = pipe stderr
+    pub flags: i32, // bit 0 = capture stdout, bit 1 = capture stderr,
 }
 
 /// Handle to the child's stdin pipe (when `Command::pipe_stdin()` was used).
-pub struct ChildStdin  { pub handle: i64 }
+pub struct ChildStdin {
+    pub handle: i64,
+}
 
 /// Handle to the child's stdout pipe (when `Command::pipe_stdout()` was used).
-pub struct ChildStdout { pub handle: i64 }
+pub struct ChildStdout {
+    pub handle: i64,
+}
 
 /// Handle to the child's stderr pipe (when `Command::pipe_stderr()` was used).
-pub struct ChildStderr { pub handle: i64 }
+pub struct ChildStderr {
+    pub handle: i64,
+}
 
 /// Handle to a spawned (still-running) child process. The pipe handles are
 /// non-null only when the corresponding `Command::pipe_*` builder was called.
 pub struct Child {
     pub pid: i32,
-    pub stdin:  *ChildStdin,    // null unless pipe_stdin()
-    pub stdout: *ChildStdout,   // null unless pipe_stdout()
-    pub stderr: *ChildStderr,   // null unless pipe_stderr()
+    pub stdin: *ChildStdin, // null unless pipe_stdin()
+    pub stdout: *ChildStdout, // null unless pipe_stdout()
+    pub stderr: *ChildStderr, // null unless pipe_stderr()
 }
 
 impl ChildStdin {
@@ -958,18 +943,19 @@ impl ChildStdin {
     /// child.stdin.write("input line\n");
     /// child.stdin.close();   // signal EOF
     /// ```
-    pub fn write(self: *ChildStdin, s: string) -> !i32 {
+    pub fn write(self, s: string) -> !i32 {
         let n: i32 = __glide_pipe_write(self.handle, s, s.len());
         if n < 0 { return err("write to child stdin failed"); }
         return ok(n);
     }
+
     /// Close the stdin pipe, signaling EOF to the child. Idempotent.
     ///
     /// ```glide
     /// child.stdin.write("data");
     /// child.stdin.close();
     /// ```
-    pub fn close(self: *ChildStdin) -> ! {
+    pub fn close(self) -> ! {
         if __glide_pipe_close(self.handle) != 0 { return err("close stdin failed"); }
         self.handle = 0 - 1;
     }
@@ -982,30 +968,32 @@ impl ChildStdout {
     /// let r: !string = child.stdout.read(4096);
     /// if r.ok && r.val.len() > 0 { print!(r.val); }
     /// ```
-    pub fn read(self: *ChildStdout, n: i32) -> !string {
+    pub fn read(self, n: i32) -> !string {
         let mut out: string = "";
         let got: i32 = __glide_pipe_read(self.handle, n, &mut out);
         if got < 0 { return err("read from child stdout failed"); }
         return ok(out);
     }
+
     /// Read everything until EOF.
     ///
     /// ```glide
     /// let r: !string = child.stdout.read_all();
     /// if r.ok { println!("got", r.val.len(), "bytes"); }
     /// ```
-    pub fn read_all(self: *ChildStdout) -> !string {
+    pub fn read_all(self) -> !string {
         let mut out: string = "";
         let got: i32 = __glide_pipe_read_all(self.handle, &mut out);
         if got < 0 { return err("read_all from child stdout failed"); }
         return ok(out);
     }
+
     /// Close the stdout pipe.
     ///
     /// ```glide
     /// child.stdout.close();
     /// ```
-    pub fn close(self: *ChildStdout) -> ! {
+    pub fn close(self) -> ! {
         if __glide_pipe_close(self.handle) != 0 { return err("close stdout failed"); }
         self.handle = 0 - 1;
     }
@@ -1018,26 +1006,28 @@ impl ChildStderr {
     /// let r: !string = child.stderr.read(4096);
     /// if r.ok && r.val.len() > 0 { eprintln(r.val); }
     /// ```
-    pub fn read(self: *ChildStderr, n: i32) -> !string {
+    pub fn read(self, n: i32) -> !string {
         let mut out: string = "";
         let got: i32 = __glide_pipe_read(self.handle, n, &mut out);
         if got < 0 { return err("read from child stderr failed"); }
         return ok(out);
     }
+
     /// Read everything written to stderr until EOF.
     ///
     /// ```glide
     /// let r: !string = child.stderr.read_all();
     /// if r.ok && r.val.len() > 0 { eprintln(r.val); }
     /// ```
-    pub fn read_all(self: *ChildStderr) -> !string {
+    pub fn read_all(self) -> !string {
         let mut out: string = "";
         let got: i32 = __glide_pipe_read_all(self.handle, &mut out);
         if got < 0 { return err("read_all from child stderr failed"); }
         return ok(out);
     }
+
     /// Close the stderr pipe.
-    pub fn close(self: *ChildStderr) -> ! {
+    pub fn close(self) -> ! {
         if __glide_pipe_close(self.handle) != 0 { return err("close stderr failed"); }
         self.handle = 0 - 1;
     }
@@ -1074,7 +1064,10 @@ impl Command {
     /// ```glide
     /// Command::new("ls").arg("-la").arg("/tmp").run();
     /// ```
-    pub fn arg(self: *Command, a: string) -> *Command { self.args.push(a); return self; }
+    pub fn arg(self, a: string) -> *Command {
+        self.args.push(a);
+        return self;
+    }
 
     /// Add multiple positional arguments at once.
     ///
@@ -1083,8 +1076,10 @@ impl Command {
     /// extras.push_all!("--verbose", "input.txt");
     /// Command::new("tool").args(extras).run();
     /// ```
-    pub fn args(self: *Command, vs: *Vector<string>) -> *Command {
-        for let i: i32 = 0; i < vs.len(); i++ { self.args.push(vs.get(i)); }
+    pub fn args(self, vs: *Vector<string>) -> *Command {
+        for let i: i32 = 0; i < vs.len(); i++ {
+            self.args.push(vs.get(i));
+        }
         return self;
     }
 
@@ -1095,7 +1090,7 @@ impl Command {
     /// ```glide
     /// Command::new("python").env("PYTHONUNBUFFERED", "1").arg("script.py").run();
     /// ```
-    pub fn env(self: *Command, key: string, value: string) -> *Command {
+    pub fn env(self, key: string, value: string) -> *Command {
         self.env_kv.push(key.concat("=").concat(value));
         return self;
     }
@@ -1113,7 +1108,7 @@ impl Command {
     ///     .env("LANG", "C.UTF-8")
     ///     .run();
     /// ```
-    pub fn env_clear(self: *Command) -> *Command {
+    pub fn env_clear(self) -> *Command {
         self.flags = self.flags | 4;
         return self;
     }
@@ -1123,7 +1118,10 @@ impl Command {
     /// ```glide
     /// Command::new("git").arg("status").cwd("/tmp/repo").run();
     /// ```
-    pub fn cwd(self: *Command, path: string) -> *Command { self.cwd_path = path; return self; }
+    pub fn cwd(self, path: string) -> *Command {
+        self.cwd_path = path;
+        return self;
+    }
 
     /// Pipe `s` to the child's stdin. The pipe is closed once `s` is fully
     /// written, signaling EOF to the child.
@@ -1135,7 +1133,10 @@ impl Command {
     /// let r: !ProcessResult = cmd.run();
     /// if r.ok { println!(r.val.stdout.trim()); }   // "3"
     /// ```
-    pub fn stdin_str(self: *Command, s: string) -> *Command { self.stdin_payload = s; return self; }
+    pub fn stdin_str(self, s: string) -> *Command {
+        self.stdin_payload = s;
+        return self;
+    }
 
     /// Capture stdout into the returned `ProcessResult.stdout`.
     ///
@@ -1145,7 +1146,10 @@ impl Command {
     /// let r: !ProcessResult = cmd.run();
     /// if r.ok { println!(r.val.stdout.trim()); }
     /// ```
-    pub fn capture_out(self: *Command) -> *Command { self.flags = self.flags | 1; return self; }
+    pub fn capture_out(self) -> *Command {
+        self.flags = self.flags | 1;
+        return self;
+    }
 
     /// Capture stderr into the returned `ProcessResult.stderr`.
     ///
@@ -1155,7 +1159,10 @@ impl Command {
     /// let r: !ProcessResult = cmd.run();
     /// if r.ok && r.val.exit_code != 0 { eprintln(r.val.stderr); }
     /// ```
-    pub fn capture_err(self: *Command) -> *Command { self.flags = self.flags | 2; return self; }
+    pub fn capture_err(self) -> *Command {
+        self.flags = self.flags | 2;
+        return self;
+    }
 
     /// Capture both stdout and stderr.
     ///
@@ -1166,7 +1173,10 @@ impl Command {
     ///     eprintln(r.val.stderr);
     /// }
     /// ```
-    pub fn capture(self: *Command) -> *Command { self.flags = self.flags | 3; return self; }
+    pub fn capture(self) -> *Command {
+        self.flags = self.flags | 3;
+        return self;
+    }
 
     /// Request a live pipe for the child's stdin, returned as `Child.stdin`
     /// after `spawn()`. Use it with `child.stdin.write(s)` and `.close()`.
@@ -1183,7 +1193,10 @@ impl Command {
     ///     r.val.wait();
     /// }
     /// ```
-    pub fn pipe_stdin(self: *Command) -> *Command { self.flags = self.flags | 8; return self; }
+    pub fn pipe_stdin(self) -> *Command {
+        self.flags = self.flags | 8;
+        return self;
+    }
 
     /// Request a live pipe for the child's stdout. Read with
     /// `child.stdout.read(n)` or `.read_all()`.
@@ -1196,7 +1209,10 @@ impl Command {
     ///     r.val.wait();
     /// }
     /// ```
-    pub fn pipe_stdout(self: *Command) -> *Command { self.flags = self.flags | 16; return self; }
+    pub fn pipe_stdout(self) -> *Command {
+        self.flags = self.flags | 16;
+        return self;
+    }
 
     /// Request a live pipe for the child's stderr.
     ///
@@ -1208,7 +1224,10 @@ impl Command {
     ///     r.val.wait();
     /// }
     /// ```
-    pub fn pipe_stderr(self: *Command) -> *Command { self.flags = self.flags | 32; return self; }
+    pub fn pipe_stderr(self) -> *Command {
+        self.flags = self.flags | 32;
+        return self;
+    }
 
     /// Run the command synchronously. Blocks until the child exits.
     /// Returns `Err` only if the spawn itself failed (program not found,
@@ -1222,35 +1241,20 @@ impl Command {
     ///     println!("out:",  r.val.stdout.trim());   // "hi"
     /// }
     /// ```
-    pub fn run(self: *Command) -> !ProcessResult {
+    pub fn run(self) -> !ProcessResult {
         let args_packed: string = _proc_join(self.args);
-        let env_packed:  string = _proc_join(self.env_kv);
+        let env_packed: string = _proc_join(self.env_kv);
         let mut exit_code: i32 = 0;
-        let mut signaled:  i32 = 0;
-        let mut sig:       i32 = 0;
-        let mut out_str:   string = "";
-        let mut err_str:   string = "";
-        let rc: i32 = __glide_proc_run(
-            self.program,
-            args_packed, self.args.len(),
-            env_packed,  self.env_kv.len(),
-            self.cwd_path,
-            self.stdin_payload, self.stdin_payload.len(),
-            self.flags,
-            &mut exit_code, &mut signaled, &mut sig,
-            &mut out_str, &mut err_str
-        );
+        let mut signaled: i32 = 0;
+        let mut sig: i32 = 0;
+        let mut out_str: string = "";
+        let mut err_str: string = "";
+        let rc: i32 = __glide_proc_run(self.program, args_packed, self.args.len(), env_packed, self.env_kv.len(), self.cwd_path, self.stdin_payload, self.stdin_payload.len(), self.flags, &mut exit_code, &mut signaled, &mut sig, &mut out_str, &mut err_str);
         if rc != 0 { return err("failed to spawn process"); }
         // The captured streams come back through `*string` out-params as raw
         // malloc'd C strings (no SDS length header), so adopt them — otherwise
         // `r.stdout.trim()` / `.len()` read a garbage header and crash.
-        let r: ProcessResult = ProcessResult {
-            exit_code: exit_code,
-            stdout: __glide_string_adopt(out_str),
-            stderr: __glide_string_adopt(err_str),
-            signaled: signaled != 0,
-            signal: sig,
-        };
+        let r: ProcessResult = ProcessResult { exit_code: exit_code, stdout: __glide_string_adopt(out_str), stderr: __glide_string_adopt(err_str), signaled: signaled != 0, signal: sig };
         return ok(r);
     }
 
@@ -1268,42 +1272,23 @@ impl Command {
     ///     r.val.wait();
     /// }
     /// ```
-    pub fn spawn(self: *Command) -> !Child {
+    pub fn spawn(self) -> !Child {
         let args_packed: string = _proc_join(self.args);
-        let env_packed:  string = _proc_join(self.env_kv);
-        let env_clear:   i32 = (self.flags >> 2) & 1;
-        let pipe_flags:  i32 = (self.flags >> 3) & 7;   // bits 3..5 → 0..2
-
+        let env_packed: string = _proc_join(self.env_kv);
+        let env_clear: i32 = self.flags >> 2 & 1;
+        let pipe_flags: i32 = self.flags >> 3 & 7; // bits 3..5 → 0..2
         if pipe_flags == 0 {
-            let pid: i32 = __glide_proc_spawn(
-                self.program,
-                args_packed, self.args.len(),
-                env_packed,  self.env_kv.len(),
-                self.cwd_path,
-                env_clear
-            );
+            let pid: i32 = __glide_proc_spawn(self.program, args_packed, self.args.len(), env_packed, self.env_kv.len(), self.cwd_path, env_clear);
             if pid <= 0 { return err("failed to spawn process"); }
-            let c: Child = Child {
-                pid: pid,
-                stdin: null, stdout: null, stderr: null,
-            };
+            let c: Child = Child { pid: pid, stdin: null, stdout: null, stderr: null };
             return ok(c);
         }
-
-        let mut h_in:  i64 = 0 - 1;
+        let mut h_in: i64 = 0 - 1;
         let mut h_out: i64 = 0 - 1;
         let mut h_err: i64 = 0 - 1;
-        let pid: i32 = __glide_proc_spawn_pipes(
-            self.program,
-            args_packed, self.args.len(),
-            env_packed,  self.env_kv.len(),
-            self.cwd_path,
-            env_clear,
-            pipe_flags,
-            &mut h_in, &mut h_out, &mut h_err
-        );
+        let pid: i32 = __glide_proc_spawn_pipes(self.program, args_packed, self.args.len(), env_packed, self.env_kv.len(), self.cwd_path, env_clear, pipe_flags, &mut h_in, &mut h_out, &mut h_err);
         if pid <= 0 { return err("failed to spawn process"); }
-        let mut cs_in:  *ChildStdin  = null;
+        let mut cs_in: *ChildStdin = null;
         let mut cs_out: *ChildStdout = null;
         let mut cs_err: *ChildStderr = null;
         if (pipe_flags & 1) != 0 {
@@ -1321,10 +1306,7 @@ impl Command {
             p.handle = h_err;
             cs_err = p;
         }
-        let c: Child = Child {
-            pid: pid,
-            stdin: cs_in, stdout: cs_out, stderr: cs_err,
-        };
+        let c: Child = Child { pid: pid, stdin: cs_in, stdout: cs_out, stderr: cs_err };
         return ok(c);
     }
 
@@ -1336,7 +1318,7 @@ impl Command {
     /// defer cmd.free();
     /// cmd.arg("hi").run();
     /// ```
-    pub fn free(self: *Command) {
+    pub fn free(self) {
         if self.args != null { self.args.free(); }
         if self.env_kv != null { self.env_kv.free(); }
         free(self as *void);
@@ -1354,16 +1336,13 @@ impl Child {
     ///     if res.ok { println!("exited", res.val.exit_code); }
     /// }
     /// ```
-    pub fn wait(self: *Child) -> !ProcessResult {
+    pub fn wait(self) -> !ProcessResult {
         let mut exit_code: i32 = 0;
-        let mut signaled:  i32 = 0;
-        let mut sig:       i32 = 0;
+        let mut signaled: i32 = 0;
+        let mut sig: i32 = 0;
         let rc: i32 = __glide_proc_wait(self.pid, &mut exit_code, &mut signaled, &mut sig);
         if rc != 0 { return err("waitpid failed"); }
-        let r: ProcessResult = ProcessResult {
-            exit_code: exit_code, stdout: "", stderr: "",
-            signaled: signaled != 0, signal: sig,
-        };
+        let r: ProcessResult = ProcessResult { exit_code: exit_code, stdout: "", stderr: "", signaled: signaled != 0, signal: sig };
         return ok(r);
     }
 
@@ -1374,7 +1353,7 @@ impl Child {
     /// child.kill(15);   // SIGTERM (POSIX); ignored arg on Windows
     /// child.wait();
     /// ```
-    pub fn kill(self: *Child, sig: i32) -> ! {
+    pub fn kill(self, sig: i32) -> ! {
         if __glide_proc_kill(self.pid, sig) != 0 { return err("kill failed"); }
     }
 
@@ -1391,8 +1370,8 @@ impl Child {
     ///     r.val.wait();
     /// }
     /// ```
-    pub fn free(self: *Child) {
-        if self.stdin  != null { free(self.stdin  as *void); }
+    pub fn free(self) {
+        if self.stdin != null { free(self.stdin as *void); }
         if self.stdout != null { free(self.stdout as *void); }
         if self.stderr != null { free(self.stderr as *void); }
     }
@@ -1426,7 +1405,6 @@ pub fn process_exists(pid: i32) -> bool {
 // ============================================================================
 // Internal helpers
 // ============================================================================
-
 fn _proc_join(v: *Vector<string>) -> string {
     let mut out: string = "";
     for let i: i32 = 0; i < v.len(); i++ {

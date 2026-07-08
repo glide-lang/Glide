@@ -13,41 +13,64 @@
 //   - stdin/stdout/stderr handles        → `stdlib::io`
 //   - subprocess Command builder         → `stdlib::process` (planned)
 //   - signal handling                    → `stdlib::signal`  (planned)
-
 extern fn __glide_is_windows() -> i32;
+
 extern fn __glide_reactor_active() -> i32;
+
 extern fn __glide_has_reuseport_balance() -> i32;
 
 extern fn __glide_os_name() -> string;
+
 extern fn __glide_os_arch() -> string;
+
 extern fn __glide_path_list_sep() -> string;
+
 extern fn __glide_pid() -> i32;
 
 extern fn __glide_cwd() -> string;
+
 extern fn __glide_chdir(path: string) -> i32;
+
 extern fn __glide_exe_path() -> string;
+
 extern fn __glide_exe_dir() -> string;
+
 extern fn __glide_shell(cmd: string) -> i32;
 
 extern fn __glide_ppid() -> i32;
+
 extern fn __glide_uid() -> i32;
+
 extern fn __glide_gid() -> i32;
+
 extern fn __glide_username() -> string;
+
 extern fn __glide_hostname() -> string;
+
 extern fn __glide_kernel_version() -> string;
 
 extern fn __glide_cpu_count() -> i32;
+
 extern fn __glide_cpu_count_physical() -> i32;
+
 extern fn __glide_page_size() -> i32;
+
 extern fn __glide_memory_total() -> u64;
+
 extern fn __glide_memory_free() -> u64;
+
 extern fn __glide_uptime_secs() -> u64;
+
 extern fn __glide_loadavg_1m() -> f64;
 
 extern fn __glide_temp_dir() -> string;
+
 extern fn __glide_home_dir() -> string;
+
 extern fn __glide_config_dir() -> string;
+
 extern fn __glide_cache_dir() -> string;
+
 extern fn __glide_data_dir() -> string;
 
 extern fn __glide_is_tty(fd: i32) -> i32;
@@ -540,7 +563,9 @@ c_raw! {
 /// ```glide
 /// if os_name().eq("linux") { /* linux-only path */ }
 /// ```
-pub fn os_name() -> string { return __glide_os_name(); }
+pub fn os_name() -> string {
+    return __glide_os_name();
+}
 
 /// CPU architecture: `"x86_64"`, `"aarch64"`, `"arm"`, `"x86"`, `"riscv64"`,
 /// or `"unknown"`. Reflects the build target.
@@ -548,28 +573,36 @@ pub fn os_name() -> string { return __glide_os_name(); }
 /// ```glide
 /// println!("running on", os_arch());   // e.g. "running on x86_64"
 /// ```
-pub fn os_arch() -> string { return __glide_os_arch(); }
+pub fn os_arch() -> string {
+    return __glide_os_arch();
+}
 
 /// `true` on Windows, `false` everywhere else.
 ///
 /// ```glide
 /// if os_is_windows() { use_crlf(); } else { use_lf(); }
 /// ```
-pub fn os_is_windows() -> bool { return __glide_is_windows() != 0; }
+pub fn os_is_windows() -> bool {
+    return __glide_is_windows() != 0;
+}
 
 /// `true` on POSIX-y systems (Linux, macOS, *BSD), `false` on Windows.
 ///
 /// ```glide
 /// if os_is_posix() { send_signal(); }
 /// ```
-pub fn os_is_posix() -> bool { return __glide_is_windows() == 0; }
+pub fn os_is_posix() -> bool {
+    return __glide_is_windows() == 0;
+}
 
 /// `true` only on Linux.
 ///
 /// ```glide
 /// if os_is_linux() { read_proc_meminfo(); }
 /// ```
-pub fn os_is_linux() -> bool { return __glide_os_name().eq("linux"); }
+pub fn os_is_linux() -> bool {
+    return __glide_os_name().eq("linux");
+}
 
 /// `true` when the async I/O reactor (epoll on Linux, kqueue on
 /// macOS/BSD) is wired and parking coroutines on socket readiness.
@@ -584,7 +617,9 @@ pub fn os_is_linux() -> bool { return __glide_os_name().eq("linux"); }
 /// if os_has_async_io() { spawn handle(c); }
 /// else                 { handle(c); }
 /// ```
-pub fn os_has_async_io() -> bool { return __glide_reactor_active() != 0; }
+pub fn os_has_async_io() -> bool {
+    return __glide_reactor_active() != 0;
+}
 
 /// `true` when `SO_REUSEPORT` on this OS actually load-balances accepts
 /// across multiple listeners bound to the same port (Linux only today).
@@ -609,7 +644,9 @@ pub fn os_has_reuseport_balance() -> bool {
 /// ```glide
 /// if os_is_macos() { open_url_via("open"); }
 /// ```
-pub fn os_is_macos() -> bool { return __glide_os_name().eq("macos"); }
+pub fn os_is_macos() -> bool {
+    return __glide_os_name().eq("macos");
+}
 
 /// Path component separator: `\\` on Windows, `/` elsewhere.
 ///
@@ -638,7 +675,9 @@ pub fn os_line_sep() -> string {
 /// let path: string = env_get("PATH");
 /// let dirs: *Vector<string> = path.split(os_path_list_sep());
 /// ```
-pub fn os_path_list_sep() -> string { return __glide_path_list_sep(); }
+pub fn os_path_list_sep() -> string {
+    return __glide_path_list_sep();
+}
 
 // ============================================================================
 // B. Process identity
@@ -649,7 +688,9 @@ pub fn os_path_list_sep() -> string { return __glide_path_list_sep(); }
 /// ```glide
 /// println!("pid:", os_pid());
 /// ```
-pub fn os_pid() -> i32 { return __glide_pid(); }
+pub fn os_pid() -> i32 {
+    return __glide_pid();
+}
 
 /// Parent process ID. POSIX returns `getppid()`; on Windows, returns
 /// `Err("ppid not available")` because the API doesn't expose it cheaply.
@@ -956,7 +997,9 @@ pub fn os_data_dir() -> !string {
 /// if os_is_tty(1) { println!("\x1b[32mok\x1b[0m"); }
 /// else            { println!("ok"); }
 /// ```
-pub fn os_is_tty(fd: i32) -> bool { return __glide_is_tty(fd) != 0; }
+pub fn os_is_tty(fd: i32) -> bool {
+    return __glide_is_tty(fd) != 0;
+}
 
 // ============================================================================
 // G. Subprocess quick — one-liner shell escape

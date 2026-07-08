@@ -13,13 +13,12 @@
 // let c: !*Cert = cert_parse(der_bytes);
 // if c.is_ok() { println!(c.unwrap().subject_cn); }
 // ```
-
 import stdlib::crypto::asn1::*;
 import stdlib::crypto::p256::*;
 import stdlib::crypto::p384::*;
-import stdlib::crypto::*;              // sha256
-import stdlib::crypto::sha512::*;      // sha384, sha512
-import stdlib::crypto::rsa::*;         // rsa_pkcs1_verify + DigestInfo prefixes
+import stdlib::crypto::*; // sha256
+import stdlib::crypto::sha512::*; // sha384, sha512
+import stdlib::crypto::rsa::*; // rsa_pkcs1_verify + DigestInfo prefixes
 import stdlib::crypto::pem::*;
 import stdlib::fs::*;
 import stdlib::env::*;
@@ -40,22 +39,24 @@ const OID_BASIC_CONSTRAINTS: string = "2.5.29.19";
 const OID_CN: string = "2.5.4.3";
 
 pub struct Cert {
-    pub tbs_der: string,          // raw TBSCertificate (signature input)
-    pub sig_alg: string,          // signature algorithm OID
-    pub signature: string,        // signature bytes (BIT STRING, unused-bits byte removed)
-    pub pubkey_alg: string,       // SPKI algorithm OID (ecPublicKey / rsaEncryption)
-    pub pubkey_curve: string,     // EC curve OID, or ""
-    pub pubkey: string,           // EC point (0x04||X||Y) or RSA public-key DER
-    pub not_before: i64,          // epoch seconds
+    pub tbs_der: string, // raw TBSCertificate (signature input)
+    pub sig_alg: string, // signature algorithm OID
+    pub signature: string, // signature bytes (BIT STRING, unused-bits byte removed)
+    pub pubkey_alg: string, // SPKI algorithm OID (ecPublicKey / rsaEncryption)
+    pub pubkey_curve: string, // EC curve OID, or ""
+    pub pubkey: string, // EC point (0x04||X||Y) or RSA public-key DER
+    pub not_before: i64, // epoch seconds
     pub not_after: i64,
-    pub subject_der: string,      // raw Name (for issuer==subject chain match)
+    pub subject_der: string, // raw Name (for issuer==subject chain match)
     pub issuer_der: string,
-    pub subject_cn: string,       // subject commonName (convenience)
+    pub subject_cn: string, // subject commonName (convenience)
     pub san_dns: *Vector<string>, // subjectAltName dNSName entries
-    pub is_ca: bool,              // basicConstraints cA
+    pub is_ca: bool, // basicConstraints cA
 }
 
-fn _b(s: string, i: i32) -> i32 { return s.at(i).to_int() & 255; }
+fn _b(s: string, i: i32) -> i32 {
+    return s.at(i).to_int() & 255;
+}
 
 // Parse UTCTime / GeneralizedTime into epoch seconds. UTC uses a 2-digit
 // year (>=50 => 19xx, else 20xx); Generalized uses 4 digits. Both end in Z.
@@ -77,19 +78,21 @@ fn _x509_parse_time(tag: i32, s: string) -> !i64 {
     let hh: i32 = _x509_num2(s, p + 4);
     let mm: i32 = _x509_num2(s, p + 6);
     let ss: i32 = _x509_num2(s, p + 8);
-    return ok(_x509_days_civil(year, mon, day) * 86400 + (hh as i64) * 3600 + (mm as i64) * 60 + (ss as i64));
+    return ok(_x509_days_civil(year, mon, day) * 86400 + hh as i64 * 3600 + mm as i64 * 60 + ss as i64);
 }
+
 fn _x509_num2(s: string, i: i32) -> i32 {
     return (_b(s, i) - 48) * 10 + (_b(s, i + 1) - 48);
 }
+
 // Days since 1970-01-01 (Howard Hinnant's civil algorithm).
 fn _x509_days_civil(y0: i32, m: i32, d: i32) -> i64 {
     let mut y: i64 = y0 as i64;
     if m <= 2 { y = y - 1; }
-    let era: i64 = (if y >= 0 { y } else { y - 399 }) / 400;
+    let era: i64 = if y >= 0 { y } else { y - 399 } / 400;
     let yoe: i64 = y - era * 400;
     let mp: i64 = ((m + 9) % 12) as i64;
-    let doy: i64 = (153 * mp + 2) / 5 + (d as i64) - 1;
+    let doy: i64 = (153 * mp + 2) / 5 + d as i64 - 1;
     let doe: i64 = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     return era * 146097 + doe - 719468;
 }
@@ -105,15 +108,15 @@ fn _bitstring_bytes(t: *Tlv) -> string {
 // Walk a Name (SEQUENCE OF RDN) for the commonName attribute value.
 fn _name_cn(name_der: string) -> string {
     let outer: *Der = der_new(name_der);
-    let seq: !*Tlv = der_read(outer);       // the Name SEQUENCE itself
+    let seq: !*Tlv = der_read(outer); // the Name SEQUENCE itself
     if !seq.is_ok() { return ""; }
     let d: *Der = der_into(seq.unwrap());
     while der_more(d) {
-        let rdn: !*Tlv = der_read(d);           // SET
+        let rdn: !*Tlv = der_read(d); // SET
         if !rdn.is_ok() { return ""; }
         let sd: *Der = der_into(rdn.unwrap());
         while der_more(sd) {
-            let atv: !*Tlv = der_read(sd);       // SEQUENCE { OID, value }
+            let atv: !*Tlv = der_read(sd); // SEQUENCE { OID, value }
             if !atv.is_ok() { return ""; }
             let ad: *Der = der_into(atv.unwrap());
             let oid: !*Tlv = der_read(ad);
@@ -139,9 +142,7 @@ fn _parse_san(ext_value: string, out: *Vector<string>) {
         let gn: !*Tlv = der_read(gd);
         if !gn.is_ok() { return; }
         // context tag [2] primitive = 0x82
-        if gn.unwrap().tag == 0x82 {
-            out.push(der_content(gn.unwrap()));
-        }
+        if gn.unwrap().tag == 0x82 { out.push(der_content(gn.unwrap())); }
     }
 }
 
@@ -165,14 +166,12 @@ pub fn cert_parse(der: string) -> !*Cert {
     let certtlv: !*Tlv = der_expect(top, ASN1_SEQUENCE);
     if !certtlv.is_ok() { return err(certtlv.unwrap_err()); }
     let cd: *Der = der_into(certtlv.unwrap());
-
     // tbsCertificate — capture its full DER (header + content).
     let tbs_start: i32 = cd.pos;
     let tbs: !*Tlv = der_expect(cd, ASN1_SEQUENCE);
     if !tbs.is_ok() { return err(tbs.unwrap_err()); }
     let tbs_der: string = der.substring(tbs_start, tbs.unwrap().next);
     let td: *Der = der_into(tbs.unwrap());
-
     // [0] version (optional) then serialNumber.
     if der_more(td) {
         let peek_pos: i32 = td.pos;
@@ -181,24 +180,21 @@ pub fn cert_parse(der: string) -> !*Cert {
         if e.unwrap().tag != 0xa0 {
             // was actually the serialNumber; rewind by re-seating the cursor.
             td.pos = peek_pos;
-            let _sn: !*Tlv = der_read(td);        // serialNumber
+            let _sn: !*Tlv = der_read(td); // serialNumber
             if !_sn.is_ok() { return err(_sn.unwrap_err()); }
         } else {
-            let _sn: !*Tlv = der_read(td);        // serialNumber after version
+            let _sn: !*Tlv = der_read(td); // serialNumber after version
             if !_sn.is_ok() { return err(_sn.unwrap_err()); }
         }
     }
-
     // signature AlgorithmIdentifier (inside tbs) — skip, we use the outer one.
     let _sigalg_tbs: !*Tlv = der_expect(td, ASN1_SEQUENCE);
     if !_sigalg_tbs.is_ok() { return err(_sigalg_tbs.unwrap_err()); }
-
     // issuer Name.
     let issuer_start: i32 = td.pos;
     let issuer: !*Tlv = der_expect(td, ASN1_SEQUENCE);
     if !issuer.is_ok() { return err(issuer.unwrap_err()); }
     let issuer_der: string = der.substring(issuer_start, issuer.unwrap().next);
-
     // validity SEQUENCE { notBefore, notAfter }.
     let validity: !*Tlv = der_expect(td, ASN1_SEQUENCE);
     if !validity.is_ok() { return err(validity.unwrap_err()); }
@@ -209,13 +205,11 @@ pub fn cert_parse(der: string) -> !*Cert {
     let nbt: !i64 = _x509_parse_time(nb.unwrap().tag, der_content(nb.unwrap()));
     let nat: !i64 = _x509_parse_time(na.unwrap().tag, der_content(na.unwrap()));
     if !nbt.is_ok() || !nat.is_ok() { return err("x509: bad time"); }
-
     // subject Name.
     let subject_start: i32 = td.pos;
     let subject: !*Tlv = der_expect(td, ASN1_SEQUENCE);
     if !subject.is_ok() { return err(subject.unwrap_err()); }
     let subject_der: string = der.substring(subject_start, subject.unwrap().next);
-
     // subjectPublicKeyInfo SEQUENCE { AlgorithmIdentifier, BIT STRING }.
     let spki: !*Tlv = der_expect(td, ASN1_SEQUENCE);
     if !spki.is_ok() { return err(spki.unwrap_err()); }
@@ -238,7 +232,6 @@ pub fn cert_parse(der: string) -> !*Cert {
     let keybits: !*Tlv = der_expect(spd, ASN1_BITSTRING);
     if !keybits.is_ok() { return err(keybits.unwrap_err()); }
     let pubkey: string = _bitstring_bytes(keybits.unwrap());
-
     // extensions [3] EXPLICIT (optional).
     let sans: *Vector<string> = Vector::new();
     let mut is_ca: bool = false;
@@ -251,7 +244,7 @@ pub fn cert_parse(der: string) -> !*Cert {
             if !extseq.is_ok() { break; }
             let esd: *Der = der_into(extseq.unwrap());
             while der_more(esd) {
-                let one: !*Tlv = der_read(esd);      // Extension SEQUENCE
+                let one: !*Tlv = der_read(esd); // Extension SEQUENCE
                 if !one.is_ok() { break; }
                 let od: *Der = der_into(one.unwrap());
                 let eoid: !*Tlv = der_read(od);
@@ -259,18 +252,17 @@ pub fn cert_parse(der: string) -> !*Cert {
                 let eo: !string = der_oid_string(der_content(eoid.unwrap()));
                 // optional critical BOOLEAN, then value OCTET STRING
                 let mut vtlv: !*Tlv = der_read(od);
-                if vtlv.is_ok() && vtlv.unwrap().tag == ASN1_BOOLEAN {
-                    vtlv = der_read(od);
-                }
+                if vtlv.is_ok() && vtlv.unwrap().tag == ASN1_BOOLEAN { vtlv = der_read(od); }
                 if eo.is_ok() && vtlv.is_ok() && vtlv.unwrap().tag == ASN1_OCTETSTRING {
                     let inner: string = der_content(vtlv.unwrap());
                     if eo.unwrap().eq(OID_SAN) { _parse_san(inner, sans); }
-                    if eo.unwrap().eq(OID_BASIC_CONSTRAINTS) { is_ca = _parse_basic_constraints(inner); }
+                    if eo.unwrap().eq(OID_BASIC_CONSTRAINTS) {
+                        is_ca = _parse_basic_constraints(inner);
+                    }
                 }
             }
         }
     }
-
     // signatureAlgorithm (outer) + signatureValue.
     let sigalg: !*Tlv = der_expect(cd, ASN1_SEQUENCE);
     if !sigalg.is_ok() { return err(sigalg.unwrap_err()); }
@@ -281,7 +273,6 @@ pub fn cert_parse(der: string) -> !*Cert {
     if !sig_alg.is_ok() { return err(sig_alg.unwrap_err()); }
     let sigval: !*Tlv = der_expect(cd, ASN1_BITSTRING);
     if !sigval.is_ok() { return err(sigval.unwrap_err()); }
-
     let c: *Cert = malloc(sizeof(Cert)) as *Cert;
     c.tbs_der = tbs_der;
     c.sig_alg = sig_alg.unwrap();
@@ -308,7 +299,9 @@ fn _padn(mag: string, n: i32) -> string {
     if m == n { return mag; }
     if m > n { return mag.substring(m - n, m); }
     let bb: *ByteBuffer = ByteBuffer::new();
-    for let i: i32 = 0; i < n - m; i++ { bb.push(0 as u8); }
+    for let i: i32 = 0; i < n - m; i++ {
+        bb.push(0 as u8);
+    }
     bb.push_str(mag);
     let s: string = bb.to_string();
     bb.free();
@@ -380,9 +373,9 @@ fn _dns_match(pattern: string, host: string) -> bool {
     let h: string = host.to_lower();
     if p.len() == 0 { return false; }
     if p.starts_with("*.") {
-        let suffix: string = p.substring(1, p.len());   // ".example.com"
+        let suffix: string = p.substring(1, p.len()); // ".example.com"
         let dot: i32 = h.index_of(".");
-        if dot <= 0 { return false; }                   // need a non-empty first label
+        if dot <= 0 { return false; } // need a non-empty first label
         let rest: string = h.substring(dot, h.len());
         // the wildcard must not match a name with its own dots in the first label
         return rest.eq(suffix);
@@ -425,8 +418,7 @@ fn _find_issuer(cert: *Cert, candidates: *Vector<*Cert>) -> *Cert {
 /// at `now` (epoch seconds), that non-leaf certificates are CAs, and that
 /// `leaf` is authorized for `hostname`. Returns ok(true) on success, or an
 /// err naming the first failure (fail-closed).
-pub fn verify_chain(leaf: *Cert, intermediates: *Vector<*Cert>,
-                    roots: *Vector<*Cert>, hostname: string, now: i64) -> !bool {
+pub fn verify_chain(leaf: *Cert, intermediates: *Vector<*Cert>, roots: *Vector<*Cert>, hostname: string, now: i64) -> !bool {
     if !cert_matches_hostname(leaf, hostname) {
         return err("x509: hostname does not match certificate");
     }
@@ -447,9 +439,7 @@ pub fn verify_chain(leaf: *Cert, intermediates: *Vector<*Cert>,
         }
         // Otherwise step up through the supplied intermediates.
         let issuer: *Cert = _find_issuer(current, intermediates);
-        if issuer == null {
-            return err("x509: unable to build chain to a trusted root");
-        }
+        if issuer == null { return err("x509: unable to build chain to a trusted root"); }
         if !issuer.is_ca { return err("x509: intermediate is not a CA"); }
         let v: !bool = cert_verify_signature(current, issuer.pubkey);
         if !v.is_ok() { return err(v.unwrap_err()); }
@@ -464,10 +454,10 @@ pub fn verify_chain(leaf: *Cert, intermediates: *Vector<*Cert>,
 // Common system CA bundle locations, most-specific first.
 fn _ca_bundle_paths() -> *Vector<string> {
     let v: *Vector<string> = Vector::new();
-    v.push("/etc/ssl/certs/ca-certificates.crt");   // Debian/Ubuntu/Alpine
-    v.push("/etc/pki/tls/certs/ca-bundle.crt");      // Fedora/RHEL
-    v.push("/etc/ssl/cert.pem");                      // macOS (LibreSSL), BSD
-    v.push("/usr/local/etc/openssl/cert.pem");        // Homebrew
+    v.push("/etc/ssl/certs/ca-certificates.crt"); // Debian/Ubuntu/Alpine
+    v.push("/etc/pki/tls/certs/ca-bundle.crt"); // Fedora/RHEL
+    v.push("/etc/ssl/cert.pem"); // macOS (LibreSSL), BSD
+    v.push("/usr/local/etc/openssl/cert.pem"); // Homebrew
     return v;
 }
 
@@ -480,8 +470,9 @@ pub fn load_system_roots() -> !*Vector<*Cert> {
     let override_path: string = env_get("GLIDE_CA_BUNDLE");
     if override_path.len() > 0 { paths.push(override_path); }
     let defaults: *Vector<string> = _ca_bundle_paths();
-    for let i: i32 = 0; i < defaults.len(); i++ { paths.push(defaults.get(i)); }
-
+    for let i: i32 = 0; i < defaults.len(); i++ {
+        paths.push(defaults.get(i));
+    }
     for let i: i32 = 0; i < paths.len(); i++ {
         let p: string = paths.get(i);
         if !fs_exists(p) { continue; }

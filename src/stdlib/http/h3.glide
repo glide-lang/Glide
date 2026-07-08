@@ -30,9 +30,8 @@
 //   - No path MTU discovery — assumes 1200-byte safe default.
 //   - Server handles one connection at a time. Concurrent connections
 //     wait in the kernel UDP buffer until the current one finishes.
-
 import stdlib::bytes::*;
-import stdlib::net::ip::*;            // for _bytes_to_string
+import stdlib::net::ip::*; // for _bytes_to_string
 import stdlib::net::udp::*;
 import stdlib::http::*;
 
@@ -2834,24 +2833,36 @@ c_raw! {
 }
 
 extern fn __glide_h3_listen(port: i32, cert_path: string, key_path: string) -> *void;
+
 extern fn __glide_h3_accept(listener: *void) -> *void;
+
 extern fn __glide_h3_srv_req_was_0rtt(h: *void) -> i32;
+
 extern fn __glide_h3_srv_req_method(h: *void) -> string;
+
 extern fn __glide_h3_srv_req_path(h: *void) -> string;
+
 extern fn __glide_h3_srv_req_authority(h: *void) -> string;
+
 extern fn __glide_h3_srv_req_headers(h: *void) -> string;
+
 extern fn __glide_h3_srv_req_body_ptr(h: *void) -> string;
+
 extern fn __glide_h3_srv_req_body_len(h: *void) -> i32;
-extern fn __glide_h3_srv_send_response(h: *void, status: i32, headers_block: string,
-                                        body: *u8, body_len: i32) -> i32;
-extern fn __glide_h3_srv_begin_streaming(h: *void, status: i32,
-                                          headers_block: string) -> i32;
+
+extern fn __glide_h3_srv_send_response(h: *void, status: i32, headers_block: string, body: *u8, body_len: i32) -> i32;
+
+extern fn __glide_h3_srv_begin_streaming(h: *void, status: i32, headers_block: string) -> i32;
+
 extern fn __glide_h3_srv_push_chunk(h: *void, data: *u8, len: i32) -> i32;
+
 extern fn __glide_h3_srv_end_streaming(h: *void) -> i32;
+
 extern fn __glide_h3_srv_close(h: *void);
+
 extern fn __glide_h3_listener_close(lp: *void);
-extern fn __glide_h3_make_self_signed(cert_path: string, key_path: string,
-                                        cn: string, days: i32) -> i32;
+
+extern fn __glide_h3_make_self_signed(cert_path: string, key_path: string, cn: string, days: i32) -> i32;
 
 /// Generates an ECDSA-P256 self-signed X.509 certificate valid for the
 /// next `days` days and writes it as PEM to `cert_path` and `key_path`.
@@ -2864,8 +2875,7 @@ extern fn __glide_h3_make_self_signed(cert_path: string, key_path: string,
 /// http3_listen(4443, "cert.pem", "key.pem", my_handler);
 /// // result: ok(0) on success
 /// ```
-pub fn h3_make_self_signed_cert(cert_path: string, key_path: string,
-                                  cn: string, days: i32) -> !i32 {
+pub fn h3_make_self_signed_cert(cert_path: string, key_path: string, cn: string, days: i32) -> !i32 {
     let rc: i32 = __glide_h3_make_self_signed(cert_path, key_path, cn, days);
     if rc != 0 { return err("h3: failed to generate self-signed cert"); }
     return ok(0);
@@ -2896,8 +2906,7 @@ pub fn h3_make_self_signed_cert(cert_path: string, key_path: string,
 /// clients' handshake completion or accept dispatch. Stream-level
 /// concurrency within a connection (HTTP/3 PUSH, streaming response
 /// bodies, 0-RTT) is not supported in v1.
-pub fn http3_listen(port: i32, cert_path: string, key_path: string,
-                     handler: fn(*HttpRequest) -> HttpResponse) -> !i32 {
+pub fn http3_listen(port: i32, cert_path: string, key_path: string, handler: fn(*HttpRequest) -> HttpResponse) -> !i32 {
     let lp: *void = __glide_h3_listen(port, cert_path, key_path);
     if lp == null { return err("http3: listen failed (bind / cert / key)"); }
     println!("http3: listening on :", port);
@@ -2917,8 +2926,7 @@ pub fn http3_listen(port: i32, cert_path: string, key_path: string,
 // would pin a Glide coro's underlying OS thread and starve the runtime.
 fn _h3_dispatch(h: *void, handler: fn(*HttpRequest) -> HttpResponse) {
     let blen: i32 = __glide_h3_srv_req_body_len(h);
-    let body_str: string = __glide_string_from_buf(
-        __glide_h3_srv_req_body_ptr(h) as *void, blen);
+    let body_str: string = __glide_string_from_buf(__glide_h3_srv_req_body_ptr(h) as *void, blen);
     let mut hb: string = __glide_h3_srv_req_headers(h);
     let authority: string = __glide_h3_srv_req_authority(h);
     if authority.len() > 0 {
@@ -2929,35 +2937,19 @@ fn _h3_dispatch(h: *void, handler: fn(*HttpRequest) -> HttpResponse) {
     // RFC 9001 §5.6 + RFC 8470: 0-RTT data is replayable, so the server
     // MUST NOT accept non-idempotent requests in early data. Reject with
     // 425 Too Early and let the client retry over 1-RTT.
-    if __glide_h3_srv_req_was_0rtt(h) != 0
-        && !method.eq("GET") && !method.eq("HEAD") {
-        let bad: HttpResponse = HttpResponse::with_status(425)
-            .body("0-RTT replay risk: retry without early data");
-        let _r: i32 = __glide_h3_srv_send_response(h, bad.status,
-                                                     bad.headers_block,
-                                                     bad.body as *u8,
-                                                     bad.body.len());
+    if __glide_h3_srv_req_was_0rtt(h) != 0 && !method.eq("GET") && !method.eq("HEAD") {
+        let bad: HttpResponse = HttpResponse::with_status(425).body("0-RTT replay risk: retry without early data");
+        let _r: i32 = __glide_h3_srv_send_response(h, bad.status, bad.headers_block, bad.body as *u8, bad.body.len());
         __glide_h3_srv_close(h);
         return;
     }
-    let req: HttpRequest = HttpRequest {
-        method:        method,
-        path:          __glide_h3_srv_req_path(h),
-        version:       "HTTP/3.0",
-        headers_block: hb,
-        body:          body_str,
-        params:        null,
-        queries:       null,
-        tls:           true,
-        headers_cache: null,
-    };
+    let req: HttpRequest = HttpRequest { method: method, path: __glide_h3_srv_req_path(h), version: "HTTP/3.0", headers_block: hb, body: body_str, params: null, queries: null, tls: true, headers_cache: null };
     let resp: HttpResponse = handler(&req);
     if resp.stream_src != null {
         // Streaming: begin (sets up nghttp3 with the data_reader), pump
         // chunks until the source signals EOF, then end. Reader thread
         // delivers each chunk over the wire as flow control allows.
-        let _b: i32 = __glide_h3_srv_begin_streaming(h, resp.status,
-                                                       resp.headers_block);
+        let _b: i32 = __glide_h3_srv_begin_streaming(h, resp.status, resp.headers_block);
         let src: *dyn ChunkSource = resp.stream_src;
         while true {
             let nxt: ?string = src.next_chunk();
@@ -2969,33 +2961,43 @@ fn _h3_dispatch(h: *void, handler: fn(*HttpRequest) -> HttpResponse) {
         }
         let _e: i32 = __glide_h3_srv_end_streaming(h);
     } else {
-        let _r: i32 = __glide_h3_srv_send_response(h, resp.status,
-                                                     resp.headers_block,
-                                                     resp.body as *u8,
-                                                     resp.body.len());
+        let _r: i32 = __glide_h3_srv_send_response(h, resp.status, resp.headers_block, resp.body as *u8, resp.body.len());
     }
     __glide_h3_srv_close(h);
 }
 
-extern fn __glide_h3_client_connect(host: string, port: i32, timeout_ms: i32,
-                                     verify: i32, cache_handle: *void) -> *void;
+extern fn __glide_h3_client_connect(host: string, port: i32, timeout_ms: i32, verify: i32, cache_handle: *void) -> *void;
+
 extern fn __glide_h3_session_cache_new() -> *void;
+
 extern fn __glide_h3_session_cache_free(handle: *void);
+
 extern fn __glide_h3_session_cache_attempts(handle: *void) -> i32;
+
 extern fn __glide_h3_session_cache_accepted(handle: *void) -> i32;
+
 extern fn __glide_h3_session_cache_save(handle: *void, path: string) -> i32;
+
 extern fn __glide_h3_session_cache_load(handle: *void, path: string) -> i32;
+
 extern fn __glide_h3_early_data_accepted(conn_handle: *void) -> i32;
-extern fn __glide_h3_client_request(handle: *void, method: string, host: string, path: string,
-                                     extra_headers_block: string,
-                                     body: *u8, body_len: i32, timeout_ms: i32) -> i32;
+
+extern fn __glide_h3_client_request(handle: *void, method: string, host: string, path: string, extra_headers_block: string, body: *u8, body_len: i32, timeout_ms: i32) -> i32;
+
 extern fn __glide_h3_resp_status(h: *void) -> i32;
+
 extern fn __glide_h3_resp_body_len(h: *void) -> i32;
+
 extern fn __glide_h3_resp_body_ptr(h: *void) -> string;
+
 extern fn __glide_h3_resp_hdr_count(h: *void) -> i32;
+
 extern fn __glide_h3_resp_hdr_name(h: *void, i: i32) -> string;
+
 extern fn __glide_h3_resp_hdr_value(h: *void, i: i32) -> string;
+
 extern fn __glide_h3_close(h: *void);
+
 extern fn __glide_string_from_buf(p: *void, n: i32) -> string;
 
 /// Single-shot HTTP/3 GET. Opens a QUIC connection, performs the TLS 1.3
@@ -3024,32 +3026,24 @@ pub fn http3_get(url: string, tls_insecure: bool) -> !*HttpResponse {
 ///     "POST", "https://api.example.com/x", "Content-Type: application/json\r\n",
 ///     "{\"hi\":1}", false);
 /// ```
-pub fn http3_request(method: string, url: string, extra_headers: string,
-                      body: string, tls_insecure: bool) -> !*HttpResponse {
+pub fn http3_request(method: string, url: string, extra_headers: string, body: string, tls_insecure: bool) -> !*HttpResponse {
     let parsed: !*ParsedH3Url = _h3_parse_url(url);
     if !parsed.is_ok() { return err(parsed.unwrap_err()); }
     let pu: *ParsedH3Url = parsed.unwrap();
-
     let mut verify: i32 = 1;
     if tls_insecure { verify = 0; }
-    let h: *void = __glide_h3_client_connect(pu.host, pu.port, 10000, verify,
-                                                 null);
+    let h: *void = __glide_h3_client_connect(pu.host, pu.port, 10000, verify, null);
     if h == null { return err("http3: connect/handshake failed"); }
-
     let body_len: i32 = body.len();
-    let ok: i32 = __glide_h3_client_request(h, method, pu.host, pu.path,
-                                              extra_headers,
-                                              body as *u8, body_len, 30000);
+    let ok: i32 = __glide_h3_client_request(h, method, pu.host, pu.path, extra_headers, body as *u8, body_len, 30000);
     if ok == 0 {
         __glide_h3_close(h);
         return err("http3: request failed");
     }
-
     let r: *HttpResponse = malloc(sizeof(HttpResponse)) as *HttpResponse;
     r.status = __glide_h3_resp_status(h);
     let blen: i32 = __glide_h3_resp_body_len(h);
     r.body = __glide_string_from_buf(__glide_h3_resp_body_ptr(h) as *void, blen);
-
     let mut hb: string = "";
     let n: i32 = __glide_h3_resp_hdr_count(h);
     for let i: i32 = 0; i < n; i++ {
@@ -3060,7 +3054,6 @@ pub fn http3_request(method: string, url: string, extra_headers: string,
         hb = hb.concat(name).concat(": ").concat(value);
     }
     r.headers_block = hb;
-
     __glide_h3_close(h);
     return ok(r);
 }
@@ -3092,21 +3085,25 @@ impl H3SessionCache {
         c.handle = __glide_h3_session_cache_new();
         return c;
     }
-    pub fn free(self: *H3SessionCache) {
+
+    pub fn free(self) {
         __glide_h3_session_cache_free(self.handle);
         self.handle = null;
     }
+
     /// How many connect calls found a cached session for their target
     /// (host, port) and installed it on the SSL — i.e. how many tried
     /// 0-RTT. Doesn't say whether the server accepted; see `accepted`.
-    pub fn attempts(self: *H3SessionCache) -> i32 {
+    pub fn attempts(self) -> i32 {
         return __glide_h3_session_cache_attempts(self.handle);
     }
+
     /// How many connects had their 0-RTT data accepted by the server
     /// (i.e. saved 1 RTT). `attempts - accepted` is the rejection count.
-    pub fn accepted(self: *H3SessionCache) -> i32 {
+    pub fn accepted(self) -> i32 {
         return __glide_h3_session_cache_accepted(self.handle);
     }
+
     /// Serialise the cache to a binary file (magic + version + N entries).
     /// Survives across process restarts so cold-start clients can pick
     /// up a previously cached session. Returns true on success.
@@ -3116,14 +3113,15 @@ impl H3SessionCache {
     /// // ...do work...
     /// c.save("h3-sessions.bin");
     /// ```
-    pub fn save(self: *H3SessionCache, path: string) -> bool {
+    pub fn save(self, path: string) -> bool {
         return __glide_h3_session_cache_save(self.handle, path) != 0;
     }
+
     /// Read entries from a binary file produced by `save`. Expired
     /// entries are dropped on load. Wipes whatever the cache held first.
     /// Returns the number of entries loaded (0 on missing file or
     /// corrupt format — safe to call before save has ever run).
-    pub fn load(self: *H3SessionCache, path: string) -> i32 {
+    pub fn load(self, path: string) -> i32 {
         return __glide_h3_session_cache_load(self.handle, path);
     }
 }
@@ -3132,21 +3130,16 @@ impl H3SessionCache {
 /// TLS session resumption + 0-RTT early data on repeat calls to the
 /// same host. Safe to call concurrently from multiple threads against
 /// the same cache (internal mutex serialises store/lookup).
-pub fn http3_request_cached(method: string, url: string, extra_headers: string,
-                              body: string, tls_insecure: bool,
-                              cache: *H3SessionCache) -> !*HttpResponse {
+pub fn http3_request_cached(method: string, url: string, extra_headers: string, body: string, tls_insecure: bool, cache: *H3SessionCache) -> !*HttpResponse {
     let parsed: !*ParsedH3Url = _h3_parse_url(url);
     if !parsed.is_ok() { return err(parsed.unwrap_err()); }
     let pu: *ParsedH3Url = parsed.unwrap();
     let mut verify: i32 = 1;
     if tls_insecure { verify = 0; }
-    let h: *void = __glide_h3_client_connect(pu.host, pu.port, 10000, verify,
-                                                 cache.handle);
+    let h: *void = __glide_h3_client_connect(pu.host, pu.port, 10000, verify, cache.handle);
     if h == null { return err("http3: connect/handshake failed"); }
     let body_len: i32 = body.len();
-    let ok: i32 = __glide_h3_client_request(h, method, pu.host, pu.path,
-                                              extra_headers,
-                                              body as *u8, body_len, 30000);
+    let ok: i32 = __glide_h3_client_request(h, method, pu.host, pu.path, extra_headers, body as *u8, body_len, 30000);
     if ok == 0 {
         __glide_h3_close(h);
         return err("http3: request failed");
@@ -3170,7 +3163,6 @@ pub fn http3_request_cached(method: string, url: string, extra_headers: string,
 }
 
 // ---- tiny URL parser tailored to https://host:port/path -----------
-
 pub struct ParsedH3Url {
     pub host: string,
     pub port: i32,
@@ -3190,7 +3182,6 @@ fn _h3_parse_url(s: string) -> !*ParsedH3Url {
     let authority: string = rest.substring(0, slash);
     let mut path: string = rest.substring(slash, rest.len());
     if path.eq("") { path = "/"; }
-
     let mut host: string = authority;
     let mut port: i32 = 443;
     let colon: i32 = _last_colon(authority);
@@ -3201,7 +3192,6 @@ fn _h3_parse_url(s: string) -> !*ParsedH3Url {
         if !pr.is_ok() { return err("http3: bad port"); }
         port = pr.unwrap();
     }
-
     let u: *ParsedH3Url = malloc(sizeof(ParsedH3Url)) as *ParsedH3Url;
     u.host = host;
     u.port = port;

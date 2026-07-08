@@ -50,14 +50,12 @@ pub fn hex_encode(s: string) -> string {
 pub fn hex_decode(s: string) -> !string {
     let n: i32 = s.len();
     if n % 2 != 0 { return err("odd length"); }
-
     let mut out: string = "";
     let mut i: i32 = 0;
     while i < n {
         let hi: i32 = _hex_value(s.at(i));
         let lo: i32 = _hex_value(s.at(i + 1));
         if hi < 0 || lo < 0 { return err("non-hex char"); }
-
         out = out.concat(((hi * 16 + lo) as char).to_string());
         i = i + 2;
     }

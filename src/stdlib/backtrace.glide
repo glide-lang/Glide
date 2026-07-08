@@ -17,7 +17,6 @@
 // `binary(function+0xoffset) [0xaddr]` on POSIX, `function+0xoffset`
 // on Windows. Lines are best-effort; with `-O2` plus frame-pointer
 // omission you may get less detail than expected.
-
 extern fn __glide_stack_trace_str(skip: i32) -> string;
 
 c_raw! {

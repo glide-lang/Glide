@@ -20,12 +20,16 @@
 //     return 0;
 // }
 // ```
-
 pub extern fn _test_begin(name: string);
+
 pub extern fn _test_pass();
+
 pub extern fn _test_fail(msg: string);
+
 pub extern fn _test_summary() -> i32;
+
 pub extern fn _test_count_passed() -> i32;
+
 pub extern fn _test_count_failed() -> i32;
 
 c_raw! {
@@ -68,9 +72,7 @@ c_raw! {
 /// assert!(user.age >= 18);
 /// ```
 pub macro assert!($cond:expr) {
-    if !($cond) {
-        _test_fail("assertion failed");
-    }
+    if !$cond { _test_fail("assertion failed"); }
 }
 
 /// Like `assert!` but takes a custom failure message. The message is a
@@ -81,9 +83,7 @@ pub macro assert!($cond:expr) {
 /// assert_msg!(n > 0, "expected positive, got ${n}");
 /// ```
 pub macro assert_msg!($cond:expr, $msg:expr) {
-    if !($cond) {
-        _test_fail($msg);
-    }
+    if !$cond { _test_fail($msg); }
 }
 
 /// Numeric / boolean / char equality. Uses C `==`, so DON'T use this for
@@ -97,9 +97,7 @@ pub macro assert_msg!($cond:expr, $msg:expr) {
 pub macro assert_eq!($a:expr, $b:expr) {
     let __ta = $a;
     let __tb = $b;
-    if !(__ta == __tb) {
-        _test_fail(format!("expected {}, got {}", __tb, __ta));
-    }
+    if !(__ta == __tb) { _test_fail(format!("expected {}, got {}", __tb, __ta)); }
 }
 
 /// String equality via `.eq()`. `assert_eq!` would compare pointers and
@@ -111,30 +109,32 @@ pub macro assert_eq!($a:expr, $b:expr) {
 pub macro assert_str_eq!($a:expr, $b:expr) {
     let __ta: string = $a;
     let __tb: string = $b;
-    if !__ta.eq(__tb) {
-        _test_fail(format!("expected {}, got {}", __tb, __ta));
-    }
+    if !__ta.eq(__tb) { _test_fail(format!("expected {}, got {}", __tb, __ta)); }
 }
 
 /// Convenience for `assert!(!cond)` with a clearer failure message.
 pub macro assert_not!($cond:expr) {
-    if $cond {
-        _test_fail("expected false, was true");
-    }
+    if $cond { _test_fail("expected false, was true"); }
 }
 
 /// Mark the start of a test. The `glide test` driver emits this before
 /// calling each `test_*` function; manual callers don't need it. Public
 /// so the synthesised driver code can reach it across modules.
-pub fn test_begin(name: string) { _test_begin(name); }
+pub fn test_begin(name: string) {
+    _test_begin(name);
+}
 
 /// Tick the per-test pass counter. Called by the driver after a test
 /// returns without any failed assertion.
-pub fn test_pass() { _test_pass(); }
+pub fn test_pass() {
+    _test_pass();
+}
 
 /// Print the run summary (`N passed, M failed`) and return the number
 /// of failed tests. The driver uses the return as the process exit code.
-pub fn test_summary() -> i32 { return _test_summary(); }
+pub fn test_summary() -> i32 {
+    return _test_summary();
+}
 
 /// `(passed, failed)` for the current run. Useful for self-tests of
 /// the framework.

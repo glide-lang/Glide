@@ -5,7 +5,6 @@
 // Also hosts the shared `_bytes_to_string` helper (NUL-terminated heap
 // copy of an arbitrary byte buffer) since tcp.glide and udp.glide both
 // depend on net::ip and need a stable place to share the symbol.
-
 c_raw! {
     #ifndef GLIDE_BYTES_TO_STRING_DEFINED
     #define GLIDE_BYTES_TO_STRING_DEFINED
@@ -23,6 +22,7 @@ c_raw! {
     }
     #endif
 }
+
 pub extern fn _bytes_to_string(p: *u8, n: i32) -> string;
 
 /// A v4 or v6 address. `kind` is 4 or 6; the other fields are
@@ -53,7 +53,7 @@ impl IpAddr {
         // Pack unsigned so a high first octet (>=128) does not overflow the
         // signed shift; the i32 field holds the same bit pattern and readers
         // mask with `& 255`.
-        ip.v4 = (((a as u32) << 24) | ((b as u32) << 16) | ((c as u32) << 8) | (d as u32)) as i32;
+        ip.v4 = (a as u32 << 24 | b as u32 << 16 | c as u32 << 8 | d as u32) as i32;
         ip.v6_hi = 0;
         ip.v6_lo = 0;
         return ip;
@@ -80,38 +80,50 @@ impl IpAddr {
     /// ```glide
     /// IpAddr::loopback_v4().to_string();   // "127.0.0.1"
     /// ```
-    pub fn loopback_v4() -> *IpAddr { return IpAddr::v4(127, 0, 0, 1); }
+    pub fn loopback_v4() -> *IpAddr {
+        return IpAddr::v4(127, 0, 0, 1);
+    }
 
     /// `::1` shorthand.
     ///
     /// ```glide
     /// IpAddr::loopback_v6().to_string();   // "::1"
     /// ```
-    pub fn loopback_v6() -> *IpAddr { return IpAddr::v6(0, 1); }
+    pub fn loopback_v6() -> *IpAddr {
+        return IpAddr::v6(0, 1);
+    }
 
     /// `0.0.0.0` (bind-on-any-interface).
     ///
     /// ```glide
     /// IpAddr::unspec_v4().is_unspecified();   // true
     /// ```
-    pub fn unspec_v4() -> *IpAddr { return IpAddr::v4(0, 0, 0, 0); }
+    pub fn unspec_v4() -> *IpAddr {
+        return IpAddr::v4(0, 0, 0, 0);
+    }
 
     /// `::` (all-interfaces / unspecified, IPv6).
-    pub fn unspec_v6() -> *IpAddr { return IpAddr::v6(0, 0); }
+    pub fn unspec_v6() -> *IpAddr {
+        return IpAddr::v6(0, 0);
+    }
 
     /// `true` if this is a v4 address.
     ///
     /// ```glide
     /// IpAddr::v4(8, 8, 8, 8).is_v4();   // true
     /// ```
-    pub fn is_v4(self: *IpAddr) -> bool { return self.kind == 4; }
+    pub fn is_v4(self) -> bool {
+        return self.kind == 4;
+    }
 
     /// `true` if this is a v6 address.
     ///
     /// ```glide
     /// IpAddr::loopback_v6().is_v6();   // true
     /// ```
-    pub fn is_v6(self: *IpAddr) -> bool { return self.kind == 6; }
+    pub fn is_v6(self) -> bool {
+        return self.kind == 6;
+    }
 
     /// `true` for `127.0.0.0/8` (v4) or `::1` (v6).
     ///
@@ -119,10 +131,8 @@ impl IpAddr {
     /// IpAddr::v4(127, 0, 0, 1).is_loopback();   // true
     /// IpAddr::v4(8, 8, 8, 8).is_loopback();     // false
     /// ```
-    pub fn is_loopback(self: *IpAddr) -> bool {
-        if self.kind == 4 {
-            return ((self.v4 >> 24) & 255) == 127;
-        }
+    pub fn is_loopback(self) -> bool {
+        if self.kind == 4 { return (self.v4 >> 24 & 255) == 127; }
         return self.v6_hi == 0 && self.v6_lo == 1;
     }
 
@@ -131,7 +141,7 @@ impl IpAddr {
     /// ```glide
     /// IpAddr::v4(0, 0, 0, 0).is_unspecified();   // true
     /// ```
-    pub fn is_unspecified(self: *IpAddr) -> bool {
+    pub fn is_unspecified(self) -> bool {
         if self.kind == 4 { return self.v4 == 0; }
         return self.v6_hi == 0 && self.v6_lo == 0;
     }
@@ -143,17 +153,17 @@ impl IpAddr {
     /// IpAddr::v4(192, 168, 1, 5).is_private();   // true
     /// IpAddr::v4(8, 8, 8, 8).is_private();       // false
     /// ```
-    pub fn is_private(self: *IpAddr) -> bool {
+    pub fn is_private(self) -> bool {
         if self.kind == 4 {
-            let a: i32 = (self.v4 >> 24) & 255;
-            let b: i32 = (self.v4 >> 16) & 255;
+            let a: i32 = self.v4 >> 24 & 255;
+            let b: i32 = self.v4 >> 16 & 255;
             if a == 10 { return true; }
             if a == 172 && b >= 16 && b <= 31 { return true; }
             if a == 192 && b == 168 { return true; }
             return false;
         }
         // v6 unique local: fc00::/7
-        let high_byte: i64 = (self.v6_hi >> 56) & 255;
+        let high_byte: i64 = self.v6_hi >> 56 & 255;
         return (high_byte & 254) == 252;
     }
 
@@ -164,7 +174,7 @@ impl IpAddr {
     /// IpAddr::v4(8, 8, 8, 8).to_string();    // "8.8.8.8"
     /// IpAddr::loopback_v6().to_string();     // "::1"
     /// ```
-    pub fn to_string(self: *IpAddr) -> string {
+    pub fn to_string(self) -> string {
         if self.kind == 4 { return _v4_to_str(self.v4); }
         return _v6_to_str(self.v6_hi, self.v6_lo);
     }
@@ -194,7 +204,7 @@ impl IpAddr {
     /// let b: *IpAddr = IpAddr::v4(127, 0, 0, 1);
     /// a.eq(b);   // true
     /// ```
-    pub fn eq(self: *IpAddr, other: *IpAddr) -> bool {
+    pub fn eq(self, other: *IpAddr) -> bool {
         if self.kind != other.kind { return false; }
         if self.kind == 4 { return self.v4 == other.v4; }
         return self.v6_hi == other.v6_hi && self.v6_lo == other.v6_lo;
@@ -202,15 +212,12 @@ impl IpAddr {
 }
 
 // ---- v4 parse / format ----
-
 fn _v4_to_str(packed: i32) -> string {
-    let a: i32 = (packed >> 24) & 255;
-    let b: i32 = (packed >> 16) & 255;
-    let c: i32 = (packed >>  8) & 255;
-    let d: i32 =  packed        & 255;
-    return _itos(a).concat(".").concat(_itos(b))
-                   .concat(".").concat(_itos(c))
-                   .concat(".").concat(_itos(d));
+    let a: i32 = packed >> 24 & 255;
+    let b: i32 = packed >> 16 & 255;
+    let c: i32 = packed >> 8 & 255;
+    let d: i32 = packed & 255;
+    return _itos(a).concat(".").concat(_itos(b)).concat(".").concat(_itos(c)).concat(".").concat(_itos(d));
 }
 
 fn _parse_v4(s: string) -> !*IpAddr {
@@ -224,19 +231,15 @@ fn _parse_v4(s: string) -> !*IpAddr {
         if !r.is_ok() { return err("ipv4: non-numeric octet"); }
         let n: i32 = r.unwrap();
         if n < 0 || n > 255 { return err("ipv4: octet out of range"); }
-        packed = (packed << 8) | n;
+        packed = packed << 8 | n;
     }
-    return ok(IpAddr::v4((packed >> 24) & 255,
-                         (packed >> 16) & 255,
-                         (packed >>  8) & 255,
-                          packed        & 255));
+    return ok(IpAddr::v4(packed >> 24 & 255, packed >> 16 & 255, packed >> 8 & 255, packed & 255));
 }
 
 // ---- v6 parse / format ----
 //
 // RFC 5952. Supports the `::` zero-collapse, mixed `::ffff:1.2.3.4`,
 // embedded v4 in last 32 bits.
-
 fn _ip_hex_digit(n: i32) -> string {
     if n < 10 { return ((48 + n) as char).to_string(); }
     return ((87 + n) as char).to_string();
@@ -256,20 +259,19 @@ fn _v6_group_str(g: i32) -> string {
 
 fn _v6_groups(hi: i64, lo: i64) -> *Vector<i32> {
     let g: *Vector<i32> = Vector::new();
-    g.push(((hi >> 48) & 65535) as i32);
-    g.push(((hi >> 32) & 65535) as i32);
-    g.push(((hi >> 16) & 65535) as i32);
-    g.push(( hi        & 65535) as i32);
-    g.push(((lo >> 48) & 65535) as i32);
-    g.push(((lo >> 32) & 65535) as i32);
-    g.push(((lo >> 16) & 65535) as i32);
-    g.push(( lo        & 65535) as i32);
+    g.push((hi >> 48 & 65535) as i32);
+    g.push((hi >> 32 & 65535) as i32);
+    g.push((hi >> 16 & 65535) as i32);
+    g.push((hi & 65535) as i32);
+    g.push((lo >> 48 & 65535) as i32);
+    g.push((lo >> 32 & 65535) as i32);
+    g.push((lo >> 16 & 65535) as i32);
+    g.push((lo & 65535) as i32);
     return g;
 }
 
 fn _v6_to_str(hi: i64, lo: i64) -> string {
     let groups: *Vector<i32> = _v6_groups(hi, lo);
-
     // Find the longest run of zero groups (>=2). RFC 5952 §4.2.
     let mut best_start: i32 = -1;
     let mut best_len: i32 = 0;
@@ -279,13 +281,15 @@ fn _v6_to_str(hi: i64, lo: i64) -> string {
         if groups.get(i) == 0 {
             if cur_len == 0 { cur_start = i; }
             cur_len = cur_len + 1;
-            if cur_len > best_len { best_len = cur_len; best_start = cur_start; }
+            if cur_len > best_len {
+                best_len = cur_len;
+                best_start = cur_start;
+            }
         } else {
             cur_len = 0;
         }
     }
     if best_len < 2 { best_start = -1; }
-
     // Build tokens then join with ":". Collapse run becomes one empty
     // token; an extra empty at start/end if the run touches the edge so
     // joining produces the leading/trailing "::".
@@ -311,11 +315,11 @@ fn _parse_v6_group(s: string) -> !i32 {
     for let i: i32 = 0; i < s.len(); i++ {
         let c: i32 = s.at(i).to_int();
         let mut d: i32 = -1;
-        if c >= 48 && c <=  57 { d = c - 48; }
+        if c >= 48 && c <= 57 { d = c - 48; }
         if c >= 97 && c <= 102 { d = c - 87; }
-        if c >= 65 && c <=  70 { d = c - 55; }
+        if c >= 65 && c <= 70 { d = c - 55; }
         if d < 0 { return err("ipv6: non-hex char"); }
-        v = (v << 4) | d;
+        v = v << 4 | d;
     }
     return ok(v);
 }
@@ -354,18 +358,22 @@ fn _parse_v6(s: string) -> !*IpAddr {
             left.push(r.unwrap());
         }
     }
-
     // Pad zeros into the collapse slot if any.
     let total: i32 = left.len() + right.len();
     let zeros: i32 = 8 - total;
     let groups: *Vector<i32> = Vector::new();
-    for let i: i32 = 0; i < left.len(); i++ { groups.push(left.get(i)); }
-    if collapse_at >= 0 {
-        for let i: i32 = 0; i < zeros; i++ { groups.push(0); }
+    for let i: i32 = 0; i < left.len(); i++ {
+        groups.push(left.get(i));
     }
-    for let i: i32 = 0; i < right.len(); i++ { groups.push(right.get(i)); }
+    if collapse_at >= 0 {
+        for let i: i32 = 0; i < zeros; i++ {
+            groups.push(0);
+        }
+    }
+    for let i: i32 = 0; i < right.len(); i++ {
+        groups.push(right.get(i));
+    }
     if groups.len() != 8 { return err("ipv6: wrong group count after expand"); }
-
     // Shift in u64: a group >= 0x8000 shifted by 48 lands in the sign
     // bit, and signed-overflowing shifts are UB in the emitted C.
     let g0: u64 = groups.get(0) as u64;
@@ -376,13 +384,12 @@ fn _parse_v6(s: string) -> !*IpAddr {
     let g5: u64 = groups.get(5) as u64;
     let g6: u64 = groups.get(6) as u64;
     let g7: u64 = groups.get(7) as u64;
-    let hi: i64 = ((g0 << 48) | (g1 << 32) | (g2 << 16) | g3) as i64;
-    let lo: i64 = ((g4 << 48) | (g5 << 32) | (g6 << 16) | g7) as i64;
+    let hi: i64 = (g0 << 48 | g1 << 32 | g2 << 16 | g3) as i64;
+    let lo: i64 = (g4 << 48 | g5 << 32 | g6 << 16 | g7) as i64;
     return ok(IpAddr::v6(hi, lo));
 }
 
 // ---- SocketAddr ----
-
 pub struct SocketAddr {
     pub ip: *IpAddr,
     pub port: i32,
@@ -408,10 +415,9 @@ impl SocketAddr {
     /// SocketAddr::new(IpAddr::loopback_v4(), 80).to_string();   // "127.0.0.1:80"
     /// SocketAddr::new(IpAddr::loopback_v6(), 80).to_string();   // "[::1]:80"
     /// ```
-    pub fn to_string(self: *SocketAddr) -> string {
+    pub fn to_string(self) -> string {
         if self.ip.is_v6() {
-            return "[".concat(self.ip.to_string())
-                      .concat("]:").concat(_itos(self.port));
+            return "[".concat(self.ip.to_string()).concat("]:").concat(_itos(self.port));
         }
         return self.ip.to_string().concat(":").concat(_itos(self.port));
     }
@@ -426,7 +432,7 @@ impl SocketAddr {
     /// ```
     pub fn parse(s: string) -> !*SocketAddr {
         if s.len() == 0 { return err("socketaddr: empty"); }
-        if s.at(0).to_int() == 91 {              // '['
+        if s.at(0).to_int() == 91 {
             let close: i32 = s.index_of("]");
             if close < 0 { return err("socketaddr: missing ']'"); }
             let host: string = s.substring(1, close);
@@ -461,19 +467,21 @@ impl SocketAddr {
     /// let sa: *SocketAddr = SocketAddr::new(IpAddr::loopback_v4(), 80);
     /// defer sa.free();
     /// ```
-    pub fn free(self: *SocketAddr) {
+    pub fn free(self) {
         free(self.ip as *void);
         free(self as *void);
     }
 }
 
 // ---- shared int-to-string ----
-
 pub fn _itos(n: i32) -> string {
     if n == 0 { return "0"; }
     let mut x: i32 = n;
     let mut neg: bool = false;
-    if x < 0 { neg = true; x = 0 - x; }
+    if x < 0 {
+        neg = true;
+        x = 0 - x;
+    }
     let mut s: string = "";
     while x > 0 {
         let d: i32 = x % 10;

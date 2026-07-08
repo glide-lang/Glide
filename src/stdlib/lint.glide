@@ -60,14 +60,13 @@
 // block, just that block; on a single `let`, just that statement.
 // Lints don't propagate up — a narrower `@allow` doesn't silence
 // warnings emitted before it in the same outer scope.
-
-pub const LINT_DEPRECATED_FN: string  = "deprecated-fn";
-pub const LINT_UNSTABLE_FN: string    = "unstable-fn";
-pub const LINT_UNFREED_ALLOC: string  = "unfreed-alloc";
+pub const LINT_DEPRECATED_FN: string = "deprecated-fn";
+pub const LINT_UNSTABLE_FN: string = "unstable-fn";
+pub const LINT_UNFREED_ALLOC: string = "unfreed-alloc";
 pub const LINT_ARENA_NOT_FREED: string = "arena-not-freed";
-pub const LINT_UNUSED_VAR: string     = "unused-var";
-pub const LINT_UNUSED_PARAM: string   = "unused-param";
-pub const LINT_UNUSED_FN: string      = "unused-fn";
+pub const LINT_UNUSED_VAR: string = "unused-var";
+pub const LINT_UNUSED_PARAM: string = "unused-param";
+pub const LINT_UNUSED_FN: string = "unused-fn";
 pub const LINT_UNNECESSARY_MUT: string = "unnecessary-mut";
 
 /// Build the canonical `lint:<category>` code from a category name.

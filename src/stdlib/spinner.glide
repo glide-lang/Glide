@@ -13,9 +13,10 @@
 // stdout to the generated C file during codegen. When stderr isn't a TTY
 // (piped, CI without a PTY) the animation is suppressed and only the
 // final `finish` line prints, so logs stay clean.
-
 extern fn __glide_spinner_start(msg: string);
+
 extern fn __glide_spinner_set(msg: string);
+
 extern fn __glide_spinner_finish(ok: bool, msg: string);
 
 c_raw! {
@@ -170,7 +171,9 @@ c_raw! {
 /// ```glide
 /// spinner_start("compiling…");
 /// ```
-pub fn spinner_start(msg: string) { __glide_spinner_start(msg); }
+pub fn spinner_start(msg: string) {
+    __glide_spinner_start(msg);
+}
 
 /// Update the live spinner's status text. No-op when no spinner is
 /// active. On non-TTY stderrs this emits a fresh status line.
@@ -178,7 +181,9 @@ pub fn spinner_start(msg: string) { __glide_spinner_start(msg); }
 /// ```glide
 /// spinner_set("linking…");
 /// ```
-pub fn spinner_set(msg: string) { __glide_spinner_set(msg); }
+pub fn spinner_set(msg: string) {
+    __glide_spinner_set(msg);
+}
 
 /// Stop the animator (joining its pthread), clear the spinner line,
 /// then print `✓ msg` (when `ok`) or `✗ msg` (when not). Pass an empty
@@ -189,4 +194,6 @@ pub fn spinner_set(msg: string) { __glide_spinner_set(msg); }
 /// spinner_finish(true,  "built target/my_app");
 /// spinner_finish(false, "compile failed");
 /// ```
-pub fn spinner_finish(ok: bool, msg: string) { __glide_spinner_finish(ok, msg); }
+pub fn spinner_finish(ok: bool, msg: string) {
+    __glide_spinner_finish(ok, msg);
+}

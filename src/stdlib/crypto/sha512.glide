@@ -11,7 +11,6 @@
 // sha384_hex("abc");   // cb00753f...
 // let mac: string = hmac_sha512("key", "msg");
 // ```
-
 c_raw! {
     #ifndef GLIDE_SHA512_DEFINED
     #define GLIDE_SHA512_DEFINED
@@ -186,33 +185,44 @@ c_raw! {
 }
 
 extern fn __glide_sha512_buf(s: *void, n: i32) -> *void;
+
 extern fn __glide_sha384_buf(s: *void, n: i32) -> *void;
+
 extern fn __glide_sha512_hex_str(s: *void, n: i32) -> string;
+
 extern fn __glide_sha384_hex_str(s: *void, n: i32) -> string;
+
 extern fn __glide_hmac_sha512_buf(key: *void, klen: i32, msg: *void, mlen: i32) -> *void;
+
 extern fn __glide_hmac_sha384_buf(key: *void, klen: i32, msg: *void, mlen: i32) -> *void;
+
 extern fn __glide_string_from_buf(p: *void, n: i32) -> string;
 
 /// SHA-512 of `data` — 64 raw bytes. Binary-safe.
 pub fn sha512(data: string) -> string {
     return __glide_string_from_buf(__glide_sha512_buf(data as *void, data.len()), 64);
 }
+
 /// SHA-512 of `data` as 128 lowercase hex chars.
 pub fn sha512_hex(data: string) -> string {
     return __glide_sha512_hex_str(data as *void, data.len());
 }
+
 /// SHA-384 of `data` — 48 raw bytes. Binary-safe.
 pub fn sha384(data: string) -> string {
     return __glide_string_from_buf(__glide_sha384_buf(data as *void, data.len()), 48);
 }
+
 /// SHA-384 of `data` as 96 lowercase hex chars.
 pub fn sha384_hex(data: string) -> string {
     return __glide_sha384_hex_str(data as *void, data.len());
 }
+
 /// HMAC-SHA-512 — 64 raw bytes. Binary-safe (RFC 2104).
 pub fn hmac_sha512(key: string, msg: string) -> string {
     return __glide_string_from_buf(__glide_hmac_sha512_buf(key as *void, key.len(), msg as *void, msg.len()), 64);
 }
+
 /// HMAC-SHA-384 — 48 raw bytes. Binary-safe (RFC 2104).
 pub fn hmac_sha384(key: string, msg: string) -> string {
     return __glide_string_from_buf(__glide_hmac_sha384_buf(key as *void, key.len(), msg as *void, msg.len()), 48);

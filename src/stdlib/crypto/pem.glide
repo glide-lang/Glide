@@ -8,13 +8,12 @@
 //
 // let ders: *Vector<string> = pem_certificates(pem_text);   // each is DER
 // ```
-
 import stdlib::base64::*;
 import stdlib::bytes::*;
 
 pub struct PemBlock {
-    pub label: string,   // e.g. "CERTIFICATE", "EC PRIVATE KEY"
-    pub der: string,     // decoded DER bytes
+    pub label: string, // e.g. "CERTIFICATE", "EC PRIVATE KEY"
+    pub der: string, // decoded DER bytes
 }
 
 const BEGIN: string = "-----BEGIN ";

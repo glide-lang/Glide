@@ -1,7 +1,6 @@
 // String methods, declared as `impl string { ... }` on the primitive
 // `string` type. Builds on the runtime helpers `len()`, `at()`, `eq()`,
 // `concat()`, `substring()` already provided by the codegen / stdlib.c.
-
 fn _ws(c: i32) -> bool {
     return c == 32 || c == 9 || c == 10 || c == 13 || c == 12 || c == 11;
 }
@@ -91,7 +90,10 @@ impl string {
             let mut k: i32 = 0;
             let mut matched: bool = true;
             while k < m {
-                if self.at(i + k).to_int() != sub.at(k).to_int() { matched = false; break; }
+                if self.at(i + k).to_int() != sub.at(k).to_int() {
+                    matched = false;
+                    break;
+                }
                 k = k + 1;
             }
             if matched { return i; }
@@ -166,7 +168,10 @@ impl string {
             let mut k: i32 = 0;
             let mut matched: bool = true;
             while k < m {
-                if self.at(i + k).to_int() != sep.at(k).to_int() { matched = false; break; }
+                if self.at(i + k).to_int() != sep.at(k).to_int() {
+                    matched = false;
+                    break;
+                }
                 k = k + 1;
             }
             if matched {
@@ -198,8 +203,12 @@ impl string {
         let mut matches: i32 = 0;
         let mut i: i32 = 0;
         while i < n {
-            if i + m <= n && _match_at(self, find, i, m) { matches = matches + 1; i = i + m; }
-            else { i = i + 1; }
+            if i + m <= n && _match_at(self, find, i, m) {
+                matches = matches + 1;
+                i = i + m;
+            } else {
+                i = i + 1;
+            }
         }
         if matches == 0 { return self.substring(0, self.len()); }
         let rlen: i32 = repl.len();
@@ -212,10 +221,15 @@ impl string {
         while i < n {
             if i + m <= n && _match_at(self, find, i, m) {
                 let mut k: i32 = 0;
-                while k < rlen { buf[w] = repl.at(k).to_int() as u8; w = w + 1; k = k + 1; }
+                while k < rlen {
+                    buf[w] = repl.at(k).to_int() as u8;
+                    w = w + 1;
+                    k = k + 1;
+                }
                 i = i + m;
             } else {
-                buf[w] = self.at(i).to_int() as u8; w = w + 1;
+                buf[w] = self.at(i).to_int() as u8;
+                w = w + 1;
                 i = i + 1;
             }
         }
@@ -233,9 +247,13 @@ impl string {
     pub fn trim(self: string) -> string {
         let n: i32 = self.len();
         let mut start: i32 = 0;
-        while start < n && _ws(self.at(start).to_int()) { start = start + 1; }
+        while start < n && _ws(self.at(start).to_int()) {
+            start = start + 1;
+        }
         let mut end: i32 = n;
-        while end > start && _ws(self.at(end - 1).to_int()) { end = end - 1; }
+        while end > start && _ws(self.at(end - 1).to_int()) {
+            end = end - 1;
+        }
         return self.substring(start, end);
     }
 
@@ -247,7 +265,9 @@ impl string {
     pub fn trim_left(self: string) -> string {
         let n: i32 = self.len();
         let mut start: i32 = 0;
-        while start < n && _ws(self.at(start).to_int()) { start = start + 1; }
+        while start < n && _ws(self.at(start).to_int()) {
+            start = start + 1;
+        }
         return self.substring(start, n);
     }
 
@@ -259,7 +279,9 @@ impl string {
     pub fn trim_right(self: string) -> string {
         let n: i32 = self.len();
         let mut end: i32 = n;
-        while end > 0 && _ws(self.at(end - 1).to_int()) { end = end - 1; }
+        while end > 0 && _ws(self.at(end - 1).to_int()) {
+            end = end - 1;
+        }
         return self.substring(0, end);
     }
 
@@ -276,8 +298,11 @@ impl string {
         let mut i: i32 = 0;
         while i < n {
             let c: i32 = self.at(i).to_int();
-            if c >= 97 && c <= 122 { buf[i] = (c - 32) as u8; }
-            else { buf[i] = c as u8; }
+            if c >= 97 && c <= 122 {
+                buf[i] = (c - 32) as u8;
+            } else {
+                buf[i] = c as u8;
+            }
             i = i + 1;
         }
         let out: string = __glide_string_from_buf(buf as *void, n);
@@ -298,8 +323,11 @@ impl string {
         let mut i: i32 = 0;
         while i < n {
             let c: i32 = self.at(i).to_int();
-            if c >= 65 && c <= 90 { buf[i] = (c + 32) as u8; }
-            else { buf[i] = c as u8; }
+            if c >= 65 && c <= 90 {
+                buf[i] = (c + 32) as u8;
+            } else {
+                buf[i] = c as u8;
+            }
             i = i + 1;
         }
         let out: string = __glide_string_from_buf(buf as *void, n);
@@ -324,7 +352,11 @@ impl string {
         let mut r: i32 = 0;
         while r < n {
             let mut i: i32 = 0;
-            while i < slen { buf[w] = self.at(i).to_int() as u8; w = w + 1; i = i + 1; }
+            while i < slen {
+                buf[w] = self.at(i).to_int() as u8;
+                w = w + 1;
+                i = i + 1;
+            }
             r = r + 1;
         }
         let out: string = __glide_string_from_buf(buf as *void, total);
@@ -347,8 +379,10 @@ impl string {
         if n == 0 { return 0; }
         let mut i: i32 = 0;
         let mut neg: bool = false;
-        if self.at(0).to_int() == 45 { neg = true; i = 1; }
-        else if self.at(0).to_int() == 43 { i = 1; }
+        if self.at(0).to_int() == 45 {
+            neg = true;
+            i = 1;
+        } else if self.at(0).to_int() == 43 { i = 1; }
         let mut acc: i32 = 0;
         while i < n {
             let c: i32 = self.at(i).to_int();
@@ -376,8 +410,10 @@ impl string {
         if n == 0 { return err("empty string"); }
         let mut i: i32 = 0;
         let mut neg: bool = false;
-        if self.at(0).to_int() == 45 { neg = true; i = 1; }
-        else if self.at(0).to_int() == 43 { i = 1; }
+        if self.at(0).to_int() == 45 {
+            neg = true;
+            i = 1;
+        } else if self.at(0).to_int() == 43 { i = 1; }
         if i >= n { return err("no digits"); }
         let mut acc: i32 = 0;
         while i < n {
@@ -406,9 +442,10 @@ impl string {
         if n == 0 { return err("empty string"); }
         let mut i: i32 = 0;
         let mut neg: bool = false;
-        if self.at(0).to_int() == 45 { neg = true; i = 1; }
-        else if self.at(0).to_int() == 43 { i = 1; }
-
+        if self.at(0).to_int() == 45 {
+            neg = true;
+            i = 1;
+        } else if self.at(0).to_int() == 43 { i = 1; }
         let mut int_digits: i32 = 0;
         let mut int_part: i32 = 0;
         while i < n {
@@ -418,7 +455,6 @@ impl string {
             int_digits = int_digits + 1;
             i = i + 1;
         }
-
         let mut frac_part: i32 = 0;
         let mut frac_digits: i32 = 0;
         if i < n && self.at(i).to_int() == 46 {
@@ -432,15 +468,18 @@ impl string {
             }
         }
         if int_digits == 0 && frac_digits == 0 { return err("no digits"); }
-
         let mut exp_val: i32 = 0;
         let mut exp_neg: bool = false;
         if i < n && (self.at(i).to_int() == 101 || self.at(i).to_int() == 69) {
             i = i + 1;
             if i < n {
                 let s: i32 = self.at(i).to_int();
-                if s == 43 { i = i + 1; }
-                else if s == 45 { exp_neg = true; i = i + 1; }
+                if s == 43 {
+                    i = i + 1;
+                } else if s == 45 {
+                    exp_neg = true;
+                    i = i + 1;
+                }
             }
             let mut exp_digits: i32 = 0;
             while i < n {
@@ -452,23 +491,28 @@ impl string {
             }
             if exp_digits == 0 { return err("malformed exponent"); }
         }
-
         if i != n { return err("non-digit byte"); }
         if exp_neg { exp_val = -exp_val; }
-
         let mut pow_frac: f64 = 1.0;
         let mut k: i32 = 0;
-        while k < frac_digits { pow_frac = pow_frac * 10.0; k = k + 1; }
-
-        let mut v: f64 = (int_part as f64) + (frac_part as f64) / pow_frac;
-
+        while k < frac_digits {
+            pow_frac = pow_frac * 10.0;
+            k = k + 1;
+        }
+        let mut v: f64 = int_part as f64 + frac_part as f64 / pow_frac;
         let mut pow_exp: f64 = 1.0;
         if exp_val >= 0 {
             let mut e: i32 = exp_val;
-            while e > 0 { pow_exp = pow_exp * 10.0; e = e - 1; }
+            while e > 0 {
+                pow_exp = pow_exp * 10.0;
+                e = e - 1;
+            }
         } else {
             let mut e: i32 = -exp_val;
-            while e > 0 { pow_exp = pow_exp / 10.0; e = e - 1; }
+            while e > 0 {
+                pow_exp = pow_exp / 10.0;
+                e = e - 1;
+            }
         }
         v = v * pow_exp;
         if neg { v = -v; }
@@ -522,9 +566,11 @@ impl string {
             let mut b: i32 = self.at(i).to_int();
             if b < 0 { b = b + 256; }
             let mut adv: i32 = 1;
-            if b >= 240 { adv = 4; }
-            else if b >= 224 { adv = 3; }
-            else if b >= 192 { adv = 2; }
+            if b >= 240 {
+                adv = 4;
+            } else if b >= 224 {
+                adv = 3;
+            } else if b >= 192 { adv = 2; }
             i = i + adv;
             count = count + 1;
         }
@@ -549,17 +595,15 @@ impl string {
                 out.push(b0);
                 i = i + 1;
             } else if b0 >= 240 && i + 3 < n {
-                let cp: i32 = ((b0 & 7) << 18) | (self._cont6(i + 1) << 12)
-                    | (self._cont6(i + 2) << 6) | self._cont6(i + 3);
+                let cp: i32 = (b0 & 7) << 18 | self._cont6(i + 1) << 12 | self._cont6(i + 2) << 6 | self._cont6(i + 3);
                 out.push(cp);
                 i = i + 4;
             } else if b0 >= 224 && i + 2 < n {
-                let cp: i32 = ((b0 & 15) << 12) | (self._cont6(i + 1) << 6)
-                    | self._cont6(i + 2);
+                let cp: i32 = (b0 & 15) << 12 | self._cont6(i + 1) << 6 | self._cont6(i + 2);
                 out.push(cp);
                 i = i + 3;
             } else if b0 >= 192 && i + 1 < n {
-                let cp: i32 = ((b0 & 31) << 6) | self._cont6(i + 1);
+                let cp: i32 = (b0 & 31) << 6 | self._cont6(i + 1);
                 out.push(cp);
                 i = i + 2;
             } else {
@@ -588,9 +632,11 @@ impl string {
             let mut b: i32 = self.at(i).to_int();
             if b < 0 { b = b + 256; }
             let mut adv: i32 = 1;
-            if b >= 240 { adv = 4; }
-            else if b >= 224 { adv = 3; }
-            else if b >= 192 { adv = 2; }
+            if b >= 240 {
+                adv = 4;
+            } else if b >= 224 {
+                adv = 3;
+            } else if b >= 192 { adv = 2; }
             i = i + adv;
         }
         if n == 0 { return self.substring(0, self.len()); }
@@ -604,7 +650,11 @@ impl string {
             let mut e: i32 = n;
             if k + 1 < starts.len() { e = starts.get(k + 1); }
             let mut p: i32 = s;
-            while p < e { buf[w] = self.at(p).to_int() as u8; w = w + 1; p = p + 1; }
+            while p < e {
+                buf[w] = self.at(p).to_int() as u8;
+                w = w + 1;
+                p = p + 1;
+            }
             k = k - 1;
         }
         let out: string = __glide_string_from_buf(buf as *void, n);
@@ -627,9 +677,15 @@ impl string {
         let cb: u8 = ch.to_int() as u8;
         let pad: i32 = width - n;
         let mut i: i32 = 0;
-        while i < pad { buf[i] = cb; i = i + 1; }
+        while i < pad {
+            buf[i] = cb;
+            i = i + 1;
+        }
         let mut j: i32 = 0;
-        while j < n { buf[pad + j] = self.at(j).to_int() as u8; j = j + 1; }
+        while j < n {
+            buf[pad + j] = self.at(j).to_int() as u8;
+            j = j + 1;
+        }
         let out: string = __glide_string_from_buf(buf as *void, width);
         free(buf as *void);
         return out;
@@ -646,9 +702,15 @@ impl string {
         let buf: *u8 = malloc(width as usize) as *u8;
         let cb: u8 = ch.to_int() as u8;
         let mut j: i32 = 0;
-        while j < n { buf[j] = self.at(j).to_int() as u8; j = j + 1; }
+        while j < n {
+            buf[j] = self.at(j).to_int() as u8;
+            j = j + 1;
+        }
         let mut i: i32 = n;
-        while i < width { buf[i] = cb; i = i + 1; }
+        while i < width {
+            buf[i] = cb;
+            i = i + 1;
+        }
         let out: string = __glide_string_from_buf(buf as *void, width);
         free(buf as *void);
         return out;
@@ -718,8 +780,12 @@ impl string {
         let mut c: i32 = 0;
         let mut i: i32 = 0;
         while i + m <= n {
-            if _match_at(self, sub, i, m) { c = c + 1; i = i + m; }
-            else { i = i + 1; }
+            if _match_at(self, sub, i, m) {
+                c = c + 1;
+                i = i + m;
+            } else {
+                i = i + 1;
+            }
         }
         return c;
     }

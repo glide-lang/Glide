@@ -16,7 +16,6 @@
 //     }
 // }
 // ```
-
 import stdlib::net::ip::*;
 
 c_raw! {
@@ -145,11 +144,17 @@ c_raw! {
 }
 
 extern fn __glide_dns_resolve(host: string) -> *void;
+
 extern fn __glide_dns_count(r: *void) -> i32;
+
 extern fn __glide_dns_family(r: *void, i: i32) -> i32;
+
 extern fn __glide_dns_v4(r: *void, i: i32) -> i64;
+
 extern fn __glide_dns_v6_hi(r: *void, i: i32) -> i64;
+
 extern fn __glide_dns_v6_lo(r: *void, i: i32) -> i64;
+
 extern fn __glide_dns_free(r: *void);
 
 /// Resolve `host` to a list of IP addresses via the system resolver.
@@ -174,8 +179,7 @@ pub fn resolve(host: string) -> !*Vector<*IpAddr> {
         if fam == 4 {
             let packed: i64 = __glide_dns_v4(r, i);
             let p: i32 = packed as i32;
-            out.push(IpAddr::v4((p >> 24) & 255, (p >> 16) & 255,
-                                (p >>  8) & 255,  p        & 255));
+            out.push(IpAddr::v4(p >> 24 & 255, p >> 16 & 255, p >> 8 & 255, p & 255));
         } else if fam == 6 {
             let hi: i64 = __glide_dns_v6_hi(r, i);
             let lo: i64 = __glide_dns_v6_lo(r, i);

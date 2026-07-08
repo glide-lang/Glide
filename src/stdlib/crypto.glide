@@ -17,7 +17,6 @@
 //
 // let mac: string = hmac_sha256_hex("secret-key", "msg-payload");
 // ```
-
 c_raw! {
     #ifndef GLIDE_CRYPTO_HELPERS_DEFINED
     #define GLIDE_CRYPTO_HELPERS_DEFINED
@@ -263,10 +262,15 @@ c_raw! {
 extern fn __glide_string_from_buf(buf: *void, n: i32) -> string;
 
 extern fn __glide_sha256_buf(s: *void, n: i32) -> *void;
+
 extern fn __glide_sha256_hex_str(s: *void, n: i32) -> string;
+
 extern fn __glide_hmac_sha256_buf(key: *void, klen: i32, msg: *void, mlen: i32) -> *void;
+
 extern fn __glide_hmac_sha256_hex_str(key: *void, klen: i32, msg: *void, mlen: i32) -> string;
+
 extern fn __glide_sha1_buf(s: *void, n: i32) -> *void;
+
 extern fn __glide_sha1_hex_str(s: *void, n: i32) -> string;
 
 /// SHA-256 over `data`, returned as a 32-byte raw string. Useful when

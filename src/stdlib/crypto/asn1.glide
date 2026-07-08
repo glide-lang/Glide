@@ -12,7 +12,6 @@
 // let inner: *Der = der_into(seq.unwrap());
 // while der_more(inner) { ... }
 // ```
-
 import stdlib::bytes::*;
 
 // Universal ASN.1 tags used by X.509 (class/PC bits included where they
@@ -85,7 +84,7 @@ pub fn der_read(d: *Der) -> !*Tlv {
         if nbytes > 4 { return err("asn1: length too large"); }
         for let i: i32 = 0; i < nbytes; i++ {
             if p >= d.end { return err("asn1: truncated length"); }
-            length = (length << 8) | _byte(d.buf, p);
+            length = length << 8 | _byte(d.buf, p);
             p = p + 1;
         }
         if length < 0 { return err("asn1: length overflow"); }
@@ -159,7 +158,7 @@ pub fn der_oid_string(content: string) -> !string {
     let mut i: i32 = 1;
     while i < n {
         let b: i32 = _byte(content, i);
-        acc = (acc << 7) | ((b & 0x7f) as i64);
+        acc = acc << 7 | (b & 0x7f) as i64;
         if (b & 0x80) == 0 {
             out = out.concat(".").concat(_i64toa(acc));
             acc = 0;
@@ -173,28 +172,34 @@ pub fn der_oid_string(content: string) -> !string {
 /// stripped (X.509 serials / EC point coords are non-negative here).
 pub fn der_int_bytes(t: *Tlv) -> string {
     let c: string = der_content(t);
-    if c.len() > 1 && _byte(c, 0) == 0 {
-        return c.substring(1, c.len());
-    }
+    if c.len() > 1 && _byte(c, 0) == 0 { return c.substring(1, c.len()); }
     return c;
 }
 
 fn _hex2(v: i32) -> string {
     let d: string = "0123456789abcdef";
-    return "0x".concat(d.substring((v / 16) & 15, ((v / 16) & 15) + 1)).concat(d.substring(v & 15, (v & 15) + 1));
+    return "0x".concat(d.substring(v / 16 & 15, (v / 16 & 15) + 1)).concat(d.substring(v & 15, (v & 15) + 1));
 }
+
 fn _itoa(n: i32) -> string {
     if n == 0 { return "0"; }
     let mut x: i32 = n;
     let mut s: string = "";
-    while x > 0 { s = ((48 + x % 10) as char).to_string().concat(s); x = x / 10; }
+    while x > 0 {
+        s = ((48 + x % 10) as char).to_string().concat(s);
+        x = x / 10;
+    }
     return s;
 }
+
 fn _i64toa(n: i64) -> string {
     if n == 0 { return "0"; }
     let mut x: i64 = n;
     let mut s: string = "";
-    while x > 0 { s = ((48 + (x % 10) as i32) as char).to_string().concat(s); x = x / 10; }
+    while x > 0 {
+        s = ((48 + (x % 10) as i32) as char).to_string().concat(s);
+        x = x / 10;
+    }
     return s;
 }
 
@@ -205,13 +210,18 @@ fn _der_len(n: i32) -> string {
     if n < 0x80 { return (n as char).to_string(); }
     let tmp: *ByteBuffer = ByteBuffer::new();
     let mut x: i32 = n;
-    while x > 0 { tmp.push((x & 255) as u8); x = x >> 8; }   // little-endian
+    while x > 0 {
+        tmp.push((x & 255) as u8);
+        x = x >> 8;
+    } // little-endian
     let le: string = tmp.to_string();
     tmp.free();
     let nb: i32 = le.len();
     let out: *ByteBuffer = ByteBuffer::new();
     out.push((0x80 | nb) as u8);
-    for let i: i32 = nb - 1; i >= 0; i-- { out.push(_byte(le, i) as u8); }   // big-endian
+    for let i: i32 = nb - 1; i >= 0; i-- {
+        out.push(_byte(le, i) as u8);
+    } // big-endian
     let r: string = out.to_string();
     out.free();
     return r;
@@ -223,8 +233,13 @@ pub fn der_tlv(tag: i32, content: string) -> string {
 }
 
 /// SEQUENCE / SET wrappers.
-pub fn der_seq(content: string) -> string { return der_tlv(ASN1_SEQUENCE, content); }
-pub fn der_set(content: string) -> string { return der_tlv(ASN1_SET, content); }
+pub fn der_seq(content: string) -> string {
+    return der_tlv(ASN1_SEQUENCE, content);
+}
+
+pub fn der_set(content: string) -> string {
+    return der_tlv(ASN1_SET, content);
+}
 
 /// INTEGER from a big-endian magnitude, adding a 0x00 sign pad when the
 /// high bit is set (so the value stays non-negative). An empty magnitude
@@ -237,9 +252,7 @@ pub fn der_integer(mag: string) -> string {
         start = start + 1;
     }
     let m: string = mag.substring(start, mag.len());
-    if _byte(m, 0) >= 0x80 {
-        return der_tlv(ASN1_INTEGER, (0 as char).to_string().concat(m));
-    }
+    if _byte(m, 0) >= 0x80 { return der_tlv(ASN1_INTEGER, (0 as char).to_string().concat(m)); }
     return der_tlv(ASN1_INTEGER, m);
 }
 
@@ -265,16 +278,26 @@ pub fn der_oid_encode(dotted: string) -> !string {
 }
 
 fn _emit_base128(out: *ByteBuffer, v: i64) {
-    if v == 0 { out.push(0 as u8); return; }
+    if v == 0 {
+        out.push(0 as u8);
+        return;
+    }
     let tmp: *ByteBuffer = ByteBuffer::new();
     let mut x: i64 = v;
-    while x > 0 { tmp.push((x & 0x7f) as u8); x = x >> 7; }
+    while x > 0 {
+        tmp.push((x & 0x7f) as u8);
+        x = x >> 7;
+    }
     let le: string = tmp.to_string();
     tmp.free();
     let nb: i32 = le.len();
     for let i: i32 = nb - 1; i >= 0; i-- {
         let b: i32 = _byte(le, i);
-        if i > 0 { out.push((b | 0x80) as u8); } else { out.push(b as u8); }
+        if i > 0 {
+            out.push((b | 0x80) as u8);
+        } else {
+            out.push(b as u8);
+        }
     }
 }
 
@@ -283,13 +306,21 @@ fn _split_dots(s: string) -> *Vector<string> {
     let mut cur: string = "";
     for let i: i32 = 0; i < s.len(); i++ {
         let c: string = s.substring(i, i + 1);
-        if c.eq(".") { out.push(cur); cur = ""; } else { cur = cur.concat(c); }
+        if c.eq(".") {
+            out.push(cur);
+            cur = "";
+        } else {
+            cur = cur.concat(c);
+        }
     }
     out.push(cur);
     return out;
 }
+
 fn _atoi64(s: string) -> i64 {
     let mut v: i64 = 0;
-    for let i: i32 = 0; i < s.len(); i++ { v = v * 10 + ((_byte(s, i) - 48) as i64); }
+    for let i: i32 = 0; i < s.len(); i++ {
+        v = v * 10 + (_byte(s, i) - 48) as i64;
+    }
     return v;
 }

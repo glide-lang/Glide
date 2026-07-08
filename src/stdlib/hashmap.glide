@@ -69,7 +69,9 @@ impl<V> HashMap<V> {
     /// m.insert("b", 2);
     /// m.len();   // 2
     /// ```
-    fn len(self: *HashMap<V>) -> i32 { return self.len; }
+    fn len(self) -> i32 {
+        return self.len;
+    }
 
     /// Allocated slot count (always a power of two once non-zero). Useful
     /// for diagnostics; most callers want `len()` instead.
@@ -80,30 +82,32 @@ impl<V> HashMap<V> {
     /// m.insert("a", 1);
     /// m.cap();              // 8   (initial table size)
     /// ```
-    fn cap(self: *HashMap<V>) -> i32 { return self.cap; }
+    fn cap(self) -> i32 {
+        return self.cap;
+    }
 
     /// Internal: hash a string with the classic 31x multiply-add. Accumulates
     /// unsigned so the 31x overflow wraps cleanly (defined) instead of tripping
     /// zig's signed-overflow trap, then masks to a non-negative i32 so callers
     /// can `& mask` safely.
-    fn hash_key(self: *HashMap<V>, k: string) -> i32 {
+    fn hash_key(self, k: string) -> i32 {
         let mut h: u32 = 0;
         let n: i32 = k.len();
         for let i: i32 = 0; i < n; i++ {
-            h = h * 31 + (k.at(i).to_int() as u32);
+            h = h * 31 + k.at(i).to_int() as u32;
         }
         return (h & 0x7fffffff) as i32;
     }
 
     /// Internal: linear-probe to find either the slot holding `k` or the
     /// first empty slot in the chain. Returns -1 when `cap == 0`.
-    fn slot(self: *HashMap<V>, k: string) -> i32 {
+    fn slot(self, k: string) -> i32 {
         if self.cap == 0 { return -1; }
         let mask: i32 = self.cap - 1;
         let mut i: i32 = self.hash_key(k) & mask;
         while self.occupied[i] {
             if self.keys[i].eq(k) { return i; }
-            i = (i + 1) & mask;
+            i = i + 1 & mask;
         }
         return i;
     }
@@ -113,7 +117,7 @@ impl<V> HashMap<V> {
     /// ```glide
     /// if m.contains("ready") { println!("yep"); }
     /// ```
-    fn contains(self: *HashMap<V>, k: string) -> bool {
+    fn contains(self, k: string) -> bool {
         let i: i32 = self.slot(k);
         if i < 0 { return false; }
         return self.occupied[i] && self.keys[i].eq(k);
@@ -127,7 +131,7 @@ impl<V> HashMap<V> {
     ///     let n: i32 = m.get("count");
     /// }
     /// ```
-    fn get(self: *HashMap<V>, k: string) -> V {
+    fn get(self, k: string) -> V {
         let i: i32 = self.slot(k);
         return self.values[i];
     }
@@ -138,7 +142,7 @@ impl<V> HashMap<V> {
     /// ```glide
     /// let n: i32 = m.get_or("count", 0);
     /// ```
-    fn get_or(self: *HashMap<V>, k: string, default: V) -> V {
+    fn get_or(self, k: string, default: V) -> V {
         if self.contains(k) { return self.get(k); }
         return default;
     }
@@ -150,7 +154,7 @@ impl<V> HashMap<V> {
     /// m.insert_if_absent("count", 1);   // true
     /// m.insert_if_absent("count", 9);   // false; stays 1
     /// ```
-    fn insert_if_absent(self: *HashMap<V>, k: string, v: V) -> bool {
+    fn insert_if_absent(self, k: string, v: V) -> bool {
         if self.contains(k) { return false; }
         self.insert(k, v);
         return true;
@@ -158,12 +162,11 @@ impl<V> HashMap<V> {
 
     /// Resize to a new power-of-two capacity and rehash every entry.
     /// Called automatically by `insert`; rarely useful directly.
-    fn resize(self: *HashMap<V>, new_cap: i32) {
+    fn resize(self, new_cap: i32) {
         let old_keys: *string = self.keys;
         let old_values: *V = self.values;
         let old_occupied: *bool = self.occupied;
         let old_cap: i32 = self.cap;
-
         if self.is_arena {
             self.keys = __glide_palloc(new_cap * sizeof(string)) as *string;
             self.values = __glide_palloc(new_cap * sizeof(V)) as *V;
@@ -178,13 +181,9 @@ impl<V> HashMap<V> {
         for let i: i32 = 0; i < new_cap; i++ {
             self.occupied[i] = false;
         }
-
         for let i: i32 = 0; i < old_cap; i++ {
-            if old_occupied[i] {
-                self.insert(old_keys[i], old_values[i]);
-            }
+            if old_occupied[i] { self.insert(old_keys[i], old_values[i]); }
         }
-
         // Arena buffers can't be free()d individually — the arena reclaims
         // them on reset. Heap-backed ones still need explicit free.
         if !self.is_arena && old_cap > 0 {
@@ -202,16 +201,11 @@ impl<V> HashMap<V> {
     /// m.insert("count", 2);     // overwrite
     /// println!(m.get("count")); // 2
     /// ```
-    fn insert(self: *HashMap<V>, k: string, v: V) {
+    fn insert(self, k: string, v: V) {
         // Grow when load >= 3/4
         if self.cap == 0 {
             self.resize(8);
-        } else {
-            if self.len * 4 >= self.cap * 3 {
-                self.resize(self.cap * 2);
-            }
-        }
-
+        } else if self.len * 4 >= self.cap * 3 { self.resize(self.cap * 2); }
         let i: i32 = self.slot(k);
         if !self.occupied[i] {
             self.occupied[i] = true;
@@ -230,25 +224,24 @@ impl<V> HashMap<V> {
     /// let was_present: bool = m.remove("a");   // true
     /// let again: bool      = m.remove("a");    // false
     /// ```
-    fn remove(self: *HashMap<V>, k: string) -> bool {
+    fn remove(self, k: string) -> bool {
         let i: i32 = self.slot(k);
         if i < 0 { return false; }
         if !self.occupied[i] { return false; }
         if !self.keys[i].eq(k) { return false; }
-
         // Linear-probe deletion: re-insert items in the chain after `i` until
         // we hit an empty slot, to keep probe chains intact.
         self.occupied[i] = false;
         self.len = self.len - 1;
         let mask: i32 = self.cap - 1;
-        let mut j: i32 = (i + 1) & mask;
+        let mut j: i32 = i + 1 & mask;
         while self.occupied[j] {
             let rk: string = self.keys[j];
             let rv: V = self.values[j];
             self.occupied[j] = false;
             self.len = self.len - 1;
             self.insert(rk, rv);
-            j = (j + 1) & mask;
+            j = j + 1 & mask;
         }
         return true;
     }
@@ -261,7 +254,9 @@ impl<V> HashMap<V> {
     /// m.insert("a", 1);
     /// m.is_empty();          // false
     /// ```
-    fn is_empty(self: *HashMap<V>) -> bool { return self.len == 0; }
+    fn is_empty(self) -> bool {
+        return self.len == 0;
+    }
 
     /// Snapshot every live key into a fresh Vector. Order is the slot
     /// order, which is unspecified relative to insertion order. The
@@ -272,7 +267,7 @@ impl<V> HashMap<V> {
     /// let ks: *Vector<string> = m.keys();
     /// for let i: i32 = 0; i < ks.len(); i++ { println!(ks.get(i)); }
     /// ```
-    fn keys(self: *HashMap<V>) -> *Vector<string> {
+    fn keys(self) -> *Vector<string> {
         let out: *Vector<string> = Vector::new();
         for let i: i32 = 0; i < self.cap; i++ {
             if self.occupied[i] { out.push(self.keys[i]); }
@@ -289,7 +284,7 @@ impl<V> HashMap<V> {
     /// let vs: *Vector<i32> = m.values();
     /// vs.sum();    // 3
     /// ```
-    fn values(self: *HashMap<V>) -> *Vector<V> {
+    fn values(self) -> *Vector<V> {
         let out: *Vector<V> = Vector::new();
         for let i: i32 = 0; i < self.cap; i++ {
             if self.occupied[i] { out.push(self.values[i]); }
@@ -309,9 +304,7 @@ impl<V> HashMap<V> {
     fn map_values<U>(self, f: fn(V) -> U) -> *HashMap<U> {
         let out: *HashMap<U> = HashMap::new();
         for let i: i32 = 0; i < self.cap; i++ {
-            if self.occupied[i] {
-                out.insert(self.keys[i], f(self.values[i]));
-            }
+            if self.occupied[i] { out.insert(self.keys[i], f(self.values[i])); }
         }
         return out;
     }
@@ -329,12 +322,10 @@ impl<V> HashMap<V> {
     ///     println!(p.first, "->", p.second);
     /// }
     /// ```
-    fn entries(self: *HashMap<V>) -> *Vector<*Pair<string, V>> {
+    fn entries(self) -> *Vector<*Pair<string, V>> {
         let out: *Vector<*Pair<string, V>> = Vector::new();
         for let i: i32 = 0; i < self.cap; i++ {
-            if self.occupied[i] {
-                out.push(Pair::new(self.keys[i], self.values[i]));
-            }
+            if self.occupied[i] { out.push(Pair::new(self.keys[i], self.values[i])); }
         }
         return out;
     }
@@ -348,7 +339,7 @@ impl<V> HashMap<V> {
     /// m.len();         // 0
     /// m.is_empty();    // true
     /// ```
-    fn clear(self: *HashMap<V>) {
+    fn clear(self) {
         for let i: i32 = 0; i < self.cap; i++ {
             self.occupied[i] = false;
         }
@@ -364,7 +355,7 @@ impl<V> HashMap<V> {
     /// let m: *HashMap<i32> = HashMap::new();
     /// defer m.free();
     /// ```
-    fn free(self: *HashMap<V>) {
+    fn free(self) {
         // Arena-allocated maps are owned by the arena; the per-keystroke
         // reset frees them in bulk, so this method is a no-op for them.
         if self.is_arena { return; }

@@ -13,7 +13,6 @@
 // mc_join_v4(s.fd, group, IpAddr::unspec_v4());   // join on the default iface
 // let r: !*UdpRecv = s.recv_from(1500);
 // ```
-
 import stdlib::net::ip::*;
 import stdlib::net::sys::*;
 

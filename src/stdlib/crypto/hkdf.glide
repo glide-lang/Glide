@@ -11,9 +11,8 @@
 // // or one-shot:
 // let key: !string = hkdf(salt, ikm, info, 32);
 // ```
-
-import stdlib::crypto::*;   // hmac_sha256 (32-byte, binary-safe)
-import stdlib::bytes::*;    // ByteBuffer
+import stdlib::crypto::*; // hmac_sha256 (32-byte, binary-safe)
+import stdlib::bytes::*; // ByteBuffer
 
 // HashLen for SHA-256.
 const HKDF_HASHLEN: i32 = 32;
@@ -24,7 +23,9 @@ pub fn hkdf_extract(salt: string, ikm: string) -> string {
     let mut s: string = salt;
     if s.len() == 0 {
         let bb: *ByteBuffer = ByteBuffer::new();
-        for let i: i32 = 0; i < HKDF_HASHLEN; i++ { bb.push(0 as u8); }
+        for let i: i32 = 0; i < HKDF_HASHLEN; i++ {
+            bb.push(0 as u8);
+        }
         s = bb.to_string();
         bb.free();
     }

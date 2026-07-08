@@ -17,9 +17,9 @@
 //
 // Use `@logged` for more detail (args and return value), or `@trace(info)`
 // to pick a different level. Defaults to debug.
-
 import bootstrap::syntax::ast::*;
 import bootstrap::syntax::interp::*;
+
 // NB: no `import stdlib::log` — these proc-macros only build AST (by
 // name), so they don't depend on the log runtime. Keeping them
 // independent lets `log.glide` import THIS module without a cycle, so a
@@ -45,7 +45,6 @@ fn _wrap_with_logging(s: *Stmt, with_args: bool) -> *Vector<Stmt> {
     let user_params: *Vector<Param> = s.fn_params;
     let user_ret_ty: *Type = s.fn_ret_ty;
     let user_body: *Vector<Stmt> = s.fn_body;
-
     // Resolve level. Defaults to debug; arg overrides.
     let mut level_name: string = "debug";
     if s.attrs != null {
@@ -60,17 +59,13 @@ fn _wrap_with_logging(s: *Stmt, with_args: bool) -> *Vector<Stmt> {
             }
         }
     }
-
     let out: *Vector<Stmt> = Vector::new();
-
     // 1) Emit the renamed user fn with the original body.
     let renamed: string = "_user_".concat(user_name);
     let user_fn: *Stmt = stmt_fn(renamed, user_params, user_ret_ty, user_body, 0, 0);
     out.push(*user_fn);
-
     // 2) Build the wrapper body.
     let wrapper_body: *Vector<Stmt> = Vector::new();
-
     // log entry line. `@trace` (with_args=false) is a bare flow marker
     // (`> name`); `@logged` (with_args=true) interpolates the actual
     // argument values (`> name(4, 6)`).
@@ -81,24 +76,19 @@ fn _wrap_with_logging(s: *Stmt, with_args: bool) -> *Vector<Stmt> {
         entry_msg = expr_string("> ".concat(user_name), 0, 0);
     }
     wrapper_body.push(*_call_log(level_name, entry_msg));
-
     // Start the duration timer (only `@logged` measures + reports time).
     // `let __log_t0: i64 = stdlib::log::trace_now_ns();`
     if with_args {
-        let now_call: *Expr = expr_call(
-            expr_path("stdlib::log", "trace_now_ns", 0, 0), Vector::new());
+        let now_call: *Expr = expr_call(expr_path("stdlib::log", "trace_now_ns", 0, 0), Vector::new());
         wrapper_body.push(*stmt_let_unsafe("__log_t0", ty_named("i64"), now_call, false, 0, 0));
     }
-
     // Build args list for forwarding call.
     let call_args: *Vector<Expr> = Vector::new();
     for let i: i32 = 0; i < user_params.len(); i++ {
         let p: Param = user_params.get(i);
         call_args.push(*expr_ident_unsafe(p.name, 0, 0));
     }
-    let inner_call: *Expr = expr_call(
-        expr_ident_unsafe(renamed, 0, 0), call_args);
-
+    let inner_call: *Expr = expr_call(expr_ident_unsafe(renamed, 0, 0), call_args);
     // Void vs returning fn.
     let returns_value: bool = user_ret_ty != null;
     if returns_value {
@@ -121,7 +111,6 @@ fn _wrap_with_logging(s: *Stmt, with_args: bool) -> *Vector<Stmt> {
         }
         wrapper_body.push(*_call_log(level_name, exit_msg));
     }
-
     let wrapper_fn: *Stmt = stmt_fn(user_name, user_params, user_ret_ty, wrapper_body, 0, 0);
     out.push(*wrapper_fn);
     return out;
@@ -151,9 +140,7 @@ fn _build_entry_with_args(name: string, params: *Vector<Param>) -> *Expr {
 fn _build_exit_logged(name: string, returns_value: bool) -> *Expr {
     let since_args: *Vector<Expr> = Vector::new();
     since_args.push(*expr_ident_unsafe("__log_t0", 0, 0));
-    let since_call: *Expr = expr_call(
-        expr_path("stdlib::log", "trace_since_str", 0, 0), since_args);
-
+    let since_call: *Expr = expr_call(expr_path("stdlib::log", "trace_since_str", 0, 0), since_args);
     let fmt_args: *Vector<Expr> = Vector::new();
     if returns_value {
         fmt_args.push(*expr_string("< ".concat(name).concat(" -> {} ({})"), 0, 0));
@@ -171,16 +158,15 @@ fn _call_log(level_name: string, msg: *Expr) -> *Stmt {
     let fn_name: string = _log_fn_for(level_name);
     let args: *Vector<Expr> = Vector::new();
     args.push(*msg);
-    let call: *Expr = expr_call(
-        expr_ident_unsafe(fn_name, 0, 0), args);
+    let call: *Expr = expr_call(expr_ident_unsafe(fn_name, 0, 0), args);
     return stmt_expr(call);
 }
 
 fn _log_fn_for(level: string) -> string {
     if level.eq("trace") { return "trace"; }
     if level.eq("debug") { return "debug"; }
-    if level.eq("info")  { return "info"; }
-    if level.eq("warn")  { return "warn"; }
+    if level.eq("info") { return "info"; }
+    if level.eq("warn") { return "warn"; }
     if level.eq("error") { return "error"; }
     if level.eq("fatal") { return "fatal"; }
     return "debug";
@@ -201,17 +187,34 @@ fn _log_fn_for(level: string) -> string {
 // to `info(format!(fmt, args…))`, so the level fns must be in scope —
 // `import stdlib::log::*;` brings both the fns and these macros.
 @proc_macro(trace)
-fn impl_m_trace(args: *Vector<Expr>) -> *Vector<Stmt> { return _log_macro(args, "trace"); }
+fn impl_m_trace(args: *Vector<Expr>) -> *Vector<Stmt> {
+    return _log_macro(args, "trace");
+}
+
 @proc_macro(debug)
-fn impl_m_debug(args: *Vector<Expr>) -> *Vector<Stmt> { return _log_macro(args, "debug"); }
+fn impl_m_debug(args: *Vector<Expr>) -> *Vector<Stmt> {
+    return _log_macro(args, "debug");
+}
+
 @proc_macro(info)
-fn impl_m_info(args: *Vector<Expr>)  -> *Vector<Stmt> { return _log_macro(args, "info"); }
+fn impl_m_info(args: *Vector<Expr>) -> *Vector<Stmt> {
+    return _log_macro(args, "info");
+}
+
 @proc_macro(warn)
-fn impl_m_warn(args: *Vector<Expr>)  -> *Vector<Stmt> { return _log_macro(args, "warn"); }
+fn impl_m_warn(args: *Vector<Expr>) -> *Vector<Stmt> {
+    return _log_macro(args, "warn");
+}
+
 @proc_macro(error)
-fn impl_m_error(args: *Vector<Expr>) -> *Vector<Stmt> { return _log_macro(args, "error"); }
+fn impl_m_error(args: *Vector<Expr>) -> *Vector<Stmt> {
+    return _log_macro(args, "error");
+}
+
 @proc_macro(fatal)
-fn impl_m_fatal(args: *Vector<Expr>) -> *Vector<Stmt> { return _log_macro(args, "fatal"); }
+fn impl_m_fatal(args: *Vector<Expr>) -> *Vector<Stmt> {
+    return _log_macro(args, "fatal");
+}
 
 // Expand `<level>!(fmt, args…)` to the statement `<level>(format!(fmt, args…))`.
 // The call args are forwarded verbatim into a `format!` macro node, which

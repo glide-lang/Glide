@@ -6,9 +6,7 @@ fn _b64_char(idx: i32) -> string {
         c = 97 + (idx - 26);
     } else if idx < 62 {
         c = 48 + (idx - 52);
-    } else if idx == 62 {
-        c = 43;
-    }
+    } else if idx == 62 { c = 43; }
     return (c as char).to_string();
 }
 
@@ -42,11 +40,10 @@ pub fn b64_encode(s: string) -> string {
         let have2: bool = i + 2 < n;
         if have1 { b1 = s.at(i + 1).to_int(); }
         if have2 { b2 = s.at(i + 2).to_int(); }
-
         out = out.concat(_b64_char(b0 >> 2));
-        out = out.concat(_b64_char(((b0 & 3) << 4) | (b1 >> 4)));
+        out = out.concat(_b64_char((b0 & 3) << 4 | b1 >> 4));
         if have1 {
-            out = out.concat(_b64_char(((b1 & 15) << 2) | (b2 >> 6)));
+            out = out.concat(_b64_char((b1 & 15) << 2 | b2 >> 6));
         } else {
             out = out.concat("=");
         }
@@ -55,10 +52,8 @@ pub fn b64_encode(s: string) -> string {
         } else {
             out = out.concat("=");
         }
-
         i = i + 3;
     }
-
     return out;
 }
 
@@ -90,9 +85,7 @@ pub fn b64_decode(s: string) -> !string {
         }
         i = i + 1;
     }
-
     if nonpad % 4 == 1 { return err("invalid base64 length"); }
-
     let mut out: string = "";
     i = 0;
     while i < nonpad {
@@ -104,13 +97,10 @@ pub fn b64_decode(s: string) -> !string {
         let have3: bool = i + 3 < nonpad;
         if have2 { v2 = _b64_value(s.at(i + 2).to_int()); }
         if have3 { v3 = _b64_value(s.at(i + 3).to_int()); }
-
-        out = out.concat((((v0 << 2) | (v1 >> 4)) as char).to_string());
-        if have2 { out = out.concat(((((v1 & 15) << 4) | (v2 >> 2)) as char).to_string()); }
-        if have3 { out = out.concat(((((v2 & 3) << 6) | v3) as char).to_string()); }
-
+        out = out.concat(((v0 << 2 | v1 >> 4) as char).to_string());
+        if have2 { out = out.concat((((v1 & 15) << 4 | v2 >> 2) as char).to_string()); }
+        if have3 { out = out.concat((((v2 & 3) << 6 | v3) as char).to_string()); }
         i = i + 4;
     }
-
     return ok(out);
 }

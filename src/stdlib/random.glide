@@ -4,10 +4,11 @@
 //
 // Seed deterministically (via `Rng::with_seed`) for reproducible runs,
 // or from the monotonic clock (`Rng::from_clock`) for "random enough".
-
 extern fn now_ns() -> i64;
 
-pub struct Rng { state: i64 }
+pub struct Rng {
+    state: i64,
+}
 
 impl Rng {
     /// Construct an `Rng` with a known starting state. Same seed always
@@ -28,7 +29,7 @@ impl Rng {
         // are 32-bit and silently wrap if you write the full value.
         if seed == 0 {
             let one: u64 = 1;
-            r.state = ((one << 63) | (one << 31) | one) as i64;
+            r.state = (one << 63 | one << 31 | one) as i64;
         } else {
             r.state = seed;
         }
@@ -43,11 +44,15 @@ impl Rng {
     /// let r* = Rng::from_clock();
     /// for i in 0..5 { println!(r.range(1, 7)); }   // d6 rolls
     /// ```
-    pub fn from_clock() -> *Rng { return Rng::with_seed(now_ns()); }
+    pub fn from_clock() -> *Rng {
+        return Rng::with_seed(now_ns());
+    }
 
     /// Release the `Rng`. Called automatically for a `let r* = …`
     /// binding, so you rarely write it by hand.
-    pub fn free(self: *Rng) { free(self as *void); }
+    pub fn free(self) {
+        free(self as *void);
+    }
 
     /// Next raw 64-bit value. Wraps. Use this when you want all 64 bits
     /// of entropy (hashing, jitter); for ranged ints prefer `range`.
@@ -55,17 +60,17 @@ impl Rng {
     /// ```glide
     /// let raw: i64 = r.next_i64();
     /// ```
-    pub fn next_i64(self: *Rng) -> i64 {
+    pub fn next_i64(self) -> i64 {
         let mut x: u64 = self.state as u64;
-        x = x ^ (x << 13);
-        x = x ^ (x >> 7);
-        x = x ^ (x << 17);
+        x = x ^ x << 13;
+        x = x ^ x >> 7;
+        x = x ^ x << 17;
         self.state = x as i64;
         // Unsigned so the xorshift shifts + the mixing multiply wrap cleanly
         // (defined) instead of tripping zig's signed-overflow trap. Multiplier
         // built piecewise so the 32-bit literals stay in range.
         let one: u64 = 1;
-        let mul: u64 = ((one << 50) | (one << 33) | (one << 17) | one) | 1;
+        let mul: u64 = one << 50 | one << 33 | one << 17 | one | 1;
         return (x * mul) as i64;
     }
 
@@ -76,7 +81,7 @@ impl Rng {
     /// ```glide
     /// let n: i32 = r.next_int();        // 0 .. 2^31-1
     /// ```
-    pub fn next_int(self: *Rng) -> i32 {
+    pub fn next_int(self) -> i32 {
         let v: i64 = self.next_i64();
         let one: i64 = 1;
         let mask: i64 = (one << 31) - 1;
@@ -91,10 +96,10 @@ impl Rng {
     /// let dice: i32 = r.range(1, 7);    // d6 → 1..=6
     /// let pct:  i32 = r.range(0, 100);  // 0..=99
     /// ```
-    pub fn range(self: *Rng, lo: i32, hi: i32) -> i32 {
+    pub fn range(self, lo: i32, hi: i32) -> i32 {
         if hi <= lo { return lo; }
         let span: i32 = hi - lo;
-        return lo + (self.next_int() % span);
+        return lo + self.next_int() % span;
     }
 
     /// Uniform float in `[0.0, 1.0)`. Built from the upper 53 bits so
@@ -105,14 +110,14 @@ impl Rng {
     /// let p: f64 = r.next_f64();
     /// if p < 0.1 { /* 10% branch */ }
     /// ```
-    pub fn next_f64(self: *Rng) -> f64 {
+    pub fn next_f64(self) -> f64 {
         let v: i64 = self.next_i64();
         // 53-bit mantissa mask, built as `(1 << 53) - 1` to stay inside
         // i32 literal range at every intermediate step.
         let one: i64 = 1;
         let mask: i64 = (one << 53) - 1;
-        let bits: i64 = (v >> 11) & mask;
-        return (bits as f64) / 9007199254740992.0;
+        let bits: i64 = v >> 11 & mask;
+        return bits as f64 / 9007199254740992.0;
     }
 
     /// Coin flip — returns `true` with probability ~0.5.
@@ -120,5 +125,7 @@ impl Rng {
     /// ```glide
     /// if r.next_bool() { println!("heads"); } else { println!("tails"); }
     /// ```
-    pub fn next_bool(self: *Rng) -> bool { return (self.next_i64() & 1) == 1; }
+    pub fn next_bool(self) -> bool {
+        return (self.next_i64() & 1) == 1;
+    }
 }

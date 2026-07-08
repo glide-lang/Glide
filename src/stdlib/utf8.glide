@@ -14,7 +14,6 @@
 // let b: *ByteBuffer = ByteBuffer::from_string("héllo");
 // let s: string = String::from_utf8(b)?;     // validated
 // ```
-
 import stdlib::bytes::*;
 
 // Heap-copies `n` bytes from `buf` into a fresh NUL-terminated string. The
@@ -36,9 +35,7 @@ impl String {
     /// let s: string = String::from_utf8(b)?;   // "héllo"
     /// ```
     pub fn from_utf8(b: *ByteBuffer) -> !string {
-        if _utf8_first_bad(b.data, b.len) >= 0 {
-            return err("invalid utf-8");
-        }
+        if _utf8_first_bad(b.data, b.len) >= 0 { return err("invalid utf-8"); }
         return ok(__glide_string_from_buf(b.data as *void, b.len));
     }
 
@@ -97,9 +94,7 @@ fn _utf8_seq_len(data: *u8, len: i32, i: i32) -> i32 {
         return 0;
     }
     if b0 >= 224 && b0 <= 239 {
-        if i + 2 < len && _is_cont(data[i + 1] as i32) && _is_cont(data[i + 2] as i32) {
-            return 3;
-        }
+        if i + 2 < len && _is_cont(data[i + 1] as i32) && _is_cont(data[i + 2] as i32) { return 3; }
         return 0;
     }
     if b0 >= 240 && b0 <= 244 {

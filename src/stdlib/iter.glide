@@ -18,17 +18,17 @@
 // All combinators take fn pointers, not closures-with-capture (Sprint 3
 // deferred). Define top-level `fn name(...) { ... }` or use anonymous
 // fns without capturing outer vars: `fn(x: int) -> int { return x + 1; }`.
-
 pub trait Iterator {
     type Item;
-    fn next(self: *Self) -> ?Self::Item;
+    fn next(self) -> ?Self::Item;
 }
 
 // Plug VecIter (defined in builtins/vector.glide) into the trait so any
 // `fn f<I: Iterator>(it: *I)` accepts `v.iter()` after this import.
 impl<T> Iterator for VecIter<T> {
     type Item = T;
-    fn next(self: *VecIter<T>) -> ?T {
+
+    fn next(self) -> ?T {
         if self.idx >= self.vec.len { return none(); }
         let v: T = self.vec.data[self.idx];
         self.idx = self.idx + 1;
@@ -84,7 +84,9 @@ pub fn iter_take<T>(v: *Vector<T>, n: i32) -> *Vector<T> {
     let mut limit: i32 = n;
     if limit > v.len() { limit = v.len(); }
     if limit < 0 { limit = 0; }
-    for let i: i32 = 0; i < limit; i++ { out.push(v.get(i)); }
+    for let i: i32 = 0; i < limit; i++ {
+        out.push(v.get(i));
+    }
     return out;
 }
 
@@ -98,7 +100,9 @@ pub fn iter_skip<T>(v: *Vector<T>, n: i32) -> *Vector<T> {
     let out: *Vector<T> = Vector::new();
     let mut start: i32 = n;
     if start < 0 { start = 0; }
-    for let i: i32 = start; i < v.len(); i++ { out.push(v.get(i)); }
+    for let i: i32 = start; i < v.len(); i++ {
+        out.push(v.get(i));
+    }
     return out;
 }
 
@@ -132,7 +136,10 @@ pub fn iter_skip_while<T>(v: *Vector<T>, p: fn(T) -> bool) -> *Vector<T> {
     for let i: i32 = 0; i < v.len(); i++ {
         let item: T = v.get(i);
         if skipping {
-            if !p(item) { skipping = false; out.push(item); }
+            if !p(item) {
+                skipping = false;
+                out.push(item);
+            }
         } else {
             out.push(item);
         }
@@ -166,7 +173,9 @@ pub fn iter_fold<T, U>(v: *Vector<T>, init: U, f: fn(U, T) -> U) -> U {
 /// ```glide
 /// iter_count(iter_range(0, 5));   // 5
 /// ```
-pub fn iter_count<T>(v: *Vector<T>) -> i32 { return v.len(); }
+pub fn iter_count<T>(v: *Vector<T>) -> i32 {
+    return v.len();
+}
 
 /// `true` if any element matches `p`. Short-circuits on first hit.
 ///
@@ -227,7 +236,9 @@ pub fn iter_find<T>(v: *Vector<T>, p: fn(T) -> bool) -> ?T {
 /// ```
 pub fn iter_sum_int(v: *Vector<i32>) -> i32 {
     let mut acc: i32 = 0;
-    for let i: i32 = 0; i < v.len(); i++ { acc = acc + v.get(i); }
+    for let i: i32 = 0; i < v.len(); i++ {
+        acc = acc + v.get(i);
+    }
     return acc;
 }
 
@@ -279,7 +290,10 @@ pub fn iter_min_int(v: *Vector<i32>) -> ?i32 {
 pub fn iter_range(start: i32, end: i32) -> *Vector<i32> {
     let out: *Vector<i32> = Vector::new();
     let mut i: i32 = start;
-    while i < end { out.push(i); i = i + 1; }
+    while i < end {
+        out.push(i);
+        i = i + 1;
+    }
     return out;
 }
 
@@ -295,7 +309,10 @@ pub fn iter_range_step(start: i32, end: i32, step: i32) -> *Vector<i32> {
     let out: *Vector<i32> = Vector::new();
     if step <= 0 { return out; }
     let mut i: i32 = start;
-    while i < end { out.push(i); i = i + step; }
+    while i < end {
+        out.push(i);
+        i = i + step;
+    }
     return out;
 }
 
@@ -308,6 +325,8 @@ pub fn iter_range_step(start: i32, end: i32, step: i32) -> *Vector<i32> {
 /// ```
 pub fn iter_repeat<T>(value: T, n: i32) -> *Vector<T> {
     let out: *Vector<T> = Vector::new();
-    for let i: i32 = 0; i < n; i++ { out.push(value); }
+    for let i: i32 = 0; i < n; i++ {
+        out.push(value);
+    }
     return out;
 }

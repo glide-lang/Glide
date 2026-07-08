@@ -8,38 +8,43 @@
 //   record = type || 0x0303 || len || explicit_nonce(8) || ciphertext || tag
 //
 // The explicit nonce here is the 8-byte record sequence number.
-
 import stdlib::crypto::aes_gcm::*;
 import stdlib::bytes::*;
 
-fn _t12b(s: string, i: i32) -> i32 { return s.at(i).to_int() & 255; }
+fn _t12b(s: string, i: i32) -> i32 {
+    return s.at(i).to_int() & 255;
+}
 
 // 8-byte big-endian sequence number.
 fn _seq8(seq: u64) -> string {
     let bb: *ByteBuffer = ByteBuffer::new();
     for let i: i32 = 0; i < 8; i++ {
         let sh: i32 = (7 - i) * 8;
-        bb.push(((seq >> sh) & (255 as u64)) as u8);
+        bb.push((seq >> sh & 255 as u64) as u8);
     }
-    let s: string = bb.to_string(); bb.free(); return s;
+    let s: string = bb.to_string();
+    bb.free();
+    return s;
 }
+
 fn _recu16(n: i32) -> string {
     let bb: *ByteBuffer = ByteBuffer::new();
-    bb.push(((n >> 8) & 255) as u8); bb.push((n & 255) as u8);
-    let s: string = bb.to_string(); bb.free(); return s;
+    bb.push((n >> 8 & 255) as u8);
+    bb.push((n & 255) as u8);
+    let s: string = bb.to_string();
+    bb.free();
+    return s;
 }
 
 /// Seal `plaintext` (of `content_type`) into a TLS 1.2 AES-GCM record.
 /// `write_iv` is the 4-byte implicit IV; `seq` the record sequence number.
-pub fn tls12_seal(key: string, write_iv: string, seq: u64,
-                  content_type: i32, plaintext: string) -> !string {
+pub fn tls12_seal(key: string, write_iv: string, seq: u64, content_type: i32, plaintext: string) -> !string {
     let explicit: string = _seq8(seq);
-    let nonce: string = write_iv.concat(explicit);          // 12 bytes
-    let aad: string = _seq8(seq).concat(((content_type & 255) as char).to_string())
-        .concat(_recu16(0x0303)).concat(_recu16(plaintext.len()));
+    let nonce: string = write_iv.concat(explicit); // 12 bytes
+    let aad: string = _seq8(seq).concat(((content_type & 255) as char).to_string()).concat(_recu16(0x0303)).concat(_recu16(plaintext.len()));
     let ct: !string = aes_gcm_encrypt(key, nonce, plaintext, aad);
     if !ct.is_ok() { return err(ct.unwrap_err()); }
-    let body: string = explicit.concat(ct.unwrap());             // explicit_nonce || ct || tag
+    let body: string = explicit.concat(ct.unwrap()); // explicit_nonce || ct || tag
     let rec: string = ((content_type & 255) as char).to_string().concat(_recu16(0x0303)).concat(_recu16(body.len())).concat(body);
     return ok(rec);
 }
@@ -54,14 +59,13 @@ pub struct Tls12Plain {
 pub fn tls12_open(key: string, write_iv: string, seq: u64, record: string) -> !*Tls12Plain {
     if record.len() < 5 + 8 + 16 { return err("tls12: record too short"); }
     let ctype: i32 = _t12b(record, 0);
-    let len: i32 = (_t12b(record, 3) << 8) | _t12b(record, 4);
+    let len: i32 = _t12b(record, 3) << 8 | _t12b(record, 4);
     let body: string = record.substring(5, 5 + len);
     let explicit: string = body.substring(0, 8);
-    let ct: string = body.substring(8, body.len());          // ciphertext || tag
+    let ct: string = body.substring(8, body.len()); // ciphertext || tag
     let nonce: string = write_iv.concat(explicit);
     let ptlen: i32 = ct.len() - 16;
-    let aad: string = _seq8(seq).concat(((ctype & 255) as char).to_string())
-        .concat(_recu16(0x0303)).concat(_recu16(ptlen));
+    let aad: string = _seq8(seq).concat(((ctype & 255) as char).to_string()).concat(_recu16(0x0303)).concat(_recu16(ptlen));
     let pt: !string = aes_gcm_decrypt(key, nonce, ct, aad);
     if !pt.is_ok() { return err(pt.unwrap_err()); }
     let out: *Tls12Plain = malloc(sizeof(Tls12Plain)) as *Tls12Plain;

@@ -27,7 +27,6 @@
 //
 // // Pet now has from_json / to_json, ready for json_respond / Json<Pet>.
 // ```
-
 import bootstrap::syntax::ast::*;
 import bootstrap::syntax::interp::*;
 // The expansion emits `impl JsonBind for <Struct>`, whose trait + JsonValue
@@ -58,27 +57,23 @@ fn derive_json_bind(s: *Stmt) -> *Vector<Stmt> {
     let methods: *Vector<Stmt> = Vector::new();
     methods.push(*_emit_from_json(s));
     methods.push(*_emit_to_json(s));
-
     let target: *Type = ty_named(s.name);
     let impl_stmt: *Stmt = stmt_impl_trait(target, "JsonBind", methods, 0, 0);
-
     let out: *Vector<Stmt> = Vector::new();
     out.push(*impl_stmt);
     return out;
 }
 
 // ---- from_json --------------------------------------------------------
-
 fn _emit_from_json(s: *Stmt) -> *Stmt {
     let body: *Vector<Stmt> = Vector::new();
-
     // return ok(<Struct> {
     //     f1: v.get_<t>("f1")?,
     //     f2: v.opt_<t>("f2"),
     //     ...
     // });
     let names: *Vector<string> = Vector::new();
-    let vals:  *Vector<Expr>   = Vector::new();
+    let vals: *Vector<Expr> = Vector::new();
     let n: i32 = s.struct_fields.len();
     let mut i: i32 = 0;
     while i < n {
@@ -88,12 +83,10 @@ fn _emit_from_json(s: *Stmt) -> *Stmt {
         i = i + 1;
     }
     let lit: *Expr = expr_struct_lit(s.name, names, vals, 0, 0);
-
     let ok_args: *Vector<Expr> = Vector::new();
     ok_args.push(*lit);
     let ok_call: *Expr = expr_call(expr_ident_unsafe("ok", 0, 0), ok_args);
     body.push(*stmt_return(ok_call, 0, 0));
-
     let params: *Vector<Param> = Vector::new();
     params.push(*make_param("v", ty_pointer(ty_named("JsonValue"))));
     let ret: *Type = ty_result(ty_named(s.name));
@@ -108,7 +101,6 @@ fn _field_read_expr(name: string, ty: *Type) -> *Expr {
     let v_ref: *Expr = expr_ident_unsafe("v", 0, 0);
     let key_args: *Vector<Expr> = Vector::new();
     key_args.push(*expr_string(name, 0, 0));
-
     if ty.kind == TY_OPTION {
         let suffix: string = _prim_suffix(ty.inner);
         let method: string = "opt_".concat(suffix);
@@ -120,19 +112,13 @@ fn _field_read_expr(name: string, ty: *Type) -> *Expr {
 }
 
 // ---- to_json ----------------------------------------------------------
-
 fn _emit_to_json(s: *Stmt) -> *Stmt {
     let body: *Vector<Stmt> = Vector::new();
-
     // let __out: *JsonValue = JsonValue::object();
     let out_name: string = "__jb_out";
     let no_args: *Vector<Expr> = Vector::new();
-    let obj_call: *Expr = expr_call(
-        expr_path("JsonValue", "object", 0, 0), no_args);
-    body.push(*stmt_let_unsafe(
-        out_name, ty_pointer(ty_named("JsonValue")),
-        obj_call, false, 0, 0));
-
+    let obj_call: *Expr = expr_call(expr_path("JsonValue", "object", 0, 0), no_args);
+    body.push(*stmt_let_unsafe(out_name, ty_pointer(ty_named("JsonValue")), obj_call, false, 0, 0));
     let n: i32 = s.struct_fields.len();
     let mut i: i32 = 0;
     while i < n {
@@ -140,9 +126,7 @@ fn _emit_to_json(s: *Stmt) -> *Stmt {
         body.push(*_field_write_stmt(out_name, f.name, f.ty));
         i = i + 1;
     }
-
     body.push(*stmt_return(expr_ident_unsafe(out_name, 0, 0), 0, 0));
-
     let params: *Vector<Param> = Vector::new();
     params.push(*make_param("self", ty_pointer(ty_named(s.name))));
     let ret: *Type = ty_pointer(ty_named("JsonValue"));
@@ -159,7 +143,6 @@ fn _field_write_stmt(out_name: string, name: string, ty: *Type) -> *Stmt {
     let self_ref: *Expr = expr_ident_unsafe("self", 0, 0);
     let out_ref: *Expr = expr_ident_unsafe(out_name, 0, 0);
     let self_field: *Expr = expr_member(self_ref, name);
-
     if ty.kind == TY_OPTION {
         let cond: *Expr = expr_member(self_field, "has");
         let inner_val: *Expr = expr_member(self_field, "val");
@@ -174,9 +157,7 @@ fn _field_write_stmt(out_name: string, name: string, ty: *Type) -> *Stmt {
 fn _obj_set_stmt(out_ref: *Expr, name: string, ty: *Type, val: *Expr) -> *Stmt {
     let ctor_args: *Vector<Expr> = Vector::new();
     ctor_args.push(*val);
-    let ctor: *Expr = expr_call(
-        expr_path("JsonValue", _prim_suffix(ty), 0, 0), ctor_args);
-
+    let ctor: *Expr = expr_call(expr_path("JsonValue", _prim_suffix(ty), 0, 0), ctor_args);
     let set_args: *Vector<Expr> = Vector::new();
     set_args.push(*expr_string(name, 0, 0));
     set_args.push(*ctor);
@@ -193,12 +174,17 @@ fn _prim_suffix(ty: *Type) -> string {
     if ty.kind != TY_NAMED { return ""; }
     let n: string = ty.name;
     if n.eq("string") { return "string"; }
-    if n.eq("bool")   { return "bool"; }
+    if n.eq("bool") { return "bool"; }
     // Any int width binds through the int JSON ctor/getter (the legacy `int`
     // is normalised to `i32`, so match the whole canonical family).
-    if n.eq("int") || n.eq("i8") || n.eq("i16") || n.eq("i32") || n.eq("i64")
-       || n.eq("u8") || n.eq("u16") || n.eq("u32") || n.eq("u64")
-       || n.eq("usize") || n.eq("isize") { return "int"; }
+    if n.eq("int") || n.eq("i8") || n.eq("i16") || n.eq("i32") || n.eq("i64") || n.eq("u8")
+        || n.eq("u16")
+        || n.eq("u32")
+        || n.eq("u64")
+        || n.eq("usize")
+        || n.eq("isize") {
+        return "int";
+    }
     if n.eq("f32") || n.eq("f64") || n.eq("float") { return "float"; }
     return "";
 }

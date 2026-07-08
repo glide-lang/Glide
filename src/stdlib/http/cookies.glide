@@ -18,13 +18,12 @@
 // // Subsequent requests: the jar attaches Cookie: header automatically.
 // let r: !*HttpResponse = c.get("https://api.example.com/me");
 // ```
-
 pub struct Cookie {
-    pub name:    string,
-    pub value:   string,
-    pub domain:  string,
-    pub path:    string,
-    pub secure:  bool,
+    pub name: string,
+    pub value: string,
+    pub domain: string,
+    pub path: string,
+    pub secure: bool,
     pub http_only: bool,
 }
 
@@ -77,8 +76,7 @@ impl CookieJar {
     /// let cookies: *Vector<string> = resp.headers("Set-Cookie");
     /// jar.ingest("example.com", cookies);
     /// ```
-    pub fn ingest(self: *CookieJar, request_host: string,
-                  set_cookie_lines: *Vector<string>) {
+    pub fn ingest(self, request_host: string, set_cookie_lines: *Vector<string>) {
         for let i: i32 = 0; i < set_cookie_lines.len(); i++ {
             let line: string = set_cookie_lines.get(i);
             let c: ?*Cookie = _parse_set_cookie(request_host, line);
@@ -86,7 +84,7 @@ impl CookieJar {
         }
     }
 
-    fn _add(self: *CookieJar, c: *Cookie) {
+    fn _add(self, c: *Cookie) {
         // Replace any existing cookie with the same (name, domain, path).
         for let i: i32 = 0; i < self.cookies.len(); i++ {
             let ex: *Cookie = self.cookies.get(i);
@@ -107,8 +105,7 @@ impl CookieJar {
     /// let h: string = jar.header_value("example.com", "/api", true);
     /// // h might be "session=abc123; pref=dark"
     /// ```
-    pub fn header_value(self: *CookieJar, host: string, path: string,
-                        is_secure: bool) -> string {
+    pub fn header_value(self, host: string, path: string, is_secure: bool) -> string {
         let mut out: string = "";
         for let i: i32 = 0; i < self.cookies.len(); i++ {
             let c: *Cookie = self.cookies.get(i);
@@ -130,14 +127,16 @@ impl CookieJar {
     ///     println!(c.name, "=", c.value);
     /// }
     /// ```
-    pub fn all(self: *CookieJar) -> *Vector<*Cookie> { return self.cookies; }
+    pub fn all(self) -> *Vector<*Cookie> {
+        return self.cookies;
+    }
 
     /// Forget every cookie. Useful for logout flows.
     ///
     /// ```glide
     /// jar.clear();   // log everyone out
     /// ```
-    pub fn clear(self: *CookieJar) {
+    pub fn clear(self) {
         for let i: i32 = 0; i < self.cookies.len(); i++ {
             free(self.cookies.get(i) as *void);
         }
@@ -146,7 +145,6 @@ impl CookieJar {
 }
 
 // ---- parsing ----
-
 fn _parse_set_cookie(request_host: string, raw: string) -> ?*Cookie {
     // Split on `;`. First chunk is name=value, rest are attributes.
     let parts: *Vector<string> = raw.split(";");
@@ -159,12 +157,17 @@ fn _parse_set_cookie(request_host: string, raw: string) -> ?*Cookie {
     let c: *Cookie = Cookie::new(name, value);
     c.domain = request_host;
     c.path = "/";
-
     for let i: i32 = 1; i < parts.len(); i++ {
         let attr: string = parts.get(i).trim();
         let lower: string = attr.to_lower();
-        if lower.eq("secure") { c.secure = true; continue; }
-        if lower.eq("httponly") { c.http_only = true; continue; }
+        if lower.eq("secure") {
+            c.secure = true;
+            continue;
+        }
+        if lower.eq("httponly") {
+            c.http_only = true;
+            continue;
+        }
         let aeq: i32 = attr.index_of("=");
         if aeq <= 0 { continue; }
         let k: string = attr.substring(0, aeq).trim().to_lower();
@@ -176,7 +179,10 @@ fn _parse_set_cookie(request_host: string, raw: string) -> ?*Cookie {
             c.domain = d.to_lower();
             continue;
         }
-        if k.eq("path") { c.path = v; continue; }
+        if k.eq("path") {
+            c.path = v;
+            continue;
+        }
         // Expires / Max-Age / SameSite are parsed but ignored in v1.
     }
     return some(c);

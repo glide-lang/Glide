@@ -11,6 +11,7 @@ pub struct JwtClaims {
 }
 
 extern fn __glide_jwt_now() -> i32;
+
 extern fn __glide_jwt_b64url_to_hex(s: string) -> string;
 
 c_raw! {
@@ -91,14 +92,12 @@ fn _json_int_or_zero(v: *JsonValue, key: string) -> i32 {
 // matched. A plain `.eq` short-circuits on the first difference, which is a
 // timing oracle an attacker can use to recover the expected MAC byte by byte.
 fn _ct_eq(a: string, b: string) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
+    if a.len() != b.len() { return false; }
     let n: i32 = a.len();
     let mut diff: i32 = 0;
     let mut i: i32 = 0;
     while i < n {
-        diff = diff | (a.at(i).to_int() ^ b.at(i).to_int());
+        diff = diff | a.at(i).to_int() ^ b.at(i).to_int();
         i = i + 1;
     }
     return diff == 0;
@@ -106,41 +105,18 @@ fn _ct_eq(a: string, b: string) -> bool {
 
 pub fn jwt_verify(token: string, key: string) -> !JwtClaims {
     let parts: *Vector<string> = token.split(".");
-    if parts.len() != 3 {
-        return err("400:malformed jwt");
-    }
-
+    if parts.len() != 3 { return err("400:malformed jwt"); }
     let payload_r: !string = _b64url_decode(parts.get(1));
-    if !payload_r.is_ok() {
-        return err("400:malformed jwt");
-    }
-
+    if !payload_r.is_ok() { return err("400:malformed jwt"); }
     let raw: *JsonValue = JsonValue::parse(payload_r.unwrap());
-    if raw == null || raw.kind != JSON_OBJECT {
-        return err("400:malformed jwt");
-    }
-
+    if raw == null || raw.kind != JSON_OBJECT { return err("400:malformed jwt"); }
     let sub_v: *JsonValue = raw.get("sub");
-    if sub_v == null || sub_v.kind != JSON_STRING {
-        return err("400:malformed jwt");
-    }
-
+    if sub_v == null || sub_v.kind != JSON_STRING { return err("400:malformed jwt"); }
     let signing_input: string = parts.get(0).concat(".").concat(parts.get(1));
     let expected_hex: string = hmac_sha256_hex(key, signing_input);
     let got_hex: string = __glide_jwt_b64url_to_hex(parts.get(2));
-    if !_ct_eq(got_hex, expected_hex) {
-        return err("401:bad signature");
-    }
-
+    if !_ct_eq(got_hex, expected_hex) { return err("401:bad signature"); }
     let exp: i32 = _json_int_or_zero(raw, "exp");
-    if exp != 0 && __glide_jwt_now() > exp {
-        return err("401:expired");
-    }
-
-    return ok(JwtClaims {
-        sub: sub_v.s,
-        exp: exp,
-        iat: _json_int_or_zero(raw, "iat"),
-        raw: raw,
-    });
+    if exp != 0 && __glide_jwt_now() > exp { return err("401:expired"); }
+    return ok(JwtClaims { sub: sub_v.s, exp: exp, iat: _json_int_or_zero(raw, "iat"), raw: raw });
 }

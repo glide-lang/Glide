@@ -15,13 +15,12 @@
 // let c: *HttpClient = HttpClient::new();
 // c.post(url, body, ct);
 // ```
-
 import stdlib::http::client::*;
 import stdlib::random::*;
 
 pub struct Multipart {
     boundary: string,
-    parts:    *Vector<string>,
+    parts: *Vector<string>,
 }
 
 impl Multipart {
@@ -64,7 +63,7 @@ impl Multipart {
     /// mp.add_field("user", "alice");
     /// mp.add_field("note", "hello world");
     /// ```
-    pub fn add_field(self: *Multipart, name: string, value: string) {
+    pub fn add_field(self, name: string, value: string) {
         let mut p: string = "Content-Disposition: form-data; name=\"";
         p = p.concat(name).concat("\"\r\n\r\n");
         p = p.concat(value);
@@ -78,8 +77,7 @@ impl Multipart {
     /// let bytes: string = fs_read("avatar.png");
     /// mp.add_file("avatar", "avatar.png", "image/png", bytes);
     /// ```
-    pub fn add_file(self: *Multipart, name: string, filename: string,
-                    content_type: string, data: string) {
+    pub fn add_file(self, name: string, filename: string, content_type: string, data: string) {
         let mut p: string = "Content-Disposition: form-data; name=\"";
         p = p.concat(name).concat("\"; filename=\"").concat(filename).concat("\"\r\n");
         p = p.concat("Content-Type: ").concat(content_type).concat("\r\n\r\n");
@@ -94,7 +92,7 @@ impl Multipart {
     /// let r: !*HttpResponse = HttpClient::new()
     ///     .post(url, mp.body(), mp.content_type());
     /// ```
-    pub fn content_type(self: *Multipart) -> string {
+    pub fn content_type(self) -> string {
         return "multipart/form-data; boundary=".concat(self.boundary);
     }
 
@@ -104,7 +102,7 @@ impl Multipart {
     /// let body: string = mp.body();
     /// // hand body + mp.content_type() to the HTTP client
     /// ```
-    pub fn body(self: *Multipart) -> string {
+    pub fn body(self) -> string {
         let mut out: string = "";
         for let i: i32 = 0; i < self.parts.len(); i++ {
             out = out.concat("--").concat(self.boundary).concat("\r\n");
@@ -136,20 +134,19 @@ impl Multipart {
 //   - `400:not multipart`        Content-Type isn't multipart/form-data
 //   - `400:no boundary`          Content-Type missing boundary=...
 //   - `400:malformed`            body doesn't terminate cleanly
-
 import stdlib::http::extract::*;
 import stdlib::hashmap::*;
 
 pub struct UploadedFile {
-    pub name:         string,
-    pub filename:     string,
+    pub name: string,
+    pub filename: string,
     pub content_type: string,
-    pub body:         string,
+    pub body: string,
 }
 
 pub struct MultipartForm {
     pub fields: *HashMap<string>,
-    pub files:  *Vector<UploadedFile>,
+    pub files: *Vector<UploadedFile>,
 }
 
 impl FromRequest for MultipartForm {
@@ -160,9 +157,8 @@ impl FromRequest for MultipartForm {
         }
         let boundary: string = _extract_boundary(ct);
         if boundary.len() == 0 { return err("400:no boundary"); }
-
         let fields: *HashMap<string> = HashMap::new();
-        let files:  *Vector<UploadedFile> = Vector::new();
+        let files: *Vector<UploadedFile> = Vector::new();
         let r: !i32 = _parse_parts(req.body, boundary, fields, files);
         if !r.ok { return err(r.err); }
         return ok(MultipartForm { fields: fields, files: files });
@@ -180,18 +176,14 @@ fn _extract_boundary(ct: string) -> string {
     let mut b: string = raw;
     if semi >= 0 { b = raw.substring(0, semi); }
     b = b.trim();
-    if b.len() >= 2 && b.starts_with("\"") && b.ends_with("\"") {
-        b = b.substring(1, b.len() - 1);
-    }
+    if b.len() >= 2 && b.starts_with("\"") && b.ends_with("\"") { b = b.substring(1, b.len() - 1); }
     return b;
 }
 
 // Walk the body. Each part starts with `--<boundary>\r\n`, has a
 // header block ending in `\r\n\r\n`, then the part body, then either
 // `\r\n--<boundary>` (more parts) or `\r\n--<boundary>--` (terminal).
-fn _parse_parts(body: string, boundary: string,
-                fields: *HashMap<string>,
-                files: *Vector<UploadedFile>) -> !i32 {
+fn _parse_parts(body: string, boundary: string, fields: *HashMap<string>, files: *Vector<UploadedFile>) -> !i32 {
     let sep: string = "--".concat(boundary);
     let mut pos: i32 = body.index_of(sep);
     if pos < 0 { return err("400:malformed"); }
@@ -199,12 +191,8 @@ fn _parse_parts(body: string, boundary: string,
     while pos < body.len() {
         // Optional CRLF after the boundary; if `--` follows immediately
         // it's the terminal marker.
-        if pos + 2 <= body.len() && body.substring(pos, pos + 2).eq("--") {
-            return ok(0);
-        }
-        if pos + 2 <= body.len() && body.substring(pos, pos + 2).eq("\r\n") {
-            pos = pos + 2;
-        }
+        if pos + 2 <= body.len() && body.substring(pos, pos + 2).eq("--") { return ok(0); }
+        if pos + 2 <= body.len() && body.substring(pos, pos + 2).eq("\r\n") { pos = pos + 2; }
         let head_end: i32 = _index_of_from(body, "\r\n\r\n", pos);
         if head_end < 0 { return err("400:malformed"); }
         let part_headers: string = body.substring(pos, head_end);
@@ -212,8 +200,7 @@ fn _parse_parts(body: string, boundary: string,
         let next_bound: i32 = _index_of_from(body, sep, body_start);
         if next_bound < 0 { return err("400:malformed"); }
         let mut body_end: i32 = next_bound;
-        if body_end >= 2 &&
-           body.substring(body_end - 2, body_end).eq("\r\n") {
+        if body_end >= 2 && body.substring(body_end - 2, body_end).eq("\r\n") {
             body_end = body_end - 2;
         }
         let part_body: string = body.substring(body_start, body_end);
@@ -224,9 +211,7 @@ fn _parse_parts(body: string, boundary: string,
 }
 
 // Decide whether the part is a plain field or a file upload.
-fn _ingest_part(headers: string, body: string,
-                fields: *HashMap<string>,
-                files: *Vector<UploadedFile>) {
+fn _ingest_part(headers: string, body: string, fields: *HashMap<string>, files: *Vector<UploadedFile>) {
     let cd: string = _header_lookup(headers, "Content-Disposition");
     if cd.len() == 0 { return; }
     let name: string = _quoted_param(cd, "name");
@@ -238,12 +223,7 @@ fn _ingest_part(headers: string, body: string,
     }
     let mut ctype: string = _header_lookup(headers, "Content-Type");
     if ctype.len() == 0 { ctype = "application/octet-stream"; }
-    files.push(UploadedFile {
-        name: name,
-        filename: filename,
-        content_type: ctype,
-        body: body,
-    });
+    files.push(UploadedFile { name: name, filename: filename, content_type: ctype, body: body });
 }
 
 fn _header_lookup(block: string, name: string) -> string {
@@ -256,9 +236,7 @@ fn _header_lookup(block: string, name: string) -> string {
         let colon: i32 = line.index_of(":");
         if colon < 0 { continue; }
         let n: string = line.substring(0, colon).trim().to_lower();
-        if n.eq(want) {
-            return line.substring(colon + 1, line.len()).trim();
-        }
+        if n.eq(want) { return line.substring(colon + 1, line.len()).trim(); }
     }
     return "";
 }

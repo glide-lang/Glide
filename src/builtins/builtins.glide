@@ -123,7 +123,7 @@ extern fn make_chan(cap: i32);
 /// Structs without a `Display` impl fall back to an automatic
 /// `Name { field: value, ... }` rendering, so printing always works.
 pub trait Display {
-    fn to_string(self: *Self) -> string;
+    fn to_string(self) -> string;
 }
 
 // ---- Operator traits -----------------------------------------------------
@@ -132,7 +132,7 @@ pub trait Display {
 /// automatically, so you only implement `Eq` to override that or to bound a
 /// generic (`fn contains<T: Eq>(...)`).
 pub trait Eq {
-    fn eq(self: *Self, other: *Self) -> bool;
+    fn eq(self, other: *Self) -> bool;
 }
 
 /// Ordering for `<` `<=` `>` `>=`. `cmp` returns a negative / zero / positive
@@ -149,32 +149,32 @@ pub trait Eq {
 /// if v1 < v2 { ... }
 /// ```
 pub trait Ord {
-    fn cmp(self: *Self, other: *Self) -> i32;
+    fn cmp(self, other: *Self) -> i32;
 }
 
 /// `+` operator. `a + b` lowers to `a.add(b)` and takes its return type.
 pub trait Add {
-    fn add(self: *Self, other: *Self) -> *Self;
+    fn add(self, other: *Self) -> *Self;
 }
 
 /// `-` operator (`a - b` -> `a.sub(b)`).
 pub trait Sub {
-    fn sub(self: *Self, other: *Self) -> *Self;
+    fn sub(self, other: *Self) -> *Self;
 }
 
 /// `*` operator (`a * b` -> `a.mul(b)`).
 pub trait Mul {
-    fn mul(self: *Self, other: *Self) -> *Self;
+    fn mul(self, other: *Self) -> *Self;
 }
 
 /// `/` operator (`a / b` -> `a.div(b)`).
 pub trait Div {
-    fn div(self: *Self, other: *Self) -> *Self;
+    fn div(self, other: *Self) -> *Self;
 }
 
 /// `%` operator (`a % b` -> `a.rem(b)`).
 pub trait Rem {
-    fn rem(self: *Self, other: *Self) -> *Self;
+    fn rem(self, other: *Self) -> *Self;
 }
 
 // ---- C runtime escape hatches --------------------------------------------
@@ -614,26 +614,39 @@ c_raw! {
 pub extern fn __glide_panic(msg: string, file: string, line: i32);
 
 pub extern fn __glide_palloc(size: i32) -> *void;
+
 // Free a single owned SDS string (arena/literal strings are a no-op thanks to
 // the owned bit). Declared here so the compiler-inserted Vector<string>
 // element-drop helper (_vec_str_drop_elems, vector.glide) can call it; the
 // definition is the `static` runtime primitive in stdlib.c.
 pub extern fn __glide_string_free(s: string);
+
 // Turn OFF the process-lifetime string bump arena (see __glide_palloc). The
 // long-running LSP calls this at startup so its per-keystroke arena reset keeps
 // working; build / run / user programs leave it on for the faster, compacter
 // string allocation.
 pub extern fn __glide_disable_run_bump();
+
 pub extern fn __glide_palloc_make() -> *void;
+
 pub extern fn __glide_palloc_free(handle: *void);
+
 pub extern fn __glide_palloc_active() -> i32;
+
 pub extern fn __glide_palloc_get() -> *void;
+
 pub extern fn __glide_palloc_set(a: *void);
+
 pub extern fn __glide_palloc_owns(p: *void) -> i32;
+
 pub extern fn __glide_pfree(p: *void);
+
 pub extern fn __glide_palloc_total_bytes() -> i32;
+
 pub extern fn __glide_palloc_chunks() -> i32;
+
 pub extern fn __glide_proc_rss_mb() -> i32;
+
 pub extern fn __glide_proc_rss_bytes() -> i64;
 
 /// Resident-set size of the current process in megabytes (1 MiB =
@@ -642,7 +655,9 @@ pub extern fn __glide_proc_rss_bytes() -> i64;
 /// ```glide
 /// println!("rss:", mem_rss_mb(), "MB");
 /// ```
-pub fn mem_rss_mb() -> i32 { return __glide_proc_rss_mb(); }
+pub fn mem_rss_mb() -> i32 {
+    return __glide_proc_rss_mb();
+}
 
 /// Resident-set size of the current process in bytes. Returns -1 if
 /// the platform doesn't expose it. Useful for per-task memory math
@@ -652,4 +667,6 @@ pub fn mem_rss_mb() -> i32 { return __glide_proc_rss_mb(); }
 /// let rss: i64 = mem_rss_bytes();
 /// println!("per-task:", rss / (n as i64), "bytes");
 /// ```
-pub fn mem_rss_bytes() -> i64 { return __glide_proc_rss_bytes(); }
+pub fn mem_rss_bytes() -> i64 {
+    return __glide_proc_rss_bytes();
+}

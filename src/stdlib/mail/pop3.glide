@@ -16,12 +16,11 @@
 // }
 // p.quit();
 // ```
-
 import stdlib::net::tcp::*;
 import stdlib::net::tls::*;
 
 pub struct Pop3MsgInfo {
-    pub idx:  i32,
+    pub idx: i32,
     pub size: i32,
 }
 
@@ -53,22 +52,29 @@ impl Pop3Session {
         s.tls = null as *TlsStream;
         s.is_tls = use_tls;
         s.rx_buf = "";
-
         if use_tls {
             let cfg: *TlsConfig = TlsConfig::client();
             let r: !*TlsStream = TlsStream::connect(host, port, cfg);
             cfg.free();
-            if !r.ok { free(s as *void); return err(r.err); }
+            if !r.ok {
+                free(s as *void);
+                return err(r.err);
+            }
             s.tls = r.val;
         } else {
             let r: !*TcpStream = TcpStream::connect_host(host, port);
-            if !r.ok { free(s as *void); return err(r.err); }
+            if !r.ok {
+                free(s as *void);
+                return err(r.err);
+            }
             s.tcp = r.val;
         }
-
         // Banner: "+OK ..."
         let b: !string = s._read_line();
-        if !b.ok { s.close(); return err(b.err); }
+        if !b.ok {
+            s.close();
+            return err(b.err);
+        }
         if !b.val.starts_with("+OK") {
             s.close();
             return err("pop3: bad banner: ".concat(b.val));
@@ -83,7 +89,7 @@ impl Pop3Session {
     /// let r: !i32 = session.login("me@example.com", "app-password");
     /// if !r.ok { eprintln(r.err); }
     /// ```
-    pub fn login(self: *Pop3Session, user: string, pass: string) -> !i32 {
+    pub fn login(self, user: string, pass: string) -> !i32 {
         let _u: !string = self._cmd("USER ".concat(user));
         if !_u.ok { return err(_u.err); }
         let _p: !string = self._cmd("PASS ".concat(pass));
@@ -97,7 +103,7 @@ impl Pop3Session {
     /// let r: !*Pop3MsgInfo = session.stat();
     /// if r.ok { println!(r.val.idx, "msgs,", r.val.size, "bytes"); }
     /// ```
-    pub fn stat(self: *Pop3Session) -> !*Pop3MsgInfo {
+    pub fn stat(self) -> !*Pop3MsgInfo {
         let r: !string = self._cmd("STAT");
         if !r.ok { return err(r.err); }
         // "+OK n octets"
@@ -124,13 +130,11 @@ impl Pop3Session {
     ///     }
     /// }
     /// ```
-    pub fn list(self: *Pop3Session) -> !*Vector<*Pop3MsgInfo> {
+    pub fn list(self) -> !*Vector<*Pop3MsgInfo> {
         let _w: !i32 = self._write("LIST\r\n");
         let head: !string = self._read_line();
         if !head.ok { return err(head.err); }
-        if !head.val.starts_with("+OK") {
-            return err("pop3: LIST: ".concat(head.val));
-        }
+        if !head.val.starts_with("+OK") { return err("pop3: LIST: ".concat(head.val)); }
         let body: !string = self._read_multiline();
         if !body.ok { return err(body.err); }
         let out: *Vector<*Pop3MsgInfo> = Vector::new();
@@ -160,13 +164,11 @@ impl Pop3Session {
     ///     if m.ok { println!("subject:", m.val.subject); }
     /// }
     /// ```
-    pub fn retrieve(self: *Pop3Session, n: i32) -> !string {
+    pub fn retrieve(self, n: i32) -> !string {
         let _w: !i32 = self._write("RETR ".concat(_pop3_itos(n)).concat("\r\n"));
         let head: !string = self._read_line();
         if !head.ok { return err(head.err); }
-        if !head.val.starts_with("+OK") {
-            return err("pop3: RETR: ".concat(head.val));
-        }
+        if !head.val.starts_with("+OK") { return err("pop3: RETR: ".concat(head.val)); }
         return self._read_multiline();
     }
 
@@ -176,7 +178,7 @@ impl Pop3Session {
     /// session.delete(1);
     /// session.quit();   // server now removes it
     /// ```
-    pub fn delete(self: *Pop3Session, n: i32) -> !i32 {
+    pub fn delete(self, n: i32) -> !i32 {
         let r: !string = self._cmd("DELE ".concat(_pop3_itos(n)));
         if !r.ok { return err(r.err); }
         return ok(0);
@@ -188,7 +190,7 @@ impl Pop3Session {
     /// ```glide
     /// session.noop();
     /// ```
-    pub fn noop(self: *Pop3Session) -> !i32 {
+    pub fn noop(self) -> !i32 {
         let r: !string = self._cmd("NOOP");
         if !r.ok { return err(r.err); }
         return ok(0);
@@ -201,7 +203,7 @@ impl Pop3Session {
     /// session.quit();
     /// session.close();
     /// ```
-    pub fn quit(self: *Pop3Session) -> !i32 {
+    pub fn quit(self) -> !i32 {
         let r: !string = self._cmd("QUIT");
         if !r.ok { return err(r.err); }
         return ok(0);
@@ -212,25 +214,24 @@ impl Pop3Session {
     /// ```glide
     /// defer session.close();
     /// ```
-    pub fn close(self: *Pop3Session) {
+    pub fn close(self) {
         if self.is_tls && self.tls != null { self.tls.close(); }
         if !self.is_tls && self.tcp != null { self.tcp.close(); }
         free(self as *void);
     }
 
     // ---- transport helpers ----
-
-    fn _write(self: *Pop3Session, data: string) -> !i32 {
+    fn _write(self, data: string) -> !i32 {
         if self.is_tls { return self.tls.write_all(data); }
         return self.tcp.write_all(data);
     }
 
-    fn _read(self: *Pop3Session, max: i32) -> !string {
+    fn _read(self, max: i32) -> !string {
         if self.is_tls { return self.tls.read(max); }
         return self.tcp.read_str(max);
     }
 
-    fn _read_line(self: *Pop3Session) -> !string {
+    fn _read_line(self) -> !string {
         while self.rx_buf.index_of("\r\n") < 0 {
             let r: !string = self._read(4096);
             if !r.ok { return err(r.err); }
@@ -245,7 +246,7 @@ impl Pop3Session {
 
     /// Read until a line consisting solely of "." appears. Strip the
     /// terminator and unescape leading-double-dot lines.
-    fn _read_multiline(self: *Pop3Session) -> !string {
+    fn _read_multiline(self) -> !string {
         let mut out: string = "";
         while true {
             let lr: !string = self._read_line();
@@ -261,13 +262,11 @@ impl Pop3Session {
         return ok(out);
     }
 
-    fn _cmd(self: *Pop3Session, cmd: string) -> !string {
+    fn _cmd(self, cmd: string) -> !string {
         let _w: !i32 = self._write(cmd.concat("\r\n"));
         let r: !string = self._read_line();
         if !r.ok { return err(r.err); }
-        if !r.val.starts_with("+OK") {
-            return err("pop3: ".concat(r.val));
-        }
+        if !r.val.starts_with("+OK") { return err("pop3: ".concat(r.val)); }
         return ok(r.val);
     }
 }
@@ -276,7 +275,10 @@ fn _pop3_itos(n: i32) -> string {
     if n == 0 { return "0"; }
     let mut x: i32 = n;
     let mut neg: bool = false;
-    if x < 0 { neg = true; x = 0 - x; }
+    if x < 0 {
+        neg = true;
+        x = 0 - x;
+    }
     let mut s: string = "";
     while x > 0 {
         let d: i32 = x % 10;

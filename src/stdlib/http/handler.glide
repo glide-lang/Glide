@@ -22,7 +22,6 @@
 // Return shape:
 //   - `HttpResponse`        passthrough
 //   - `Json<T>`             wrapped via `IntoResponse`
-
 import bootstrap::syntax::ast::*;
 import bootstrap::syntax::interp::*;
 
@@ -51,8 +50,7 @@ import bootstrap::syntax::interp::*;
 /// - `HttpResponse`           — passthrough
 /// - `Json<T>`                — auto `.into_response()`
 @proc_attr(handler)
-@suggest_for_fnptr(HttpResponse,
-  "fn `%got_name%` has shape %got%. Annotate it with `@handler` (from stdlib::http::handler) so the macro auto-extracts typed params and wraps the return into %want_ret% — the shape `r.get(...)` needs.")
+@suggest_for_fnptr(HttpResponse, "fn `%got_name%` has shape %got%. Annotate it with `@handler` (from stdlib::http::handler) so the macro auto-extracts typed params and wraps the return into %want_ret% — the shape `r.get(...)` needs.")
 @suggest_when_got_returns(Json, HttpResponse, Result, Option, OptResult)
 fn impl_handler(s: *Stmt) -> *Vector<Stmt> {
     return _emit_handler_wrapper(s, s.name, "_user_".concat(s.name));
@@ -65,11 +63,9 @@ fn impl_handler(s: *Stmt) -> *Vector<Stmt> {
 // request. Param dispatch table is documented above.
 pub fn _emit_handler_wrapper(s: *Stmt, wrapper_name: string, renamed_name: string) -> *Vector<Stmt> {
     let out: *Vector<Stmt> = Vector::new();
-
     let user_params: *Vector<Param> = s.fn_params;
     let user_ret_ty: *Type = s.fn_ret_ty;
     let user_body: *Vector<Stmt> = s.fn_body;
-
     // Detect whether the user stamped `@leaf` on their handler. We
     // propagate that attribute to BOTH the renamed user fn and the
     // emitted wrapper — without it, the SM-fast-path http_listen_workers
@@ -80,32 +76,30 @@ pub fn _emit_handler_wrapper(s: *Stmt, wrapper_name: string, renamed_name: strin
     if s.attrs != null {
         for let ai: i32 = 0; ai < s.attrs.len(); ai++ {
             let a: Attr = s.attrs.get(ai);
-            if a.name != null && a.name.eq("leaf") { has_leaf = true; break; }
+            if a.name != null && a.name.eq("leaf") {
+                has_leaf = true;
+                break;
+            }
         }
     }
-
     // 1) Emit the renamed user fn — same params, same body, same ret.
     let user_fn: *Stmt = stmt_fn(renamed_name, user_params, user_ret_ty, user_body, 0, 0);
     if has_leaf { _attach_leaf_attr(user_fn); }
     out.push(*user_fn);
-
     // 2) Wrapper fn(*HttpRequest) -> HttpResponse.
     let wrapper_body: *Vector<Stmt> = Vector::new();
     let call_args: *Vector<Expr> = Vector::new();
-
     let mut i: i32 = 0;
     while i < user_params.len() {
         let p: Param = user_params.get(i);
         let pname: string = p.name;
         let pty: *Type = p.ty;
-
         // ---- *HttpRequest passthrough ----------------------------------
         if _is_request_ptr(pty) {
             call_args.push(*expr_ident_unsafe("req", 0, 0));
             i = i + 1;
             continue;
         }
-
         // ---- Json<T> built-in path -------------------------------------
         // Kept as a special-case (rather than going through FromRequest)
         // because the typer's static-trait-method dispatch on Json<T>
@@ -119,40 +113,29 @@ pub fn _emit_handler_wrapper(s: *Stmt, wrapper_name: string, renamed_name: strin
             let inner_ty: *Type = _json_inner(pty);
             let t_r_let_ty: *Type = ty_result(inner_ty);
             let body_let_ty: *Type = pty;
-
             // let __body_r = req.body_json();
-            let body_call: *Expr = expr_call(
-                expr_member(expr_ident_unsafe("req", 0, 0), "body_json"),
-                Vector::new());
+            let body_call: *Expr = expr_call(expr_member(expr_ident_unsafe("req", 0, 0), "body_json"), Vector::new());
             let body_r_name: string = pname.concat("__body_r");
             wrapper_body.push(*stmt_let(body_r_name, no_ty, body_call, false, 0, 0));
-
             // if !__body_r.ok { return HttpResponse::with_status(400).text(__body_r.err); }
             wrapper_body.push(*_bind_err_check_static(body_r_name, 400));
-
             // let __t_r: !T = T::from_json(__body_r.val);
             let from_json_args: *Vector<Expr> = Vector::new();
             from_json_args.push(*expr_member(expr_ident(body_r_name, 0, 0), "val"));
-            let from_json_call: *Expr = expr_call(
-                expr_path(inner_name, "from_json", 0, 0), from_json_args);
+            let from_json_call: *Expr = expr_call(expr_path(inner_name, "from_json", 0, 0), from_json_args);
             let t_r_name: string = pname.concat("__t_r");
             wrapper_body.push(*stmt_let(t_r_name, t_r_let_ty, from_json_call, false, 0, 0));
-
             // if !__t_r.ok { return HttpResponse::with_status(422).text(__t_r.err); }
             wrapper_body.push(*_bind_err_check_static(t_r_name, 422));
-
             // let body: Json<T> = Json::wrap(__t_r.val);
             let wrap_args: *Vector<Expr> = Vector::new();
             wrap_args.push(*expr_member(expr_ident(t_r_name, 0, 0), "val"));
-            let wrap_call: *Expr = expr_call(
-                expr_path("Json", "wrap", 0, 0), wrap_args);
+            let wrap_call: *Expr = expr_call(expr_path("Json", "wrap", 0, 0), wrap_args);
             wrapper_body.push(*stmt_let(pname, body_let_ty, wrap_call, false, 0, 0));
-
             call_args.push(*expr_ident(pname, 0, 0));
             i = i + 1;
             continue;
         }
-
         // ---- Path<T> special case --------------------------------------
         // Lookup key = the param's IDENT name.
         if _is_path_generic(pty) {
@@ -160,20 +143,14 @@ pub fn _emit_handler_wrapper(s: *Stmt, wrapper_name: string, renamed_name: strin
             let extract_args: *Vector<Expr> = Vector::new();
             extract_args.push(*expr_ident_unsafe("req", 0, 0));
             extract_args.push(*expr_string(pname, 0, 0));
-            let extract_call: *Expr = expr_call(
-                expr_path("Path", "extract", 0, 0), extract_args);
-            wrapper_body.push(*stmt_let_unsafe(
-                r_name, ty_result(pty), extract_call, false, 0, 0));
+            let extract_call: *Expr = expr_call(expr_path("Path", "extract", 0, 0), extract_args);
+            wrapper_body.push(*stmt_let_unsafe(r_name, ty_result(pty), extract_call, false, 0, 0));
             wrapper_body.push(*_bind_err_check_extract(r_name));
-            wrapper_body.push(*stmt_let_unsafe(
-                pname, pty,
-                expr_member(expr_ident_unsafe(r_name, 0, 0), "val"),
-                false, 0, 0));
+            wrapper_body.push(*stmt_let_unsafe(pname, pty, expr_member(expr_ident_unsafe(r_name, 0, 0), "val"), false, 0, 0));
             call_args.push(*expr_ident_unsafe(pname, 0, 0));
             i = i + 1;
             continue;
         }
-
         // ---- Query<T> special case -------------------------------------
         // Same shape as Path<T> but lookup goes to req.query() — built
         // by Query::extract using the param's IDENT name as the key.
@@ -182,20 +159,14 @@ pub fn _emit_handler_wrapper(s: *Stmt, wrapper_name: string, renamed_name: strin
             let extract_args: *Vector<Expr> = Vector::new();
             extract_args.push(*expr_ident_unsafe("req", 0, 0));
             extract_args.push(*expr_string(pname, 0, 0));
-            let extract_call: *Expr = expr_call(
-                expr_path("Query", "extract", 0, 0), extract_args);
-            wrapper_body.push(*stmt_let_unsafe(
-                r_name, ty_result(pty), extract_call, false, 0, 0));
+            let extract_call: *Expr = expr_call(expr_path("Query", "extract", 0, 0), extract_args);
+            wrapper_body.push(*stmt_let_unsafe(r_name, ty_result(pty), extract_call, false, 0, 0));
             wrapper_body.push(*_bind_err_check_extract(r_name));
-            wrapper_body.push(*stmt_let_unsafe(
-                pname, pty,
-                expr_member(expr_ident_unsafe(r_name, 0, 0), "val"),
-                false, 0, 0));
+            wrapper_body.push(*stmt_let_unsafe(pname, pty, expr_member(expr_ident_unsafe(r_name, 0, 0), "val"), false, 0, 0));
             call_args.push(*expr_ident_unsafe(pname, 0, 0));
             i = i + 1;
             continue;
         }
-
         // ---- State<T> special case -------------------------------------
         // Inherent extract on a generic type — same trick as Path<T>:
         // the macro emits `State::extract(req)` with let-ty `!State<T>`
@@ -204,20 +175,14 @@ pub fn _emit_handler_wrapper(s: *Stmt, wrapper_name: string, renamed_name: strin
             let r_name: string = pname.concat("__state_r");
             let extract_args: *Vector<Expr> = Vector::new();
             extract_args.push(*expr_ident_unsafe("req", 0, 0));
-            let extract_call: *Expr = expr_call(
-                expr_path("State", "extract", 0, 0), extract_args);
-            wrapper_body.push(*stmt_let_unsafe(
-                r_name, ty_result(pty), extract_call, false, 0, 0));
+            let extract_call: *Expr = expr_call(expr_path("State", "extract", 0, 0), extract_args);
+            wrapper_body.push(*stmt_let_unsafe(r_name, ty_result(pty), extract_call, false, 0, 0));
             wrapper_body.push(*_bind_err_check_extract(r_name));
-            wrapper_body.push(*stmt_let_unsafe(
-                pname, pty,
-                expr_member(expr_ident_unsafe(r_name, 0, 0), "val"),
-                false, 0, 0));
+            wrapper_body.push(*stmt_let_unsafe(pname, pty, expr_member(expr_ident_unsafe(r_name, 0, 0), "val"), false, 0, 0));
             call_args.push(*expr_ident_unsafe(pname, 0, 0));
             i = i + 1;
             continue;
         }
-
         // ---- generic FromRequest dispatch ------------------------------
         let head: string = _head_name(pty);
         if head.eq("") {
@@ -225,40 +190,28 @@ pub fn _emit_handler_wrapper(s: *Stmt, wrapper_name: string, renamed_name: strin
             i = i + 1;
             continue;
         }
-
         let r_name: string = pname.concat("__ext_r");
         let from_req_args: *Vector<Expr> = Vector::new();
         from_req_args.push(*expr_ident_unsafe("req", 0, 0));
-        let from_req_call: *Expr = expr_call(
-            expr_path(head, "from_request", 0, 0), from_req_args);
-        wrapper_body.push(*stmt_let_unsafe(
-            r_name, ty_result(pty), from_req_call, false, 0, 0));
+        let from_req_call: *Expr = expr_call(expr_path(head, "from_request", 0, 0), from_req_args);
+        wrapper_body.push(*stmt_let_unsafe(r_name, ty_result(pty), from_req_call, false, 0, 0));
         wrapper_body.push(*_bind_err_check_extract(r_name));
-        wrapper_body.push(*stmt_let_unsafe(
-            pname, pty,
-            expr_member(expr_ident_unsafe(r_name, 0, 0), "val"),
-            false, 0, 0));
+        wrapper_body.push(*stmt_let_unsafe(pname, pty, expr_member(expr_ident_unsafe(r_name, 0, 0), "val"), false, 0, 0));
         call_args.push(*expr_ident_unsafe(pname, 0, 0));
         i = i + 1;
     }
-
     // return _user_<name>(args);                       // ret = HttpResponse
     // return _user_<name>(args).into_response();       // ret = Json<T>
     let user_call: *Expr = expr_call(expr_ident_unsafe(renamed_name, 0, 0), call_args);
     let mut ret_expr: *Expr = user_call;
     if user_ret_ty != null {
         if !_json_inner_name(user_ret_ty).eq("") {
-            ret_expr = expr_call(
-                expr_member(user_call, "into_response"),
-                Vector::new());
+            ret_expr = expr_call(expr_member(user_call, "into_response"), Vector::new());
         }
     }
     wrapper_body.push(*stmt_return(ret_expr, 0, 0));
-
     let wrap_params: *Vector<Param> = mk_req_params();
-    let wrapper_fn: *Stmt = stmt_fn(wrapper_name, wrap_params,
-                                     ty_named("HttpResponse"),
-                                     wrapper_body, 0, 0);
+    let wrapper_fn: *Stmt = stmt_fn(wrapper_name, wrap_params, ty_named("HttpResponse"), wrapper_body, 0, 0);
     if has_leaf { _attach_leaf_attr(wrapper_fn); }
     out.push(*wrapper_fn);
     return out;
@@ -270,12 +223,7 @@ pub fn _emit_handler_wrapper(s: *Stmt, wrapper_name: string, renamed_name: strin
 // doesn't yet expose a quote-attr helper.
 fn _attach_leaf_attr(s: *Stmt) {
     let attrs: *Vector<Attr> = Vector::new();
-    let a: Attr = Attr {
-        name:   "leaf",
-        args:   Vector::new(),
-        line:   0,
-        column: 0,
-    };
+    let a: Attr = Attr { name: "leaf", args: Vector::new(), line: 0, column: 0 };
     attrs.push(a);
     s.attrs = attrs;
 }
@@ -361,16 +309,13 @@ fn _json_inner(t: *Type) -> *Type {
 // Static integer status — used by the Json<T> built-in path where
 // the macro picks 400/422 itself.
 fn _bind_err_check_static(var_name: string, status: i32) -> *Stmt {
-    let cond: *Expr = expr_unary(
-        UN_NOT, expr_member(expr_ident(var_name, 0, 0), "ok"), 0, 0);
+    let cond: *Expr = expr_unary(UN_NOT, expr_member(expr_ident(var_name, 0, 0), "ok"), 0, 0);
     let with_status_args: *Vector<Expr> = Vector::new();
     with_status_args.push(*expr_int(status, 0, 0));
-    let resp_call: *Expr = expr_call(
-        expr_path("HttpResponse", "with_status", 0, 0), with_status_args);
+    let resp_call: *Expr = expr_call(expr_path("HttpResponse", "with_status", 0, 0), with_status_args);
     let text_args: *Vector<Expr> = Vector::new();
     text_args.push(*expr_member(expr_ident(var_name, 0, 0), "err"));
-    let text_call: *Expr = expr_call(
-        expr_member(resp_call, "text"), text_args);
+    let text_call: *Expr = expr_call(expr_member(resp_call, "text"), text_args);
     let then_body: *Vector<Stmt> = Vector::new();
     then_body.push(*stmt_return(text_call, 0, 0));
     let no_else: *Vector<Stmt> = null;
@@ -383,12 +328,10 @@ fn _bind_err_check_static(var_name: string, status: i32) -> *Stmt {
 // `HttpResponse::from_extract_err` parses the prefix and builds the
 // response.
 fn _bind_err_check_extract(var_name: string) -> *Stmt {
-    let cond: *Expr = expr_unary(
-        UN_NOT, expr_member(expr_ident_unsafe(var_name, 0, 0), "ok"), 0, 0);
+    let cond: *Expr = expr_unary(UN_NOT, expr_member(expr_ident_unsafe(var_name, 0, 0), "ok"), 0, 0);
     let err_args: *Vector<Expr> = Vector::new();
     err_args.push(*expr_member(expr_ident_unsafe(var_name, 0, 0), "err"));
-    let mapper_call: *Expr = expr_call(
-        expr_path("HttpResponse", "from_extract_err", 0, 0), err_args);
+    let mapper_call: *Expr = expr_call(expr_path("HttpResponse", "from_extract_err", 0, 0), err_args);
     let then_body: *Vector<Stmt> = Vector::new();
     then_body.push(*stmt_return(mapper_call, 0, 0));
     let no_else: *Vector<Stmt> = null;

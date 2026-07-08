@@ -7,16 +7,15 @@
 //
 // Used to derive the master secret, the key block, and the Finished
 // verify_data.
-
-import stdlib::crypto::*;      // hmac_sha256
+import stdlib::crypto::*; // hmac_sha256
 import stdlib::bytes::*;
 
 /// P_SHA256(secret, seed) expanded to `n` bytes.
 pub fn p_sha256(secret: string, seed: string, n: i32) -> string {
     let out: *ByteBuffer = ByteBuffer::new();
-    let mut a: string = seed;                       // A(0)
+    let mut a: string = seed; // A(0)
     while out.len() < n {
-        a = hmac_sha256(secret, a);                 // A(i)
+        a = hmac_sha256(secret, a); // A(i)
         out.push_str(hmac_sha256(secret, a.concat(seed)));
     }
     let full: string = out.to_string();

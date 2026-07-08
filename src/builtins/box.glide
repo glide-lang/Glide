@@ -18,7 +18,6 @@
 /// let b: Box<i32> = Box::new(5);
 /// println!(b.get());     // 5    (freed automatically at scope end)
 /// ```
-
 pub struct Box<T> {
     /// Heap slot holding the single owned `T`.
     ptr: *T,
@@ -55,7 +54,7 @@ impl<T> Box<T> {
     /// let b: Box<i32> = Box::new(7);
     /// let x: i32 = b.get();   // 7
     /// ```
-    fn get(self: *Box<T>) -> T {
+    fn get(self) -> T {
         return self.ptr[0];
     }
 
@@ -66,7 +65,7 @@ impl<T> Box<T> {
     /// b.set(9);
     /// b.get();   // 9
     /// ```
-    fn set(self: *Box<T>, v: T) {
+    fn set(self, v: T) {
         self.ptr[0] = v;
     }
 
@@ -82,7 +81,7 @@ impl<T> Box<T> {
     /// ```
     ///
     /// The pointer is valid until `free` / the scope-end drop.
-    fn get_mut(self: *Box<T>) -> *T {
+    fn get_mut(self) -> *T {
         return self.ptr;
     }
 
@@ -90,7 +89,7 @@ impl<T> Box<T> {
     /// nothing else to free. After `free`, the handle is dangling; do not
     /// touch it again. Arena-backed boxes are owned by the arena, so this is
     /// a no-op for them (the per-keystroke reset frees them in bulk).
-    fn free(self: *Box<T>) {
+    fn free(self) {
         if self.is_arena { return; }
         free(self.ptr as *void);
     }

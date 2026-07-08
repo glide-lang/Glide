@@ -29,7 +29,6 @@
 // raw err to `extract_error_response`, which parses the prefix and
 // builds the right `HttpResponse`. Plain (no-prefix) errs default
 // to 422.
-
 import stdlib::http::*;
 import stdlib::http::typed::*;
 import stdlib::http::form::*;
@@ -67,9 +66,10 @@ pub trait FromRequest {
 // The @handler macro short-circuits this with a direct passthrough so
 // the call doesn't even reach FromRequest, but having the impl keeps
 // the trait closed under "every handler param type".
-
 impl FromRequest for *HttpRequest {
-    fn from_request(req: *HttpRequest) -> !*HttpRequest { return ok(req); }
+    fn from_request(req: *HttpRequest) -> !*HttpRequest {
+        return ok(req);
+    }
 }
 
 // ---- Bearer token -----------------------------------------------------
@@ -117,12 +117,12 @@ pub struct Headers {
 impl Headers {
     /// Same lookup as `req.header(name)` — case-insensitive, `""` when
     /// missing.
-    pub fn get(self: *Headers, name: string) -> string {
+    pub fn get(self, name: string) -> string {
         return self.req.header(name);
     }
 
     /// True iff a header with `name` is present and non-empty.
-    pub fn has(self: *Headers, name: string) -> bool {
+    pub fn has(self, name: string) -> bool {
         return self.req.header(name).len() > 0;
     }
 }
@@ -171,7 +171,10 @@ impl AuthScheme for Bearer {
         if !v.starts_with("Bearer ") { return err("not Bearer scheme"); }
         return ok(Bearer { token: v.substring(7, v.len()) });
     }
-    fn name() -> string { return "Bearer"; }
+
+    fn name() -> string {
+        return "Bearer";
+    }
 }
 
 // ---- Basic auth -------------------------------------------------------
@@ -192,16 +195,15 @@ impl AuthScheme for Basic {
         let raw: string = v.substring(6, v.len());
         let colon: i32 = _index_of(raw, ":");
         if colon < 0 { return err("malformed Basic value: no ':'"); }
-        return ok(Basic {
-            user: raw.substring(0, colon),
-            pass: raw.substring(colon + 1, raw.len()),
-        });
+        return ok(Basic { user: raw.substring(0, colon), pass: raw.substring(colon + 1, raw.len()) });
     }
-    fn name() -> string { return "Basic"; }
+
+    fn name() -> string {
+        return "Basic";
+    }
 }
 
 // ---- State<T> shared application state -------------------------------
-
 extern fn __glide_router_state_get() -> *void;
 
 /// Application state injected via `Router::state(p)`. The handler
@@ -249,7 +251,9 @@ pub trait FromPath {
 }
 
 impl FromPath for string {
-    fn from_path(s: string) -> !string { return ok(s); }
+    fn from_path(s: string) -> !string {
+        return ok(s);
+    }
 }
 
 impl FromPath for i32 {
@@ -359,7 +363,7 @@ impl FromRequest for Form {
 
 impl Form {
     /// First value for `name`. Returns `""` when not present.
-    pub fn get(self: *Form, name: string) -> string {
+    pub fn get(self, name: string) -> string {
         for let i: i32 = 0; i < self.data.len(); i++ {
             if self.data.name_at(i).eq(name) { return self.data.value_at(i); }
         }
@@ -367,7 +371,7 @@ impl Form {
     }
 
     /// `true` iff at least one field with `name` is present.
-    pub fn has(self: *Form, name: string) -> bool {
+    pub fn has(self, name: string) -> bool {
         for let i: i32 = 0; i < self.data.len(); i++ {
             if self.data.name_at(i).eq(name) { return true; }
         }
@@ -402,7 +406,7 @@ impl Cookies {
     /// header string each call — cheap (cookies are short, typically
     /// 1-5 entries) but cache if you call repeatedly in the same
     /// handler.
-    pub fn get(self: *Cookies, name: string) -> string {
+    pub fn get(self, name: string) -> string {
         let h: string = self.header;
         let n: i32 = h.len();
         if n == 0 { return ""; }
@@ -423,8 +427,7 @@ impl Cookies {
                 while i < n && h.at(i).to_int() != 59 {
                     i = i + 1;
                 }
-                if (key_end - start) == target_len
-                   && h.substring(start, key_end).eq(name) {
+                if key_end - start == target_len && h.substring(start, key_end).eq(name) {
                     return h.substring(v_start, i);
                 }
             }
@@ -434,7 +437,7 @@ impl Cookies {
     }
 
     /// `true` iff the named cookie is present.
-    pub fn has(self: *Cookies, name: string) -> bool {
+    pub fn has(self, name: string) -> bool {
         return self.get(name).len() > 0;
     }
 }
@@ -447,7 +450,6 @@ impl Cookies {
 // extract.glide because it's part of the extractor surface.
 
 // ---- internal helpers -------------------------------------------------
-
 impl HttpResponse {
     /// Translate an extractor's err string into a response. The
     /// extractor encodes the desired status as a `"<code>:<message>"`
@@ -484,7 +486,10 @@ fn _index_of(s: string, needle: string) -> i32 {
         let mut k: i32 = 0;
         let mut hit: bool = true;
         while k < m {
-            if s.at(i + k).to_int() != needle.at(k).to_int() { hit = false; break; }
+            if s.at(i + k).to_int() != needle.at(k).to_int() {
+                hit = false;
+                break;
+            }
             k = k + 1;
         }
         if hit { return i; }

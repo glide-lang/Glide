@@ -120,21 +120,27 @@ pub extern fn exp(x: f64) -> f64;
 pub extern fn atan2(y: f64, x: f64) -> f64;
 
 pub const PI: f64 = 3.141592653589793;
-pub const E:  f64 = 2.718281828459045;
+pub const E: f64 = 2.718281828459045;
 
 /// Smaller of two ints.
 ///
 /// ```glide
 /// let a: i32 = min_int(7, 3);   // 3
 /// ```
-pub fn min_int(a: i32, b: i32) -> i32 { if a < b { return a; } return b; }
+pub fn min_int(a: i32, b: i32) -> i32 {
+    if a < b { return a; }
+    return b;
+}
 
 /// Larger of two ints.
 ///
 /// ```glide
 /// let a: i32 = max_int(7, 3);   // 7
 /// ```
-pub fn max_int(a: i32, b: i32) -> i32 { if a > b { return a; } return b; }
+pub fn max_int(a: i32, b: i32) -> i32 {
+    if a > b { return a; }
+    return b;
+}
 
 /// Absolute value for ints. Note: `abs_int(INT_MIN)` overflows on
 /// two's-complement platforms; callers handling user input should clamp.
@@ -143,7 +149,10 @@ pub fn max_int(a: i32, b: i32) -> i32 { if a > b { return a; } return b; }
 /// abs_int(-5);   // 5
 /// abs_int(0);    // 0
 /// ```
-pub fn abs_int(a: i32) -> i32 { if a < 0 { return -a; } return a; }
+pub fn abs_int(a: i32) -> i32 {
+    if a < 0 { return -a; }
+    return a;
+}
 
 /// Sign of an int: `-1`, `0`, or `+1`.
 ///
@@ -178,14 +187,20 @@ pub fn clamp_int(x: i32, lo: i32, hi: i32) -> i32 {
 /// ```glide
 /// min_f64(1.5, 2.5);   // 1.5
 /// ```
-pub fn min_f64(a: f64, b: f64) -> f64 { if a < b { return a; } return b; }
+pub fn min_f64(a: f64, b: f64) -> f64 {
+    if a < b { return a; }
+    return b;
+}
 
 /// Larger of two f64s.
 ///
 /// ```glide
 /// max_f64(1.5, 2.5);   // 2.5
 /// ```
-pub fn max_f64(a: f64, b: f64) -> f64 { if a > b { return a; } return b; }
+pub fn max_f64(a: f64, b: f64) -> f64 {
+    if a > b { return a; }
+    return b;
+}
 
 /// f64 clamp into `[lo, hi]`. See `clamp_int` for caveats.
 ///

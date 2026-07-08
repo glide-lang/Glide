@@ -9,7 +9,6 @@
 //
 // let v: !i32 = ecdsa_p384_verify(pubkey97, hash, sig96);
 // ```
-
 import stdlib::crypto::csprng::*;
 
 c_raw! {
@@ -212,8 +211,11 @@ c_raw! {
 }
 
 extern fn __glide_p384_pub(out: *void, scalar: *void) -> i32;
+
 extern fn __glide_p384_ecdh(out: *void, scalar: *void, peer: *void, peerlen: i32) -> i32;
+
 extern fn __glide_p384_verify(pubkey: *void, publen: i32, hash: *void, sig: *void) -> i32;
+
 extern fn __glide_string_from_buf(p: *void, n: i32) -> string;
 
 /// Public key for a 48-byte P-384 secret, encoded 0x04||X||Y (97 bytes).
@@ -221,7 +223,10 @@ pub fn p384_pubkey(secret: string) -> !string {
     if secret.len() != 48 { return err("p384: secret must be 48 bytes"); }
     let out: *void = malloc(97) as *void;
     let rc: i32 = __glide_p384_pub(out, secret as *void);
-    if rc != 0 { free(out); return err("p384: invalid scalar"); }
+    if rc != 0 {
+        free(out);
+        return err("p384: invalid scalar");
+    }
     let s: string = __glide_string_from_buf(out, 97);
     free(out);
     return ok(s);
@@ -233,7 +238,10 @@ pub fn p384_ecdh(secret: string, peer_pubkey: string) -> !string {
     if secret.len() != 48 { return err("p384: secret must be 48 bytes"); }
     let out: *void = malloc(48) as *void;
     let rc: i32 = __glide_p384_ecdh(out, secret as *void, peer_pubkey as *void, peer_pubkey.len());
-    if rc != 0 { free(out); return err("p384: invalid peer point"); }
+    if rc != 0 {
+        free(out);
+        return err("p384: invalid peer point");
+    }
     let s: string = __glide_string_from_buf(out, 48);
     free(out);
     return ok(s);

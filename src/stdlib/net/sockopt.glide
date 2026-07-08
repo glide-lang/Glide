@@ -14,7 +14,6 @@
 // sock_set_nodelay(s.fd, true);
 // sock_set_recv_timeout_ms(s.fd, 5000);
 // ```
-
 import stdlib::net::sys::*;
 
 fn _set(fd: i64, level_tag: i32, opt_tag: i32, val: i32) -> !i32 {
@@ -27,7 +26,10 @@ fn _set(fd: i64, level_tag: i32, opt_tag: i32, val: i32) -> !i32 {
     return ok(0);
 }
 
-fn _bool(on: bool) -> i32 { if on { return 1; } return 0; }
+fn _bool(on: bool) -> i32 {
+    if on { return 1; }
+    return 0;
+}
 
 /// SO_REUSEADDR — rebind a recently-closed local port immediately.
 pub fn sock_set_reuse_addr(fd: i64, on: bool) -> !i32 {

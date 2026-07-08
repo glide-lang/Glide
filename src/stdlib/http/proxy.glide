@@ -26,15 +26,7 @@ impl ReverseProxyConfig {
     /// http_listen(8080, fn(req) { return reverse_proxy(&cfg, req); });
     /// ```
     pub fn to(upstream: string) -> ReverseProxyConfig {
-        return ReverseProxyConfig {
-            upstream: upstream,
-            strip_prefix: "",
-            preserve_host: false,
-            rewrite_location: false,
-            public_base: "",
-            timeout_ms: 30000,
-            tls_insecure: false,
-        };
+        return ReverseProxyConfig { upstream: upstream, strip_prefix: "", preserve_host: false, rewrite_location: false, public_base: "", timeout_ms: 30000, tls_insecure: false };
     }
 }
 
@@ -46,25 +38,19 @@ pub fn reverse_proxy(cfg: *ReverseProxyConfig, req: *HttpRequest) -> HttpRespons
     let c: *HttpClient = HttpClient::new();
     c.timeout_ms = cfg.timeout_ms;
     c.tls_insecure = cfg.tls_insecure;
-
     let rr: !*HttpResponse = c.do_once(out_req);
     free(out_req as *void);
     free(c as *void);
     if !rr.is_ok() {
-        return HttpResponse::with_status(502)
-            .set("Content-Type", "text/plain; charset=utf-8")
-            .body("bad gateway: ".concat(rr.unwrap_err()));
+        return HttpResponse::with_status(502).set("Content-Type", "text/plain; charset=utf-8").body("bad gateway: ".concat(rr.unwrap_err()));
     }
-
     let upstream_resp: *HttpResponse = rr.unwrap();
     // `with_status(...).body(...)` builds the response shell; the
     // header block is written wholesale because we're replacing
     // (filtered) the upstream's block, not appending individual entries
     // — there's no builder method for that on HttpResponse.
-    let mut resp: HttpResponse = HttpResponse::with_status(upstream_resp.status)
-        .body(upstream_resp.body);
+    let mut resp: HttpResponse = HttpResponse::with_status(upstream_resp.status).body(upstream_resp.body);
     resp.headers_block = proxy_filter_response_headers(upstream_resp.headers_block);
-
     if cfg.rewrite_location {
         let loc: string = upstream_resp.header("Location");
         if loc.len() > 0 {
@@ -78,30 +64,26 @@ pub fn reverse_proxy(cfg: *ReverseProxyConfig, req: *HttpRequest) -> HttpRespons
 /// Build the client request that `reverse_proxy` will send upstream.
 /// Exposed for tests and for custom proxy pipelines that want to
 /// inspect or adjust the request before calling `HttpClient::do`.
-pub fn proxy_build_upstream_request(cfg: *ReverseProxyConfig,
-                                    req: *HttpRequest) -> *HttpClientRequest {
+pub fn proxy_build_upstream_request(cfg: *ReverseProxyConfig, req: *HttpRequest) -> *HttpClientRequest {
     let target: string = proxy_target_url(cfg, req.path);
     let out: *HttpClientRequest = HttpClientRequest::new(req.method, target);
     out.headers = proxy_filter_request_headers(req.headers_block, cfg.preserve_host);
-
     let host: string = req.header("Host");
-    if host.len() > 0 {
-        out.set("X-Forwarded-Host", host);
-    }
+    if host.len() > 0 { out.set("X-Forwarded-Host", host); }
     // `req.tls` is set by `https_listen`'s connection handler; plain
     // `http_listen` leaves it false. Downstreams use the header to
     // build absolute URLs that match the scheme the client actually saw.
-    if req.tls { out.set("X-Forwarded-Proto", "https"); }
-    else       { out.set("X-Forwarded-Proto", "http"); }
+    if req.tls {
+        out.set("X-Forwarded-Proto", "https");
+    } else {
+        out.set("X-Forwarded-Proto", "http");
+    }
     out.set("X-Forwarded-Method", req.method);
     out.set("X-Original-URI", req.path);
-
     // Forward the body even for GET/HEAD. RFC 7230 allows it; some
     // upstreams care, most ignore it. Filtering by method would lose
     // information for the ones that DO care.
-    if req.body.len() > 0 {
-        out.body_str(req.body);
-    }
+    if req.body.len() > 0 { out.body_str(req.body); }
     return out;
 }
 
@@ -111,9 +93,11 @@ pub fn proxy_target_url(cfg: *ReverseProxyConfig, path: string) -> string {
     let mut p: string = path;
     if cfg.strip_prefix.len() > 0 && !cfg.strip_prefix.eq("/") && path.starts_with(cfg.strip_prefix) {
         p = path.substring(cfg.strip_prefix.len(), path.len());
-        if p.len() == 0 { p = "/"; }
-        else if p.starts_with("?") { p = "/".concat(p); }
-        else if !p.starts_with("/") { p = "/".concat(p); }
+        if p.len() == 0 {
+            p = "/";
+        } else if p.starts_with("?") {
+            p = "/".concat(p);
+        } else if !p.starts_with("/") { p = "/".concat(p); }
     }
     if !p.starts_with("/") { p = "/".concat(p); }
     return base.concat(p);

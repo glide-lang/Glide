@@ -1,15 +1,22 @@
 // Standard input / output helpers. `print!` / `println!` cover the happy
 // path for stdout; this module fills in stderr, blocking line / byte reads
 // from stdin, and an explicit flush.
-
 extern fn __glide_read_line() -> string;
+
 extern fn __glide_read_bytes(n: i32) -> string;
+
 extern fn __glide_write_str(s: string);
+
 extern fn __glide_write_bytes(s: string, n: i32);
+
 extern fn __glide_flush_stdout();
+
 extern fn __glide_log(s: string);
+
 extern fn __glide_set_binary_io();
+
 extern fn __glide_redirect_to(path: string) -> i32;
+
 extern fn __glide_restore_stdout(saved: i32);
 
 c_raw! {
@@ -112,7 +119,9 @@ c_raw! {
 /// let name: string = read_line();
 /// println!("hello,", name.trim());
 /// ```
-pub fn read_line() -> string { return __glide_read_line(); }
+pub fn read_line() -> string {
+    return __glide_read_line();
+}
 
 /// Write a prompt, flush stdout, then read one line from stdin.
 /// The returned string does not include a trailing newline.
@@ -129,9 +138,7 @@ pub fn prompt(msg: string) -> string {
     let line: string = read_line();
     let n: i32 = line.len();
     if n > 0 && line.at(n - 1).to_int() == 10 {
-        if n > 1 && line.at(n - 2).to_int() == 13 {
-            return line.substring(0, n - 2);
-        }
+        if n > 1 && line.at(n - 2).to_int() == 13 { return line.substring(0, n - 2); }
         return line.substring(0, n - 1);
     }
     return line;
@@ -172,7 +179,9 @@ pub fn read_yes_no(prompt_msg: string) -> bool {
 /// ```glide
 /// let chunk: string = read_bytes(4096);   // tail of the stdin pipe
 /// ```
-pub fn read_bytes(n: i32) -> string { return __glide_read_bytes(n); }
+pub fn read_bytes(n: i32) -> string {
+    return __glide_read_bytes(n);
+}
 
 /// Write `s` to stdout without buffering a newline. Cheaper than `print!`
 /// when you don't need format inference. Named `io_write` (not `write`) so
@@ -183,7 +192,9 @@ pub fn read_bytes(n: i32) -> string { return __glide_read_bytes(n); }
 /// for i in 0..3 { io_write("."); flush(); sleep_ms(200); }
 /// io_write(" done\n");
 /// ```
-pub fn io_write(s: string) { __glide_write_str(s); }
+pub fn io_write(s: string) {
+    __glide_write_str(s);
+}
 
 /// Write exactly `n` bytes from `s` to stdout. Use this for binary payloads
 /// where the string may contain embedded NULs.
@@ -192,7 +203,9 @@ pub fn io_write(s: string) { __glide_write_str(s); }
 /// // Echo a 16-byte header verbatim.
 /// io_write_bytes(buf, 16);
 /// ```
-pub fn io_write_bytes(s: string, n: i32) { __glide_write_bytes(s, n); }
+pub fn io_write_bytes(s: string, n: i32) {
+    __glide_write_bytes(s, n);
+}
 
 /// Force-flush the stdout buffer. Stdout is line-buffered when attached to
 /// a TTY but block-buffered when piped, so explicit `flush()` matters for
@@ -203,7 +216,9 @@ pub fn io_write_bytes(s: string, n: i32) { __glide_write_bytes(s, n); }
 /// flush();
 /// let cmd: string = read_line();
 /// ```
-pub fn flush() { __glide_flush_stdout(); }
+pub fn flush() {
+    __glide_flush_stdout();
+}
 
 /// Write `s` to stderr with a trailing newline. Stderr is unbuffered, so
 /// no flush is needed. Use this for log lines that must not interleave
@@ -212,4 +227,6 @@ pub fn flush() { __glide_flush_stdout(); }
 /// ```glide
 /// eprintln("warning: missing config file, using defaults");
 /// ```
-pub fn eprintln(s: string) { __glide_log(s); }
+pub fn eprintln(s: string) {
+    __glide_log(s);
+}

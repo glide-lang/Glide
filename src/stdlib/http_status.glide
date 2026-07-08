@@ -15,7 +15,6 @@ pub fn status_text(code: i32) -> string {
     if code == 102 { return "Processing"; }
     if code == 103 { return "Early Hints"; }
     if code == 104 { return "Upload Resumption Supported"; }
-
     if code == 200 { return "OK"; }
     if code == 201 { return "Created"; }
     if code == 202 { return "Accepted"; }
@@ -26,7 +25,6 @@ pub fn status_text(code: i32) -> string {
     if code == 207 { return "Multi-Status"; }
     if code == 208 { return "Already Reported"; }
     if code == 226 { return "IM Used"; }
-
     if code == 300 { return "Multiple Choices"; }
     if code == 301 { return "Moved Permanently"; }
     if code == 302 { return "Found"; }
@@ -35,7 +33,6 @@ pub fn status_text(code: i32) -> string {
     if code == 305 { return "Use Proxy"; }
     if code == 307 { return "Temporary Redirect"; }
     if code == 308 { return "Permanent Redirect"; }
-
     if code == 400 { return "Bad Request"; }
     if code == 401 { return "Unauthorized"; }
     if code == 402 { return "Payment Required"; }
@@ -65,7 +62,6 @@ pub fn status_text(code: i32) -> string {
     if code == 429 { return "Too Many Requests"; }
     if code == 431 { return "Request Header Fields Too Large"; }
     if code == 451 { return "Unavailable For Legal Reasons"; }
-
     if code == 500 { return "Internal Server Error"; }
     if code == 501 { return "Not Implemented"; }
     if code == 502 { return "Bad Gateway"; }
@@ -77,7 +73,6 @@ pub fn status_text(code: i32) -> string {
     if code == 508 { return "Loop Detected"; }
     if code == 510 { return "Not Extended"; }
     if code == 511 { return "Network Authentication Required"; }
-
     return "Unknown";
 }
 

@@ -16,8 +16,8 @@
 // `error(...)` (or `Error::new(...).emit()`) and passes the string to `err(...)`;
 // the caller handling the failure decodes it with `Error::of(msg)` and branches
 // on `.kind()`.
-
 extern fn __glide_strerror(errno: i32) -> string;
+
 extern fn __glide_errno_kind(errno: i32) -> i32;
 
 c_raw! {
@@ -63,19 +63,19 @@ c_raw! {
 // to decide what to do (create the file that doesn't exist, warn about a
 // permission problem, and so on).
 pub enum ErrorKind {
-    NotFound,            // the target does not exist
-    PermissionDenied,    // no permission for the operation
-    AlreadyExists,       // the target already exists (e.g. exclusive create)
-    NotADirectory,       // expected a directory and found something else
-    IsADirectory,        // expected a file and found a directory
-    DirectoryNotEmpty,   // removing a directory that still has contents
-    InvalidInput,        // an invalid argument (path, flag, size)
-    Interrupted,         // the call was interrupted and may be retried
-    ReadOnlyFilesystem,  // writing to a read-only filesystem
-    TooManyOpenFiles,    // the open-descriptor limit was reached
-    WouldBlock,          // the operation would block (non-blocking I/O)
-    UnexpectedEof,       // end of file arrived earlier than expected
-    Other,               // any other failure (see `.message()`/`.os_code()`)
+    NotFound, // the target does not exist
+    PermissionDenied, // no permission for the operation
+    AlreadyExists, // the target already exists (e.g. exclusive create)
+    NotADirectory, // expected a directory and found something else
+    IsADirectory, // expected a file and found a directory
+    DirectoryNotEmpty, // removing a directory that still has contents
+    InvalidInput, // an invalid argument (path, flag, size)
+    Interrupted, // the call was interrupted and may be retried
+    ReadOnlyFilesystem, // writing to a read-only filesystem
+    TooManyOpenFiles, // the open-descriptor limit was reached
+    WouldBlock, // the operation would block (non-blocking I/O)
+    UnexpectedEof, // end of file arrived earlier than expected
+    Other, // any other failure (see `.message()`/`.os_code()`)
 }
 
 impl ErrorKind {
@@ -87,19 +87,45 @@ impl ErrorKind {
     /// ```
     pub fn to_string(self: ErrorKind) -> string {
         match self {
-            NotFound           => { return "NotFound"; }
-            PermissionDenied   => { return "PermissionDenied"; }
-            AlreadyExists      => { return "AlreadyExists"; }
-            NotADirectory      => { return "NotADirectory"; }
-            IsADirectory       => { return "IsADirectory"; }
-            DirectoryNotEmpty  => { return "DirectoryNotEmpty"; }
-            InvalidInput       => { return "InvalidInput"; }
-            Interrupted        => { return "Interrupted"; }
-            ReadOnlyFilesystem => { return "ReadOnlyFilesystem"; }
-            TooManyOpenFiles   => { return "TooManyOpenFiles"; }
-            WouldBlock         => { return "WouldBlock"; }
-            UnexpectedEof      => { return "UnexpectedEof"; }
-            Other              => { return "Other"; }
+            NotFound => {
+                return "NotFound";
+            }
+            PermissionDenied => {
+                return "PermissionDenied";
+            }
+            AlreadyExists => {
+                return "AlreadyExists";
+            }
+            NotADirectory => {
+                return "NotADirectory";
+            }
+            IsADirectory => {
+                return "IsADirectory";
+            }
+            DirectoryNotEmpty => {
+                return "DirectoryNotEmpty";
+            }
+            InvalidInput => {
+                return "InvalidInput";
+            }
+            Interrupted => {
+                return "Interrupted";
+            }
+            ReadOnlyFilesystem => {
+                return "ReadOnlyFilesystem";
+            }
+            TooManyOpenFiles => {
+                return "TooManyOpenFiles";
+            }
+            WouldBlock => {
+                return "WouldBlock";
+            }
+            UnexpectedEof => {
+                return "UnexpectedEof";
+            }
+            Other => {
+                return "Other";
+            }
         }
         return "Other";
     }
@@ -121,32 +147,32 @@ impl ErrorKind {
     /// ErrorKind::from_token("PermissionDenied");   // ErrorKind::PermissionDenied
     /// ```
     pub fn from_token(tok: string) -> ErrorKind {
-        if tok.eq("NotFound")           { return ErrorKind::NotFound; }
-        if tok.eq("PermissionDenied")   { return ErrorKind::PermissionDenied; }
-        if tok.eq("AlreadyExists")      { return ErrorKind::AlreadyExists; }
-        if tok.eq("NotADirectory")      { return ErrorKind::NotADirectory; }
-        if tok.eq("IsADirectory")       { return ErrorKind::IsADirectory; }
-        if tok.eq("DirectoryNotEmpty")  { return ErrorKind::DirectoryNotEmpty; }
-        if tok.eq("InvalidInput")       { return ErrorKind::InvalidInput; }
-        if tok.eq("Interrupted")        { return ErrorKind::Interrupted; }
+        if tok.eq("NotFound") { return ErrorKind::NotFound; }
+        if tok.eq("PermissionDenied") { return ErrorKind::PermissionDenied; }
+        if tok.eq("AlreadyExists") { return ErrorKind::AlreadyExists; }
+        if tok.eq("NotADirectory") { return ErrorKind::NotADirectory; }
+        if tok.eq("IsADirectory") { return ErrorKind::IsADirectory; }
+        if tok.eq("DirectoryNotEmpty") { return ErrorKind::DirectoryNotEmpty; }
+        if tok.eq("InvalidInput") { return ErrorKind::InvalidInput; }
+        if tok.eq("Interrupted") { return ErrorKind::Interrupted; }
         if tok.eq("ReadOnlyFilesystem") { return ErrorKind::ReadOnlyFilesystem; }
-        if tok.eq("TooManyOpenFiles")   { return ErrorKind::TooManyOpenFiles; }
-        if tok.eq("WouldBlock")         { return ErrorKind::WouldBlock; }
-        if tok.eq("UnexpectedEof")      { return ErrorKind::UnexpectedEof; }
+        if tok.eq("TooManyOpenFiles") { return ErrorKind::TooManyOpenFiles; }
+        if tok.eq("WouldBlock") { return ErrorKind::WouldBlock; }
+        if tok.eq("UnexpectedEof") { return ErrorKind::UnexpectedEof; }
         return ErrorKind::Other;
     }
 }
 
 fn _kind_from_ordinal(o: i32) -> ErrorKind {
-    if o == 1  { return ErrorKind::NotFound; }
-    if o == 2  { return ErrorKind::PermissionDenied; }
-    if o == 3  { return ErrorKind::AlreadyExists; }
-    if o == 4  { return ErrorKind::NotADirectory; }
-    if o == 5  { return ErrorKind::IsADirectory; }
-    if o == 6  { return ErrorKind::DirectoryNotEmpty; }
-    if o == 7  { return ErrorKind::InvalidInput; }
-    if o == 8  { return ErrorKind::Interrupted; }
-    if o == 9  { return ErrorKind::ReadOnlyFilesystem; }
+    if o == 1 { return ErrorKind::NotFound; }
+    if o == 2 { return ErrorKind::PermissionDenied; }
+    if o == 3 { return ErrorKind::AlreadyExists; }
+    if o == 4 { return ErrorKind::NotADirectory; }
+    if o == 5 { return ErrorKind::IsADirectory; }
+    if o == 6 { return ErrorKind::DirectoryNotEmpty; }
+    if o == 7 { return ErrorKind::InvalidInput; }
+    if o == 8 { return ErrorKind::Interrupted; }
+    if o == 9 { return ErrorKind::ReadOnlyFilesystem; }
     if o == 10 { return ErrorKind::TooManyOpenFiles; }
     if o == 11 { return ErrorKind::WouldBlock; }
     if o == 12 { return ErrorKind::UnexpectedEof; }
@@ -157,12 +183,12 @@ fn _kind_from_ordinal(o: i32) -> ErrorKind {
 // can inspect. Built by a module with `Error::new` (or the `error(...)`
 // shortcut) and reconstructed by the failure handler with `Error::of`.
 pub struct Error {
-    module: string,     // which subsystem it came from ("fs", "net", …)
-    op: string,         // which operation failed ("open", "read", "rename", …)
-    kind: ErrorKind,    // the kind of failure
-    message: string,    // human detail (usually the OS message)
-    path: string,       // the target involved, when any ("" otherwise)
-    os_code: i32,       // the OS errno, when any (0 otherwise)
+    module: string, // which subsystem it came from ("fs", "net", …)
+    op: string, // which operation failed ("open", "read", "rename", …)
+    kind: ErrorKind, // the kind of failure
+    message: string, // human detail (usually the OS message)
+    path: string, // the target involved, when any ("" otherwise)
+    os_code: i32, // the OS errno, when any (0 otherwise)
 }
 
 impl Error {
@@ -176,8 +202,12 @@ impl Error {
     /// ```
     pub fn new(module: string, op: string, kind: ErrorKind, message: string, path: string, os_code: i32) -> *Error {
         let e: *Error = malloc(sizeof(Error)) as *Error;
-        e.module = module; e.op = op; e.kind = kind;
-        e.message = message; e.path = path; e.os_code = os_code;
+        e.module = module;
+        e.op = op;
+        e.kind = kind;
+        e.message = message;
+        e.path = path;
+        e.os_code = os_code;
         return e;
     }
 
@@ -188,12 +218,9 @@ impl Error {
     /// Error::new("fs","open",ErrorKind::NotFound,"no such file","/tmp/x",2).emit();
     /// // "fs: open: NotFound: no such file [/tmp/x] (os:2)"
     /// ```
-    pub fn emit(self: *Error) -> string {
-        let mut s: string = self.module.concat(": ").concat(self.op).concat(": ")
-            .concat(self.kind.to_string()).concat(": ").concat(self.message);
-        if !self.path.eq("") {
-            s = s.concat(" [").concat(self.path).concat("]");
-        }
+    pub fn emit(self) -> string {
+        let mut s: string = self.module.concat(": ").concat(self.op).concat(": ").concat(self.kind.to_string()).concat(": ").concat(self.message);
+        if !self.path.eq("") { s = s.concat(" [").concat(self.path).concat("]"); }
         if self.os_code != 0 {
             s = s.concat(" (os:").concat(_errors_itoa(self.os_code)).concat(")");
         }
@@ -210,8 +237,12 @@ impl Error {
     /// ```
     pub fn of(msg: string) -> *Error {
         let e: *Error = malloc(sizeof(Error)) as *Error;
-        e.module = ""; e.op = ""; e.kind = ErrorKind::Other;
-        e.message = msg; e.path = ""; e.os_code = 0;
+        e.module = "";
+        e.op = "";
+        e.kind = ErrorKind::Other;
+        e.message = msg;
+        e.path = "";
+        e.os_code = 0;
         // Three fixed leading segments: "<module>: <op>: <Kind>: ".
         let i1: i32 = msg.index_of(": ");
         if i1 < 0 { return e; }
@@ -249,24 +280,49 @@ impl Error {
     }
 
     /// The kind of the failure. This is the field you normally inspect.
-    pub fn kind(self: *Error) -> ErrorKind { return self.kind; }
+    pub fn kind(self) -> ErrorKind {
+        return self.kind;
+    }
+
     /// `true` if the failure is of kind `k` — sugar for `self.kind() == k`.
-    pub fn is(self: *Error, k: ErrorKind) -> bool { return self.kind == k; }
+    pub fn is(self, k: ErrorKind) -> bool {
+        return self.kind == k;
+    }
+
     /// The originating subsystem ("fs", "net", …). "" if unknown.
-    pub fn module(self: *Error) -> string { return self.module; }
+    pub fn module(self) -> string {
+        return self.module;
+    }
+
     /// The operation that failed ("open", "read", …). "" if unknown.
-    pub fn op(self: *Error) -> string { return self.op; }
+    pub fn op(self) -> string {
+        return self.op;
+    }
+
     /// The target involved (path). "" when not applicable.
-    pub fn path(self: *Error) -> string { return self.path; }
+    pub fn path(self) -> string {
+        return self.path;
+    }
+
     /// The OS error code (errno). 0 when not applicable.
-    pub fn os_code(self: *Error) -> i32 { return self.os_code; }
+    pub fn os_code(self) -> i32 {
+        return self.os_code;
+    }
+
     /// The human detail of the failure (usually the OS message).
-    pub fn message(self: *Error) -> string { return self.message; }
+    pub fn message(self) -> string {
+        return self.message;
+    }
+
     /// The full canonical string — the same one that arrived in the `!T`.
-    pub fn to_string(self: *Error) -> string { return self.emit(); }
+    pub fn to_string(self) -> string {
+        return self.emit();
+    }
 
     /// Frees the decoded error.
-    pub fn free(self: *Error) { free(self as *void); }
+    pub fn free(self) {
+        free(self as *void);
+    }
 }
 
 /// Shortcut to build the error string a module passes to `err(...)`. Derives
@@ -307,14 +363,18 @@ pub fn kind_of(msg: string) -> ErrorKind {
 }
 
 // ---- internal helpers ----
-
-fn _errors_itoa(n: i32) -> string { return format!("{}", n); }
+fn _errors_itoa(n: i32) -> string {
+    return format!("{}", n);
+}
 
 fn _atoi(s: string) -> i32 {
     let mut v: i32 = 0;
     let mut neg: bool = false;
     let mut i: i32 = 0;
-    if s.len() > 0 && s.at(0).to_int() == 45 { neg = true; i = 1; }
+    if s.len() > 0 && s.at(0).to_int() == 45 {
+        neg = true;
+        i = 1;
+    }
     while i < s.len() {
         let c: i32 = s.at(i).to_int();
         if c < 48 || c > 57 { break; }

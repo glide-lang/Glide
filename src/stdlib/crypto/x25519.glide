@@ -11,7 +11,6 @@
 // let pk: string = x25519_base(sk);              // 32-byte public
 // let shared: string = x25519(sk, peer_pk);      // 32-byte shared secret
 // ```
-
 import stdlib::crypto::csprng::*;
 import stdlib::bytes::*;
 
@@ -139,14 +138,18 @@ c_raw! {
 }
 
 extern fn __glide_x25519_raw(n: *void, p: *void) -> *void;
+
 extern fn __glide_x25519_checked(out: *void, n: *void, p: *void) -> i32;
+
 extern fn __glide_string_from_buf(p: *void, n: i32) -> string;
 
 // The Curve25519 base point u = 9 (little-endian, 32 bytes).
 fn _x25519_basepoint() -> string {
     let bb: *ByteBuffer = ByteBuffer::new();
     bb.push(9 as u8);
-    for let i: i32 = 1; i < 32; i++ { bb.push(0 as u8); }
+    for let i: i32 = 1; i < 32; i++ {
+        bb.push(0 as u8);
+    }
     let s: string = bb.to_string();
     bb.free();
     return s;
@@ -160,7 +163,10 @@ pub fn x25519(scalar: string, point: string) -> !string {
     if point.len() != 32 { return err("x25519: point must be 32 bytes"); }
     let out: *void = malloc(32) as *void;
     let rc: i32 = __glide_x25519_checked(out, scalar as *void, point as *void);
-    if rc != 0 { free(out); return err("x25519: small-order point (all-zero output)"); }
+    if rc != 0 {
+        free(out);
+        return err("x25519: small-order point (all-zero output)");
+    }
     let s: string = __glide_string_from_buf(out, 32);
     free(out);
     return ok(s);

@@ -19,7 +19,6 @@
 // m.body = "hi";
 // let r: !i32 = c.send(m);
 // ```
-
 import stdlib::net::tcp::*;
 import stdlib::net::tls::*;
 import stdlib::base64::*;
@@ -85,7 +84,7 @@ impl SmtpClient {
     /// let r: !i32 = c.send(m);
     /// if !r.ok { eprintln(r.err); }
     /// ```
-    pub fn send(self: *SmtpClient, mail: *Mail) -> !i32 {
+    pub fn send(self, mail: *Mail) -> !i32 {
         let sr: !*SmtpSession = self.connect();
         if !sr.ok { return err(sr.err); }
         let s: *SmtpSession = sr.val;
@@ -109,70 +108,86 @@ impl SmtpClient {
     ///     r.val.close();
     /// }
     /// ```
-    pub fn connect(self: *SmtpClient) -> !*SmtpSession {
+    pub fn connect(self) -> !*SmtpSession {
         let s: *SmtpSession = malloc(sizeof(SmtpSession)) as *SmtpSession;
         s.tls = null as *TlsStream;
         s.tcp = null as *TcpStream;
         s.is_tls = false;
         s.host = self.host;
         s.auth_mechs = "";
-
         if self.use_tls {
             let mut cfg: *TlsConfig = TlsConfig::client();
             if self.tls_insecure { cfg = TlsConfig::client_insecure(); }
             let tr: !*TlsStream = TlsStream::connect(self.host, self.port, cfg);
             cfg.free();
-            if !tr.ok { free(s as *void); return err(tr.err); }
+            if !tr.ok {
+                free(s as *void);
+                return err(tr.err);
+            }
             s.tls = tr.val;
             s.is_tls = true;
             if self.timeout_ms > 0 { s.tls.set_timeout_ms(self.timeout_ms); }
         } else {
             let tr: !*TcpStream = TcpStream::connect_host(self.host, self.port);
-            if !tr.ok { free(s as *void); return err(tr.err); }
+            if !tr.ok {
+                free(s as *void);
+                return err(tr.err);
+            }
             s.tcp = tr.val;
             if self.timeout_ms > 0 { s.tcp.set_timeout_ms(self.timeout_ms); }
         }
-
         // Banner
         let b: !*SmtpReply = s._read_reply();
-        if !b.ok { s.close(); return err(b.err); }
+        if !b.ok {
+            s.close();
+            return err(b.err);
+        }
         defer free(b.val as *void);
         if b.val.code < 200 || b.val.code >= 300 {
             s.close();
             return err("smtp: banner ".concat(_smtp_itos(b.val.code)).concat(" ").concat(b.val.text));
         }
-
         // EHLO
         let er: !i32 = s._ehlo();
-        if !er.ok { s.close(); return err(er.err); }
-
+        if !er.ok {
+            s.close();
+            return err(er.err);
+        }
         if self.use_starttls && !s.is_tls {
             // STARTTLS upgrade: ask the server to flip to TLS, attach
             // a TlsStream onto the same fd, then re-EHLO over TLS.
             let st: !i32 = s._cmd_check("STARTTLS\r\n", 220);
-            if !st.ok { s.close(); return err(st.err); }
-
+            if !st.ok {
+                s.close();
+                return err(st.err);
+            }
             let mut cfg: *TlsConfig = TlsConfig::client();
             if self.tls_insecure { cfg = TlsConfig::client_insecure(); }
             let tcp: *TcpStream = s.tcp;
             s.tcp = null as *TcpStream;
             let tr: !*TlsStream = TlsStream::attach(tcp, self.host, cfg);
             cfg.free();
-            if !tr.ok { free(s as *void); return err(tr.err); }
+            if !tr.ok {
+                free(s as *void);
+                return err(tr.err);
+            }
             s.tls = tr.val;
             s.is_tls = true;
             // RFC 3207 §4.2: after STARTTLS the client MUST re-issue
             // EHLO so the server's capabilities are re-advertised in
             // the protected channel.
             let er: !i32 = s._ehlo();
-            if !er.ok { s.close(); return err(er.err); }
+            if !er.ok {
+                s.close();
+                return err(er.err);
+            }
         }
-
         if self.username.has && self.password.has {
-            let ar: !i32 = s._auth_dispatch(self.username.val,
-                                              self.password.val,
-                                              self.auth_method);
-            if !ar.ok { s.close(); return err(ar.err); }
+            let ar: !i32 = s._auth_dispatch(self.username.val, self.password.val, self.auth_method);
+            if !ar.ok {
+                s.close();
+                return err(ar.err);
+            }
         }
         return ok(s);
     }
@@ -180,7 +195,7 @@ impl SmtpClient {
 
 pub struct SmtpReply {
     pub code: i32,
-    pub text: string,   // last reply line (server may send multi-line)
+    pub text: string, // last reply line (server may send multi-line)
 }
 
 pub struct SmtpSession {
@@ -202,7 +217,7 @@ impl SmtpSession {
     /// let r: !i32 = session.send_mail(mail);
     /// if r.ok { println!("delivered"); }
     /// ```
-    pub fn send_mail(self: *SmtpSession, mail: *Mail) -> !i32 {
+    pub fn send_mail(self, mail: *Mail) -> !i32 {
         // MAIL FROM
         let mr: !i32 = self._cmd_check("MAIL FROM:<".concat(mail.from).concat(">\r\n"), 250);
         if !mr.ok { return err(mr.err); }
@@ -222,7 +237,6 @@ impl SmtpSession {
         // DATA
         let d: !i32 = self._cmd_check("DATA\r\n", 354);
         if !d.ok { return err(d.err); }
-
         let wire: string = mail.to_rfc5322();
         let dotted: string = _dot_stuff(wire);
         let _w: !i32 = self._write(dotted);
@@ -243,7 +257,7 @@ impl SmtpSession {
     /// session.quit();
     /// session.close();
     /// ```
-    pub fn quit(self: *SmtpSession) -> !i32 {
+    pub fn quit(self) -> !i32 {
         return self._cmd_check("QUIT\r\n", 221);
     }
 
@@ -253,23 +267,23 @@ impl SmtpSession {
     /// ```glide
     /// defer session.close();
     /// ```
-    pub fn close(self: *SmtpSession) {
+    pub fn close(self) {
         if self.is_tls && self.tls != null { self.tls.close(); }
         if !self.is_tls && self.tcp != null { self.tcp.close(); }
         free(self as *void);
     }
 
-    fn _write(self: *SmtpSession, data: string) -> !i32 {
+    fn _write(self, data: string) -> !i32 {
         if self.is_tls { return self.tls.write_all(data); }
         return self.tcp.write_all(data);
     }
 
-    fn _read(self: *SmtpSession, max: i32) -> !string {
+    fn _read(self, max: i32) -> !string {
         if self.is_tls { return self.tls.read(max); }
         return self.tcp.read_str(max);
     }
 
-    fn _read_reply(self: *SmtpSession) -> !*SmtpReply {
+    fn _read_reply(self) -> !*SmtpReply {
         // Multi-line replies: each line "ddd-text" until "ddd text" (space).
         let mut acc: string = "";
         let mut last_text: string = "";
@@ -292,8 +306,8 @@ impl SmtpSession {
             last_code = cr.val;
             last_text = line.substring(4, line.len());
             let sep: i32 = line.at(3).to_int();
-            if sep == 32 { break; }       // space → final line
-            if sep != 45 { return err("smtp: bad reply continuation"); }  // expect dash
+            if sep == 32 { break; } // space → final line
+            if sep != 45 { return err("smtp: bad reply continuation"); } // expect dash
         }
         let r: *SmtpReply = malloc(sizeof(SmtpReply)) as *SmtpReply;
         r.code = last_code;
@@ -301,15 +315,13 @@ impl SmtpSession {
         return ok(r);
     }
 
-    fn _cmd_check(self: *SmtpSession, cmd: string, want: i32) -> !i32 {
+    fn _cmd_check(self, cmd: string, want: i32) -> !i32 {
         let _: !i32 = self._write(cmd);
         let r: !*SmtpReply = self._read_reply();
         if !r.ok { return err(r.err); }
         defer free(r.val as *void);
         if r.val.code != want {
-            return err("smtp: expected ".concat(_smtp_itos(want))
-                .concat(", got ").concat(_smtp_itos(r.val.code))
-                .concat(" ").concat(r.val.text));
+            return err("smtp: expected ".concat(_smtp_itos(want)).concat(", got ").concat(_smtp_itos(r.val.code)).concat(" ").concat(r.val.text));
         }
         return ok(0);
     }
@@ -317,7 +329,7 @@ impl SmtpSession {
     /// Send EHLO and walk every continuation line, recording any
     /// `AUTH ...` extension into `self.auth_mechs` so a later
     /// `_auth_dispatch` can pick the right mechanism.
-    fn _ehlo(self: *SmtpSession) -> !i32 {
+    fn _ehlo(self) -> !i32 {
         self.auth_mechs = "";
         let _w: !i32 = self._write("EHLO ".concat(_local_hostname()).concat("\r\n"));
         let mut last_code: i32 = 0;
@@ -338,8 +350,7 @@ impl SmtpSession {
             if !cr.ok { return err("smtp: non-numeric EHLO code"); }
             last_code = cr.val;
             if last_code != 250 {
-                return err("smtp: EHLO ".concat(_smtp_itos(last_code))
-                           .concat(" ").concat(line.substring(4, line.len())));
+                return err("smtp: EHLO ".concat(_smtp_itos(last_code)).concat(" ").concat(line.substring(4, line.len())));
             }
             let body: string = line.substring(4, line.len());
             // Server lists extensions as "EXTNAME [args]". `AUTH` lists
@@ -352,14 +363,13 @@ impl SmtpSession {
                 self.auth_mechs = "";
             }
             let sep: i32 = line.at(3).to_int();
-            if sep == 32 { return ok(0); }    // space → final line
+            if sep == 32 { return ok(0); } // space → final line
             if sep != 45 { return err("smtp: bad EHLO continuation"); }
         }
         return ok(0);
     }
 
-    fn _auth_dispatch(self: *SmtpSession, user: string, pass: string,
-                      pref: string) -> !i32 {
+    fn _auth_dispatch(self, user: string, pass: string, pref: string) -> !i32 {
         let p: string = pref.to_lower();
         if p.eq("plain") { return self._auth_plain(user, pass); }
         if p.eq("login") { return self._auth_login(user, pass); }
@@ -373,7 +383,7 @@ impl SmtpSession {
         return self._auth_plain(user, pass);
     }
 
-    fn _auth_plain(self: *SmtpSession, user: string, pass: string) -> !i32 {
+    fn _auth_plain(self, user: string, pass: string) -> !i32 {
         // PLAIN: base64(\0 user \0 pass) — RFC 4616
         let nul: string = (0 as char).to_string();
         let raw: string = nul.concat(user).concat(nul).concat(pass);
@@ -385,7 +395,7 @@ impl SmtpSession {
     /// 334 server prompts (typically containing base64 "Username:"
     /// and "Password:"); we ignore the prompt content and just send
     /// our base64-encoded user / pass in turn.
-    fn _auth_login(self: *SmtpSession, user: string, pass: string) -> !i32 {
+    fn _auth_login(self, user: string, pass: string) -> !i32 {
         let r1: !i32 = self._cmd_check("AUTH LOGIN\r\n", 334);
         if !r1.ok { return err(r1.err); }
         let user_b64: string = b64_encode(user);
@@ -410,13 +420,18 @@ fn _dot_stuff(s: string) -> string {
         let c: i32 = s.at(i).to_int();
         if at_line_start && c == 46 { out = out.concat("."); }
         out = out.concat((c as char).to_string());
-        if c == 10 { at_line_start = true; }
-        else        { at_line_start = false; }
+        if c == 10 {
+            at_line_start = true;
+        } else {
+            at_line_start = false;
+        }
     }
     return out;
 }
 
-fn _local_hostname() -> string { return "glide.local"; }
+fn _local_hostname() -> string {
+    return "glide.local";
+}
 
 /// Whitespace-tokenized membership check (case-insensitive caller).
 /// `_word_in_list("plain login cram-md5", "login")` → true.
@@ -432,7 +447,10 @@ fn _smtp_itos(n: i32) -> string {
     if n == 0 { return "0"; }
     let mut x: i32 = n;
     let mut neg: bool = false;
-    if x < 0 { neg = true; x = 0 - x; }
+    if x < 0 {
+        neg = true;
+        x = 0 - x;
+    }
     let mut s: string = "";
     while x > 0 {
         let d: i32 = x % 10;

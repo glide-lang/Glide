@@ -26,27 +26,15 @@ const _GZIP_MIN_BYTES: i32 = 1024;
 pub fn gzip_mw(req: *HttpRequest, c: *Chain) -> HttpResponse {
     let accept: string = req.header("Accept-Encoding").to_lower();
     let resp: HttpResponse = chain_next(c);
-    if !accept.contains("gzip") {
-        return resp;
-    }
-    if resp.status < 200 || resp.status >= 300 {
-        return resp;
-    }
-    if resp.body.len() < _GZIP_MIN_BYTES {
-        return resp;
-    }
-    if (&resp).header("Content-Encoding").len() > 0 {
-        return resp;
-    }
+    if !accept.contains("gzip") { return resp; }
+    if resp.status < 200 || resp.status >= 300 { return resp; }
+    if resp.body.len() < _GZIP_MIN_BYTES { return resp; }
+    if (&resp).header("Content-Encoding").len() > 0 { return resp; }
     let ct: string = (&resp).header("Content-Type").to_lower();
-    if _is_already_compressed(ct) {
-        return resp;
-    }
+    if _is_already_compressed(ct) { return resp; }
     let mut out_len: i32 = 0;
     let buf: *void = gzip_encode(resp.body, resp.body.len(), &out_len);
-    if buf == null || out_len == 0 {
-        return resp;
-    }
+    if buf == null || out_len == 0 { return resp; }
     let encoded: string = __glide_string_from_buf(buf, out_len);
     free(buf);
     return resp.body(encoded).set("Content-Encoding", "gzip");
@@ -55,29 +43,13 @@ pub fn gzip_mw(req: *HttpRequest, c: *Chain) -> HttpResponse {
 // Skip already-compressed media types — re-gzipping a JPEG yields near-zero
 // savings and burns CPU.
 fn _is_already_compressed(ct: string) -> bool {
-    if ct.starts_with("image/") {
-        return true;
-    }
-    if ct.starts_with("video/") {
-        return true;
-    }
-    if ct.starts_with("audio/") {
-        return true;
-    }
-    if ct.starts_with("application/zip") {
-        return true;
-    }
-    if ct.starts_with("application/gzip") {
-        return true;
-    }
-    if ct.starts_with("application/x-gzip") {
-        return true;
-    }
-    if ct.starts_with("application/x-bzip2") {
-        return true;
-    }
-    if ct.starts_with("application/octet-stream") {
-        return true;
-    }
+    if ct.starts_with("image/") { return true; }
+    if ct.starts_with("video/") { return true; }
+    if ct.starts_with("audio/") { return true; }
+    if ct.starts_with("application/zip") { return true; }
+    if ct.starts_with("application/gzip") { return true; }
+    if ct.starts_with("application/x-gzip") { return true; }
+    if ct.starts_with("application/x-bzip2") { return true; }
+    if ct.starts_with("application/octet-stream") { return true; }
     return false;
 }
