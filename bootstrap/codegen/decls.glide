@@ -2395,12 +2395,18 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         let template: Stmt = g.generic_fns.get(entry.name);
         let rt: *Type = subst_type(template.fn_ret_ty, template.type_params, entry.args);
         collect_tuple_in_type(g, rt);
+        // A generic-struct mono named ONLY by this fn mono's signature
+        // (`let b = Box::new(5)` untyped: Box<i32> exists nowhere else) was
+        // never typedef'd/emitted — the decl below referenced an unknown C
+        // type. forward_decl dedups, so already-emitted monos are no-ops.
+        forward_decl_generic_monos(g, rt);
         g.scope.clear();
         if template.fn_params != null {
             for let j: i32 = 0; j < template.fn_params.len(); j++ {
                 let p: Param = template.fn_params.get(j);
                 let pt: *Type = subst_type(p.ty, template.type_params, entry.args);
                 collect_tuple_in_type(g, pt);
+                forward_decl_generic_monos(g, pt);
                 g.declare(p.name, pt);
             }
         }
