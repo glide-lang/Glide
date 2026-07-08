@@ -5043,11 +5043,12 @@ pub fn handle_references(req: *JsonValue, state: *LspState) {
     // their own fn — `self` in one method must not light up another method's
     // `self`, nor a `let n` leak across siblings. A top-level name (fn / type /
     // module) still spans the whole file.
-    // Pass "" (not `path`): open-doc stmts often carry an empty origin, which
-    // fn_containing's path filter would skip — the collection loop below
-    // already scopes by path, and doc.stmts holds only this file's decls.
-    let mut encl: *Stmt = fn_containing(doc.stmts, line0, "");
-    if encl == null { encl = _method_on_sig_line(doc.stmts, line0); }
+    // Pass `path`: doc.stmts holds decls merged from other files too, so
+    // without a file filter a foreign file's line N shadows this file's line N.
+    // fn_containing keeps empty-origin (open-doc) stmts and drops only foreign
+    // ones; the collection loop below scopes hits by path as well.
+    let mut encl: *Stmt = fn_containing(doc.stmts, line0, path);
+    if encl == null { encl = _method_on_sig_line(doc.stmts, line0, path); }
     let scoped: bool = encl != null && (word.eq("self") || _fn_binds_word(encl, word));
     if scoped {
         collect_uses_in_stmt(encl, word, uses);
@@ -5078,10 +5079,11 @@ pub fn handle_references(req: *JsonValue, state: *LspState) {
 // The fn/method whose signature line is `line0`, including a body-less
 // abstract trait method (`fn ola(&self);`) that fn_containing skips. Lets a
 // receiver `self` on such a signature scope to that method.
-fn _method_on_sig_line(stmts: *Vector<Stmt>, line0: i32) -> *Stmt {
+fn _method_on_sig_line(stmts: *Vector<Stmt>, line0: i32, path: string) -> *Stmt {
     if stmts == null { return null; }
     for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
+        if _foreign_origin(s.origin, path) { continue; }
         if s.kind == ST_FN && s.line - 1 == line0 {
             let p: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
             *p = s;
@@ -5090,6 +5092,7 @@ fn _method_on_sig_line(stmts: *Vector<Stmt>, line0: i32) -> *Stmt {
         if (s.kind == ST_IMPL || s.kind == ST_TRAIT) && s.impl_methods != null {
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
+                if _foreign_origin(m.origin, path) { continue; }
                 if m.kind == ST_FN && m.line - 1 == line0 {
                     let mp: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
                     *mp = m;
@@ -5148,9 +5151,11 @@ pub fn handle_document_highlight(req: *JsonValue, state: *LspState) {
     }
     let uses: *Vector<UseSite> = Vector::new();
     // Function-scoped names (self / params / locals) only highlight within
-    // their own fn; a top-level name (fn / type / module) spans the file.
-    let mut encl: *Stmt = fn_containing(doc.stmts, line0, "");
-    if encl == null { encl = _method_on_sig_line(doc.stmts, line0); }
+    // their own fn; a top-level name (fn / type / module) spans the file. Pass
+    // `path` so a foreign file's decls (merged into doc.stmts) can't shadow this
+    // file's fn by raw line number.
+    let mut encl: *Stmt = fn_containing(doc.stmts, line0, path);
+    if encl == null { encl = _method_on_sig_line(doc.stmts, line0, path); }
     let scoped: bool = encl != null && (word.eq("self") || _fn_binds_word(encl, word));
     if scoped {
         collect_uses_in_stmt(encl, word, uses);

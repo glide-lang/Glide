@@ -4121,13 +4121,27 @@ pub fn _line_col_offset(text: string, line0: i32, col0: i32) -> i32 {
 // user's own fn — without it a fn at line N in any stdlib/builtin file
 // would beat a user fn at an earlier line, breaking hover / completion /
 // goto on locals.
+// True when a stmt's origin marks it as coming from a DIFFERENT file than the
+// one being queried. An empty/null origin means the open document itself, so it
+// is never foreign. With `path` empty (caller opts out of filtering) nothing is
+// foreign.
+fn _foreign_origin(origin: string, path: string) -> bool {
+    if path.eq("") { return false; }
+    if origin == null || origin.eq("") { return false; }
+    return !origin.eq(path);
+}
+
 pub fn fn_containing(stmts: *Vector<Stmt>, line0: i32, path: string) -> *Stmt {
     if stmts == null { return null; }
     let mut best: *Stmt = null;
     let mut best_line: i32 = -1;
     for let i: i32 = 0; i < stmts.len(); i++ {
         let s: Stmt = stmts.get(i);
-        if !path.eq("") && s.origin != null && !s.origin.eq(path) { continue; }
+        // Skip decls merged in from OTHER files (origin = a different path).
+        // The open doc's own stmts carry an empty/null origin and must stay —
+        // otherwise a foreign file's line N would shadow this file's line N,
+        // since the match is by raw line number.
+        if _foreign_origin(s.origin, path) { continue; }
         if s.kind == ST_FN && s.fn_body != null {
             let start: i32 = s.line - 1;
             if start <= line0 && start > best_line {
@@ -4145,6 +4159,7 @@ pub fn fn_containing(stmts: *Vector<Stmt>, line0: i32, path: string) -> *Stmt {
             for let j: i32 = 0; j < s.impl_methods.len(); j++ {
                 let m: Stmt = s.impl_methods.get(j);
                 if m.kind != ST_FN || m.fn_body == null { continue; }
+                if _foreign_origin(m.origin, path) { continue; }
                 let mstart: i32 = m.line - 1;
                 if mstart <= line0 && mstart > best_line {
                     best_line = mstart;
