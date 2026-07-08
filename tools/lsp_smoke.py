@@ -2168,6 +2168,22 @@ case_diagnostics("impl of a generic struct without its type params is rejected",
     'fn main() { println!("x"); }',
     expect_codes_present=["impl-missing-type-params"])
 
+case_diagnostics("method re-declaring the impl's type param is rejected",
+    'struct LL<T> { data: T }\n'
+    'impl<T> LL<T> {\n'
+    '    pub fn set<T>(&mut self, data: T) { self.data = data; }\n'
+    '}\n'
+    'fn main() { println!("x"); }',
+    expect_codes_present=["type-param-shadow"])
+
+case_diagnostics("bare struct literal into a wrapper field is rejected",
+    'struct LL<T> { next: ?Box<LL<T>>, data: T }\n'
+    'impl<T> LL<T> {\n'
+    '    pub fn bad(&mut self, data: T) { self.next = LL { data: data, next: none() }; }\n'
+    '}\n'
+    'fn main() { println!("x"); }',
+    expect_codes_present=["wrapper-field-needs-ctor"])
+
 case_diagnostics("assigning to a struct while a field borrow lives is rejected",
     'struct S { v: i32 }\n'
     'fn main() -> i32 {\n'

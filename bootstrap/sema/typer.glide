@@ -2631,6 +2631,20 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
                     let m: Stmt = s.impl_methods.get(j);
                     if m.kind == ST_FN {
                         _ban_borrow_signature(t, &m);
+                        // A method re-declaring one of the impl's own type
+                        // params (`impl<T> X<T> { fn insert<T>(..) }`) is a
+                        // shadow: monomorphization combines them into [T, T]
+                        // and dies downstream. Reject at the method name.
+                        if m.type_params != null && s.type_params != null {
+                            for let ti: i32 = 0; ti < m.type_params.len(); ti++ {
+                                let tp: string = m.type_params.get(ti);
+                                for let tj: i32 = 0; tj < s.type_params.len(); tj++ {
+                                    if s.type_params.get(tj).eq(tp) {
+                                        t.err_code_range(m.name_line, m.name_col, m.name.len(), "type-param-shadow", "method `".concat(m.name).concat("` re-declares type parameter `").concat(tp).concat("`, which is already in scope from the enclosing `impl<").concat(tp).concat(">` — drop `<").concat(tp).concat(">` from the method"));
+                                    }
+                                }
+                            }
+                        }
                         let fname: string = key_prefix.concat("_").concat(m.name);
                         let sig: FnSig = FnSig { name: fname, params: m.fn_params, ret_type: m.fn_ret_ty, owned_return: _fn_returns_owned(&m), is_variadic: m.is_variadic, type_params: m.type_params, type_param_bounds: m.type_param_bounds, owner_type_params: s.type_params, owner_type_param_bounds: s.type_param_bounds, decl_origin: s.origin, decl_line: m.name_line, decl_col: m.name_col };
                         t.fns.insert(fname, sig);
@@ -5759,6 +5773,27 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 if e.rhs != null && e.rhs.kind == EX_UNARY && e.rhs.op_code == UN_ADDR_MUT {
                     t.err_code_range(e.rhs.line, e.rhs.column, _arg_span(e.rhs), "borrow-escape", "cannot store `&mut x` — an exclusive borrow may not be stored; store `&x as *T` if you own the aliasing, or a value");
                 }
+            }
+        }
+        // Bare struct literal into a WRAPPER field: `self.next = Self { .. }`
+        // on a `?Box<LL<T>>` field has no implicit coercion — the wrapper ctor
+        // must be explicit. The typer defers member types, so use the
+        // declared-field lookup; struct-lit-only keeps this at zero false
+        // positives (some()/none()/ok() RHS never hit it).
+        if e.lhs != null && e.lhs.kind == EX_MEMBER && e.rhs != null && e.rhs.kind == EX_STRUCT_LIT && e.lhs.field != null {
+            let mut wfty: *Type = lt;
+            if wfty == null {
+                wfty = _simple_field_ty(t, e.lhs);
+            }
+            if wfty != null && (wfty.kind == TY_OPTION || wfty.kind == TY_RESULT || wfty.kind == TY_OPT_RESULT) {
+                let mut hint: string = "some(v)";
+                if wfty.kind == TY_RESULT {
+                    hint = "ok(v)";
+                }
+                if wfty.kind == TY_OPTION && wfty.inner != null && wfty.inner.kind == TY_GENERIC && wfty.inner.name != null && wfty.inner.name.eq("Box") {
+                    hint = "some(Box::new(v))";
+                }
+                t.err_code_range(e.rhs.line, e.rhs.column, _arg_span(e.rhs), "wrapper-field-needs-ctor", "field `".concat(e.lhs.field).concat("` is `").concat(type_to_string(wfty)).concat("`, not a bare struct value — wrap it: `").concat(hint).concat("`"));
             }
         }
         // Move-on-assign: a plain `=` whose RHS is an owned local moves it; later
