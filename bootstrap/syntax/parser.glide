@@ -1283,6 +1283,13 @@ fn _subst_self_clone_expr(e: *Expr, target: *Type, name: string) -> *Expr {
     *c = *e;
     if c.kind == EX_STRUCT_LIT && c.str_val != null && c.str_val.eq("Self") {
         c.str_val = name;
+        // Carry the impl target as the lit's concrete type: codegen's mono
+        // paths (C tag mangling, arg inference for nested generic calls) read
+        // cast_to — without it a `Self { .. }` in a generic body emitted the
+        // bare template tag and poisoned fn monos.
+        if c.cast_to == null {
+            c.cast_to = target;
+        }
     }
     if c.kind == EX_PATH && c.str_val != null && c.str_val.eq("Self") {
         c.str_val = name;

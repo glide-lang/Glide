@@ -268,7 +268,9 @@ pub fn emit_field_render_c(g: *CG, cexpr: string, fty: *Type, depth: i32) {
     // render as "...".
     if k == TY_GENERIC && fty.name != null && g.generic_structs.contains(fty.name)
         && !fty.name.eq("Vector") && !fty.name.eq("HashMap") && !fty.name.eq("chan") {
-        if depth >= 6 {
+        // ~3 levels per list node (struct -> option -> Box): 12 shows four
+        // nodes before "..." truncates the tail.
+        if depth >= 12 {
             print!("\"...\"");
             return;
         }
@@ -2749,6 +2751,12 @@ pub fn infer_for_codegen(g: *CG, e: *Expr) -> *Type {
         return e.cast_to;
     }
     if e.kind == EX_STRUCT_LIT {
+        // A generic struct-lit (`Self { .. }` in an impl body) carries its
+        // concrete type on cast_to; str_val is the bare TEMPLATE name, and
+        // inferring that poisons monos (`Box_new__LL (LL v)`).
+        if e.cast_to != null && e.cast_to.kind == TY_GENERIC {
+            return e.cast_to;
+        }
         return ty_named(e.str_val);
     }
     if e.kind == EX_TUPLE {

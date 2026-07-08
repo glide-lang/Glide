@@ -2900,6 +2900,65 @@ pub fn resolve_method_call_args(g: *CG, call: *Expr, template: *Stmt, recv_args:
 // Try to monomorphize a Call expression. Returns true if the callee was
 // rewritten to a mangled mono name. Uses both args and an optional return-
 // type hint for inference.
+// Is `t` a CONCRETE type a fn mono may be instantiated with? Rejects the two
+// poison shapes that leak out of generic TEMPLATE bodies: a bare template
+// name (`LL` — a Self-lit inferred before substitution) and an unknown
+// TY_NAMED (an unsubstituted type param like `T`). Unhandled kinds stay
+// permissive — the guard only has to stop known-junk monos
+// (`Box_new__LL (LL v)` in the emitted C).
+fn _ty_concrete_for_mono(g: *CG, t: *Type) -> bool {
+    if t == null {
+        return false;
+    }
+    if t.kind == TY_NAMED {
+        let n: string = t.name;
+        if n == null || n.eq("") {
+            return false;
+        }
+        if g.generic_structs.contains(n) {
+            return false; // bare template name — needs its <args>
+        }
+        if g.structs.contains(n) || g.enums.contains(n) || g.traits.contains(n) {
+            return true;
+        }
+        if n.eq("i8") || n.eq("i16") || n.eq("i32") || n.eq("i64") || n.eq("int") || n.eq("isize") || n.eq("long")
+            || n.eq("u8") || n.eq("u16") || n.eq("u32") || n.eq("u64") || n.eq("uint") || n.eq("usize") || n.eq("ulong")
+            || n.eq("i128") || n.eq("u128") || n.eq("i256") || n.eq("u256")
+            || n.eq("f32") || n.eq("f64") || n.eq("float")
+            || n.eq("bool") || n.eq("char") || n.eq("string") || n.eq("void") {
+            return true;
+        }
+        return false; // unknown name — an unsubstituted type param
+    }
+    if t.kind == TY_GENERIC {
+        if t.args != null {
+            for let i: i32 = 0; i < t.args.len(); i++ {
+                let a: Type = t.args.get(i);
+                if !_ty_concrete_for_mono(g, &a) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+    if t.kind == TY_POINTER || t.kind == TY_BORROW || t.kind == TY_BORROW_MUT || t.kind == TY_SLICE
+        || t.kind == TY_OPTION || t.kind == TY_RESULT || t.kind == TY_OPT_RESULT {
+        return _ty_concrete_for_mono(g, t.inner);
+    }
+    if t.kind == TY_TUPLE {
+        if t.args != null {
+            for let i: i32 = 0; i < t.args.len(); i++ {
+                let a: Type = t.args.get(i);
+                if !_ty_concrete_for_mono(g, &a) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+    return true;
+}
+
 fn try_mono_call(g: *CG, call: *Expr, ret_hint: *Type) -> bool {
     if call == null {
         return false;
@@ -2966,6 +3025,17 @@ fn try_mono_call(g: *CG, call: *Expr, ret_hint: *Type) -> bool {
     if !all || derived.len() == 0 {
         bindings.free();
         return false;
+    }
+    // Junk-mono backstop: inside a generic TEMPLATE body (prescanned before
+    // substitution) an inferred arg can carry an unsubstituted type — bail so
+    // the mono happens later with the substituted body instead of emitting
+    // invalid C.
+    for let i: i32 = 0; i < derived.len(); i++ {
+        let dt: Type = derived.get(i);
+        if !_ty_concrete_for_mono(g, &dt) {
+            bindings.free();
+            return false;
+        }
     }
     let mangled: string = mangle_generic(gname, derived);
     callee.kind = EX_IDENT;
