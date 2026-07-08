@@ -6440,7 +6440,11 @@ pub fn emit_expr(g: *CG, e: *Expr) {
             }
             print!("\\n\", ");
             if cg_is_display(g, at) {
+                // dbg! renders PRETTY (multi-line, indented) — the inspect
+                // tool; println! keeps the compact single-line form.
+                print!("__glide_pretty(");
                 emit_field_render_c(g, "__dbg", at, 0);
+                print!(")");
             } else {
                 if at != null && at.kind == TY_NAMED && at.name.eq("bool") {
                     print!("__glide_bool_to_string(__dbg)");
