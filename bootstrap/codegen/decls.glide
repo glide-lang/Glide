@@ -116,6 +116,60 @@ fn subst_stmt(s: *Stmt, params: *Vector<string>, args: *Vector<Type>, gs: *HashM
     if s.for_step != null {
         n.for_step = subst_expr(s.for_step, params, args, gs);
     }
+    // match / select!: the scrutinee and every arm body are code like any
+    // other — leaving them UNsubstituted kept the template's types alive in
+    // the mono (`Self { .. }` in an arm emitted `LL__T` / poisoned nested
+    // monos). Long-standing hole; arm bodies just rarely carried types.
+    if s.scrutinee != null {
+        n.scrutinee = subst_expr(s.scrutinee, params, args, gs);
+    }
+    if s.arms != null {
+        let na: *Vector<MatchArm> = Vector::new();
+        for let i: i32 = 0; i < s.arms.len(); i++ {
+            let mut ar: MatchArm = s.arms.get(i);
+            if ar.lit != null {
+                ar.lit = subst_expr(ar.lit, params, args, gs);
+            }
+            if ar.body != null {
+                let ab: *Vector<Stmt> = Vector::new();
+                for let j: i32 = 0; j < ar.body.len(); j++ {
+                    let bs: Stmt = ar.body.get(j);
+                    let nb2: *Stmt = subst_stmt(&bs, params, args, gs);
+                    if nb2 != null {
+                        ab.push(*nb2);
+                    }
+                }
+                ar.body = ab;
+            }
+            na.push(ar);
+        }
+        n.arms = na;
+    }
+    if s.select_arms != null {
+        let nsa: *Vector<SelectArm> = Vector::new();
+        for let i: i32 = 0; i < s.select_arms.len(); i++ {
+            let mut sa: SelectArm = s.select_arms.get(i);
+            if sa.chan_expr != null {
+                sa.chan_expr = subst_expr(sa.chan_expr, params, args, gs);
+            }
+            if sa.send_value != null {
+                sa.send_value = subst_expr(sa.send_value, params, args, gs);
+            }
+            if sa.body != null {
+                let sb: *Vector<Stmt> = Vector::new();
+                for let j: i32 = 0; j < sa.body.len(); j++ {
+                    let bs: Stmt = sa.body.get(j);
+                    let nb3: *Stmt = subst_stmt(&bs, params, args, gs);
+                    if nb3 != null {
+                        sb.push(*nb3);
+                    }
+                }
+                sa.body = sb;
+            }
+            nsa.push(sa);
+        }
+        n.select_arms = nsa;
+    }
     if s.fn_ret_ty != null {
         n.fn_ret_ty = subst_type(s.fn_ret_ty, params, args);
     }
