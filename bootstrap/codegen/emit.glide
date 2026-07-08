@@ -1699,7 +1699,7 @@ fn _vec_let_droppable(g: *CG, st: *Stmt) -> bool {
     if st.let_ty == null || st.let_ty.kind != TY_POINTER || st.let_ty.inner == null { return false; }
     let inner: *Type = st.let_ty.inner;
     if inner.kind != TY_GENERIC || inner.name == null { return false; }
-    if !(inner.name.eq("Vector") || inner.name.eq("HashMap")) { return false; }
+    if !(inner.name.eq("Vector") || inner.name.eq("HashMap") || inner.name.eq("Box")) { return false; }
     if !_vec_fresh_ctor(st.let_value, inner.name) { return false; }
     if st.name == null || st.name.eq("") { return false; }
     // Compiler-synthesized temps (e.g. `__vec_of_L_C = Vector::new()` from the

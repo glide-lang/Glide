@@ -24,12 +24,12 @@ impl Client {
     }
 }
 
-struct Box<T> {
+struct GBox<T> {
     v: T,
 }
 
-impl<T> Box<T> {
-    // `Self { }` and `-> Self` inside a generic impl resolve to `Box<T>`.
+impl<T> GBox<T> {
+    // `Self { }` and `-> Self` inside a generic impl resolve to `GBox<T>`.
     pub fn wrap(v: T) -> Self {
         return Self { v: v };
     }
@@ -51,7 +51,7 @@ fn test_self_qualified_call() -> i32 {
 }
 
 fn test_self_in_generic_impl() -> i32 {
-    let b: Box<i32> = Box::wrap(7);
+    let b: GBox<i32> = GBox::wrap(7);
     assert_eq!(b.unwrap(), 7);
     return 0;
 }

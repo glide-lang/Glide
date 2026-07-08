@@ -1,0 +1,83 @@
+/// A safe, owning heap box for a single `T`.
+///
+/// `Box<T>` owns exactly one heap-allocated `T`. It is the ergonomic sugar for
+/// `malloc(sizeof(T))` + `free` — no manual memory management, no raw pointer
+/// arithmetic. Its main use is making recursive data types expressible without
+/// an infinitely-sized struct:
+///
+/// ```glide
+/// struct Node<T> { data: T, next: ?Box<Node<T>> }
+/// ```
+///
+/// A local `let b: *Box<i32> = Box::new(5);` is recognised by Glide's auto-drop:
+/// the box (and its inner allocation) is freed at scope end, so you never write
+/// `free` yourself:
+///
+/// ```glide
+/// let b: *Box<i32> = Box::new(5);
+/// println!(b.get());     // 5    (freed automatically at scope end)
+/// ```
+
+pub struct Box<T> {
+    /// Heap slot holding the single owned `T`.
+    ptr: *T,
+    /// Set when `ptr` was bump-allocated by the active arena (LSP path) rather
+    /// than via libc malloc. `free` skips libc free when true — the arena
+    /// reclaims everything in bulk.
+    is_arena: bool,
+}
+
+impl<T> Box<T> {
+    /// Move `v` onto the heap and return an owning box. Pair with the automatic
+    /// scope-end drop (just bind it to a local) or `free` it by hand.
+    ///
+    /// ```glide
+    /// let b: *Box<i32> = Box::new(42);
+    /// println!(b.get());     // 42
+    /// ```
+    fn new(v: T) -> *Box<T> {
+        let arena: bool = __glide_palloc_active() != 0;
+        let b: *Box<T>;
+        if arena {
+            b = __glide_palloc(sizeof(Box<T>)) as *Box<T>;
+            b.ptr = __glide_palloc(sizeof(T)) as *T;
+        } else {
+            b = malloc(sizeof(Box<T>)) as *Box<T>;
+            b.ptr = malloc(sizeof(T)) as *T;
+        }
+        b.is_arena = arena;
+        b.ptr[0] = v;
+        return b;
+    }
+
+    /// Read the boxed value by value (a copy of `T`).
+    ///
+    /// ```glide
+    /// let b: *Box<i32> = Box::new(7);
+    /// let x: i32 = b.get();   // 7
+    /// ```
+    fn get(self: *Box<T>) -> T {
+        return self.ptr[0];
+    }
+
+    /// Overwrite the boxed value in place.
+    ///
+    /// ```glide
+    /// let b: *Box<i32> = Box::new(1);
+    /// b.set(9);
+    /// b.get();   // 9
+    /// ```
+    fn set(self: *Box<T>, v: T) {
+        self.ptr[0] = v;
+    }
+
+    /// Release the inner allocation and the box itself. After `free`, the
+    /// pointer is dangling; do not touch it again. Arena-backed boxes are owned
+    /// by the arena, so this is a no-op for them (the per-keystroke reset frees
+    /// them in bulk).
+    fn free(self: *Box<T>) {
+        if self.is_arena { return; }
+        free(self.ptr as *void);
+        free(self as *void);
+    }
+}

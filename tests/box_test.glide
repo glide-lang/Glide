@@ -1,0 +1,7 @@
+// Box<T>: a safe owning heap box. Box::new moves a T to the heap; the local is
+// auto-freed at scope end (no manual .free()); get/set round-trip the value.
+fn boxed_i32() -> i32 { let b: *Box<i32> = Box::new(41); b.set(b.get() + 1); return b.get(); }
+fn test_box_i32() -> i32 { assert!(boxed_i32() == 42); return 0; }
+
+fn boxed_string() -> string { let b: *Box<string> = Box::new("mur".concat("illo")); return b.get(); }
+fn test_box_string() -> i32 { assert!(boxed_string().eq("murillo")); return 0; }
