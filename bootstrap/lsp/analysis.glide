@@ -8,7 +8,8 @@ import bootstrap::syntax::parser::*;
 import bootstrap::sema::typer::*;
 import bootstrap::cli::fmt::*;
 import bootstrap::lsp::server::*;
-import bootstrap::lsp::features; // extracted
+import bootstrap::lsp::features::*; // extracted
+import bootstrap::pkg::loader::*; // last_path_segment
 import bootstrap::lsp::completion::*;
 
 fn _is_int_type_name(n: string) -> bool {

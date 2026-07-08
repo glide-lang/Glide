@@ -1,9 +1,10 @@
 import stdlib::fs::*;
+import stdlib::hashmap::*;
 import bootstrap::syntax::ast::*;
 import bootstrap::syntax::lexer::*;
 import bootstrap::syntax::parser::*;
-import bootstrap::cli::fmt; // for fmt_type signatures
-import bootstrap::pkg::manifest; // for dep discovery (read_manifest, dep_cache_dir, ManifestDep)
+import bootstrap::cli::fmt::*; // for fmt_type signatures
+import bootstrap::pkg::manifest::*; // for dep discovery (read_manifest, dep_cache_dir, ManifestDep)
 
 // `glide doc`: walk every `*.glide` under the project root, parse it,
 // pull out top-level `pub` items + their `///` doc comments, and emit

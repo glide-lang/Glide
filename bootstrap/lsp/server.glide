@@ -36,13 +36,14 @@ import stdlib::hashmap::*;
 import bootstrap::syntax::ast::*;
 import bootstrap::syntax::lexer::*;
 import bootstrap::syntax::parser::*;
-import bootstrap::syntax::expander; // for body_references_self / expand_macros
-import bootstrap::syntax::lower; // for lower_program
-import bootstrap::sema::typer; // for types_compat / merge_parse_diags
+import bootstrap::syntax::expander::*; // for body_references_self / expand_macros
+import bootstrap::syntax::lower::*; // for lower_program
+import bootstrap::sema::typer::*; // for types_compat / merge_parse_diags
 import bootstrap::util::json::*;
+import bootstrap::lsp::features::*; // extracted helpers (path_to_uri, …)
 import bootstrap::cli::fmt::*;
-import bootstrap::pkg::manifest; // for project-aware completion (Manifest, dep_cache_dir, …)
-import bootstrap::pkg::fetch; // for fetch_all when the user clicks "Fetch missing dep"
+import bootstrap::pkg::manifest::*; // for project-aware completion (Manifest, dep_cache_dir, …)
+import bootstrap::pkg::fetch::*; // for fetch_all when the user clicks "Fetch missing dep"
 
 // LSP diagnostic log. Opens (truncate) on lsp_main entry and redirects
 // stderr there so SIGSEGV traps from the runtime land in the same
@@ -129,9 +130,9 @@ extern fn __glide_cwd() -> string;
 // from the driver). Importing it gives the LSP the same load_into_str /
 // load_*_with_cache / build_visibility the build uses, no forward-decls.
 import bootstrap::pkg::loader::*;
-import bootstrap::lsp::analysis; // custom analysis/lint passes (extracted)
-import bootstrap::lsp::completion; // extracted
-import bootstrap::lsp::features; // extracted
+import bootstrap::lsp::analysis::*; // custom analysis/lint passes (extracted)
+import bootstrap::lsp::completion::*; // extracted
+import bootstrap::lsp::features::*; // extracted
 
 // ---- Document store ----------------------------------------------------
 pub struct LspDoc {
@@ -2138,7 +2139,7 @@ pub struct FieldHit {
 // `Type::method(` calls; `is_method` is true for `recv.method(` calls;
 // `active_param` is the 0-indexed argument the cursor is on (comma count
 // at the call's paren depth).
-struct SigCallCtx {
+pub struct SigCallCtx {
     pub found: bool,
     pub name: string,
     pub type_qual: string,
@@ -2167,7 +2168,7 @@ pub const SEMTOK_NAMESPACE: i32 = 8;
 // ---- call hierarchy ----------------------------------------------------
 
 // One call site found in a fn body: the callee name + where it appears.
-struct ChCall {
+pub struct ChCall {
     pub name: string,
     pub line: i32,
     pub col: i32,
@@ -2207,7 +2208,7 @@ pub const IMPCTX_BRACE: i32 = 2;
 
 // Walks the program collecting every usage of `name` as an identifier.
 // Returns a list of (line, col) pairs, 1-indexed.
-struct UseSite {
+pub struct UseSite {
     pub line: i32,
     pub col: i32,
 }
@@ -2697,7 +2698,7 @@ fn _stmt_has_loop_break(s: *Stmt) -> bool {
     return false;
 }
 
-struct ExpectPending {
+pub struct ExpectPending {
     pub pe_code: string,
     pub pe_line: i32, // start of the matching range (inclusive)
     pub pe_end_line: i32, // end of the matching range (inclusive); == pe_line for stmt-local

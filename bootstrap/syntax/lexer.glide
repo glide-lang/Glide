@@ -11,6 +11,7 @@
 // inline asm verbatim.
 //
 // Pipeline: lexer -> parser -> expander -> lower -> typer -> codegen.
+import bootstrap::syntax::ast::*; // _is_num_suffix
 pub const TOK_EOF: i32 = 0;
 pub const TOK_IDENT: i32 = 1;
 pub const TOK_INT: i32 = 2;

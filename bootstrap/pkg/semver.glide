@@ -11,7 +11,7 @@
 // `is_semver=false` values and never win against a semver. Two
 // distinct opaque revs for the same URL fall back to "first wins"
 // with a warning.
-import bootstrap::syntax::ast; // int_to_str
+import bootstrap::syntax::ast::*; // int_to_str
 
 pub struct SemVer {
     pub major: i32,

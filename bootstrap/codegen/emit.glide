@@ -16,8 +16,8 @@
 // The downstream C compiler (zig cc / mingw / cl) does the heavy lifting.
 import stdlib::hashmap::*;
 import bootstrap::syntax::ast::*;
-import bootstrap::codegen::runtime; // extracted
-import bootstrap::codegen::decls; // extracted
+import bootstrap::codegen::runtime::*; // extracted
+import bootstrap::codegen::decls::*; // extracted
 
 // Naïve string-replace: walk through `s`, copying bytes verbatim except where
 // `find` matches — there we splice in `repl` and skip ahead. Used by the
@@ -2063,7 +2063,7 @@ fn _param_is_string(ty: *Type) -> bool {
 // Forwarding chains resolve: wrap(s){ log(s) } with log read-only => wrap
 // non-retaining transitively. Absent entries (extern/variadic/bodyless/unresolved
 // callee: method/generic/indirect) default to RETAIN in callee_retains_arg.
-fn compute_str_retention(g: *CG) {
+pub fn compute_str_retention(g: *CG) {
     let names: *Vector<string> = g.fns.keys();
     // Seed: analyzable free-fn string params start non-retaining (false).
     // Struct-VALUE params with an owned string field are tracked in the same
@@ -2180,7 +2180,7 @@ fn _ret_has_value(list: *Vector<Stmt>) -> bool {
 // every string-return user fn false, then flip false->true while
 // _call_returns_owned_str consults the partial table (monotone => terminates,
 // sound at the fixpoint). Run AFTER compute_str_retention.
-fn compute_str_ret_owned(g: *CG) {
+pub fn compute_str_ret_owned(g: *CG) {
     let names: *Vector<string> = g.fns.keys();
     for let i: i32 = 0; i < names.len(); i = i + 1 {
         let fname: string = names.get(i);

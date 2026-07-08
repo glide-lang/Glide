@@ -1,4 +1,5 @@
 import bootstrap::syntax::ast::*;
+import stdlib::hashmap::*;
 import bootstrap::syntax::parser::*;
 
 // Lowering pass — desugars surface syntax into core AST shapes the typer

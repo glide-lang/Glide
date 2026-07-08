@@ -8,6 +8,7 @@ import bootstrap::sema::typer::*;
 import bootstrap::cli::fmt::*;
 import bootstrap::util::json::*;
 import bootstrap::pkg::manifest::*;
+import bootstrap::pkg::loader::*; // resolve_import
 import bootstrap::lsp::server::*;
 import bootstrap::lsp::completion::*;
 

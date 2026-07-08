@@ -15,7 +15,7 @@
 // (`&` / `&mut`) are enforced here without lifetime annotations.
 import stdlib::hashmap::*;
 import bootstrap::syntax::ast::*;
-import bootstrap::syntax::parser; // for ParseDiag (used by merge_parse_diags below)
+import bootstrap::syntax::parser::*; // for ParseDiag (used by merge_parse_diags below)
 
 // ---- type helpers --------------------------------------------------------
 
@@ -25,6 +25,24 @@ import bootstrap::syntax::parser; // for ParseDiag (used by merge_parse_diags be
 
 // Convert parser-side diagnostics into typer DiagEntry shape and append
 // them to the typer's diagnostics vector so the pretty-printer / LSP
+// Top-level decl by name. The LSP has its own find_top_decl; the typer keeps
+// a local copy so sema never depends on the lsp layer (the old bare-name call
+// only resolved because the build loads the whole program).
+fn _typer_top_decl(program: *Vector<Stmt>, name: string) -> *Stmt {
+    if program == null || name == null || name.eq("") {
+        return null;
+    }
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.name != null && s.name.eq(name) {
+            let p: *Stmt = __glide_palloc(sizeof(Stmt)) as *Stmt;
+            *p = s;
+            return p;
+        }
+    }
+    return null;
+}
+
 // publish path picks them up alongside type errors. Always severity 1
 // (`error`) with code `parse`.
 pub fn merge_parse_diags(t: *Typer, pdiags: *Vector<ParseDiag>) {
@@ -2702,7 +2720,7 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
         // E0407). An extra method also broke the C vtable initializer — the
         // `.name = thunk` field doesn't exist on the trait's vt struct — and
         // died in cc as an ICE.
-        let tdcl: *Stmt = find_top_decl(program, s.impl_trait_name);
+        let tdcl: *Stmt = _typer_top_decl(program, s.impl_trait_name);
         if tdcl != null && tdcl.kind == ST_TRAIT && tdcl.impl_methods != null && s.impl_methods != null {
             for let mi: i32 = 0; mi < s.impl_methods.len(); mi++ {
                 let im: Stmt = s.impl_methods.get(mi);

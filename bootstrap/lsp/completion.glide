@@ -9,7 +9,7 @@ import bootstrap::cli::fmt::*;
 import bootstrap::util::json::*;
 import bootstrap::pkg::manifest::*;
 import bootstrap::lsp::server::*;
-import bootstrap::lsp::features; // extracted
+import bootstrap::lsp::features::*; // extracted
 import bootstrap::pkg::fetch::*;
 import bootstrap::pkg::loader::*;
 import bootstrap::syntax::expander::*;
