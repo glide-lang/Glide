@@ -1425,7 +1425,7 @@ fn _lsp_ownership_note(stmts: *Vector<Stmt>, ty: *Type) -> string {
             if _lsp_struct_is_pod(stmts, n, 0) {
                 return "📋 **Copy** — plain-data struct; assign/pass copies it, the original stays valid";
             }
-            return "📦 **Move** — owns heap (string/Vector/ptr); `let b = a` and passing by value transfer ownership (`a` is consumed). Use `&a` to use it without moving.";
+            return "📦 **value (owned fields)** — assign/pass copies it and the source stays usable while every copy stays local; a copy that ESCAPES the fn (returned/stored) moves ownership and consumes the source. Heap fields are freed once by the compiler's analysis.";
         }
     }
     return "";
