@@ -1114,6 +1114,22 @@ fn _is_str_read_only(field: string) -> bool {
         || field.eq("is_empty") || field.eq("compare") || field.eq("cmp")
         || field.eq("hash") || field.eq("count") || field.eq("find");
 }
+fn _call_nargs(e: *Expr) -> i32 {
+    if e == null || e.args == null { return 0; }
+    return e.args.len();
+}
+// A string-READER call: the read-only methods plus `concat` (1 arg) /
+// `substring` (2 args), whose result is a fresh DISJOINT allocation (see
+// _str_rhs_disjoint_alloc) — they read their receiver and string args
+// byte-wise and never retain a pointer to either. Arity-pinned so
+// `Vector.concat()` / `.join()` are never misclassified.
+fn _is_str_reader_call(field: string, nargs: i32) -> bool {
+    if field == null { return false; }
+    if _is_str_read_only(field) { return true; }
+    if field.eq("concat") && nargs == 1 { return true; }
+    if field.eq("substring") && nargs == 2 { return true; }
+    return false;
+}
 // P-predicate: RHS is a single, disjoint allocation (result never aliases an
 // input): format!(...), or s.concat(x) / s.substring(a,b) with non-call operands.
 fn _str_rhs_disjoint_alloc(e: *Expr) -> bool {
@@ -1222,8 +1238,23 @@ fn _str_expr_escapes(g: *CG, name: string, e: *Expr) -> bool {
     // reader-receiver: name.<reader>(args) — receiver read-only, check the args.
     if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER
         && e.lhs.lhs != null && e.lhs.lhs.kind == EX_IDENT && e.lhs.lhs.str_val != null
-        && e.lhs.lhs.str_val.eq(name) && _is_str_read_only(e.lhs.field) {
+        && e.lhs.lhs.str_val.eq(name) && _is_str_reader_call(e.lhs.field, _call_nargs(e)) {
         return _str_args_escape(g, name, e.args);
+    }
+    // string-reader call on ANOTHER receiver: its string args are only read
+    // (bytes copied into the disjoint result), so a bare `name` arg does not
+    // alias out. The receiver and non-bare args still recurse.
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER
+        && _is_str_reader_call(e.lhs.field, _call_nargs(e)) {
+        if _str_expr_escapes(g, name, e.lhs.lhs) { return true; }
+        if e.args != null {
+            for let i: i32 = 0; i < e.args.len(); i = i + 1 {
+                let a: Expr = e.args.get(i);
+                if a.kind == EX_IDENT && a.str_val != null && a.str_val.eq(name) { continue; }
+                if _str_expr_escapes(g, name, &a) { return true; }
+            }
+        }
+        return false;
     }
     // general call: the callee expr + retention-aware argument positions.
     if e.kind == EX_CALL {
@@ -1353,11 +1384,27 @@ fn _sv_expr_escapes(g: *CG, name: string, e: *Expr) -> bool {
         }
         return false;
     }
-    // Safe unit: `b.f.<read-only>(args)` — the field is only read. Check the args.
+    // Safe unit: `b.f.<reader>(args)` — the field is only read (concat /
+    // substring included: their result is disjoint). Check the args.
     if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER
-        && e.lhs.field != null && _is_str_read_only(e.lhs.field)
+        && e.lhs.field != null && _is_str_reader_call(e.lhs.field, _call_nargs(e))
         && _sv_is_field_access(name, e.lhs.lhs) {
         return _sv_args_escape(g, name, e.args);
+    }
+    // String-reader call on ANOTHER receiver: its string args are only read
+    // (bytes copied into the disjoint result), so a `b.f` arg does not alias
+    // the field out. The receiver and non-field args still recurse.
+    if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER
+        && _is_str_reader_call(e.lhs.field, _call_nargs(e)) {
+        if _sv_expr_escapes(g, name, e.lhs.lhs) { return true; }
+        if e.args != null {
+            for let i: i32 = 0; i < e.args.len(); i = i + 1 {
+                let a: Expr = e.args.get(i);
+                if _sv_is_field_access(name, &a) { continue; }
+                if _sv_expr_escapes(g, name, &a) { return true; }
+            }
+        }
+        return false;
     }
     // Any bare `b.f` that reached here (not one of the safe shapes) aliases the
     // owned field string => escape.
@@ -1817,9 +1864,10 @@ fn _vecelem_escapes(g: *CG, name: string, e: *Expr) -> bool {
         }
         return false;
     }
-    // Safe unit: `v.get(i).<read-only>(args)` — the element is only read. Check args.
+    // Safe unit: `v.get(i).<reader>(args)` — the element is only read (concat /
+    // substring included: disjoint result). Check args.
     if e.kind == EX_CALL && e.lhs != null && e.lhs.kind == EX_MEMBER
-        && e.lhs.field != null && _is_str_read_only(e.lhs.field)
+        && e.lhs.field != null && _is_str_reader_call(e.lhs.field, _call_nargs(e))
         && _ve_is_get(name, e.lhs.lhs) {
         return _ve_args_escape(g, name, e.args);
     }
