@@ -803,6 +803,30 @@ pub fn stmt_let(name: string, ty: *Type, value: *Expr, is_mut: bool, line: i32, 
 // Live in ast so any module that depends on the AST (parser, expander,
 // typer, codegen) can format integer literals into source-strings without
 // pulling in codegen.glide.
+// Strip the lexer's \x02 ///-marker prefixes from a doc block for DISPLAY
+// (hover, completion, glide doc). fmt is the only consumer that keeps them.
+pub fn doc_clean(raw: string) -> string {
+    if raw == null || raw.eq("") {
+        return raw;
+    }
+    let mut out: string = "";
+    let n: i32 = raw.len();
+    let mut i: i32 = 0;
+    let mut at_line_start: bool = true;
+    while i < n {
+        let c: i32 = raw.at(i).to_int();
+        if at_line_start && c == 2 {
+            i = i + 1;
+            at_line_start = false;
+            continue;
+        }
+        out = out.concat(raw.substring(i, i + 1));
+        at_line_start = c == 10;
+        i = i + 1;
+    }
+    return out;
+}
+
 pub fn int_to_str(n: i64) -> string {
     if n == 0 {
         return "0";

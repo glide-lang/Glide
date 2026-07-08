@@ -2837,7 +2837,7 @@ fn list_methods_for_type(stmts: *Vector<Stmt>, type_name: string, items: *JsonVa
                 // summary + example on hover, not just the signature.
                 let mut mdoc: string = "";
                 if m.doc_comment != null {
-                    mdoc = m.doc_comment;
+                    mdoc = doc_clean(m.doc_comment);
                 }
                 let no_edit_m: *JsonValue = null;
                 json_arr_push(items, rich_completion_item(m.name, "", 2, fn_signature(&m), mdoc, "", "", false, no_edit_m));
@@ -2905,7 +2905,7 @@ fn list_methods_for_type(stmts: *Vector<Stmt>, type_name: string, items: *JsonVa
                         seen.insert(tm.name, true);
                         let mut tdoc: string = "";
                         if tm.doc_comment != null {
-                            tdoc = tm.doc_comment;
+                            tdoc = doc_clean(tm.doc_comment);
                         }
                         let no_edit_t: *JsonValue = null;
                         json_arr_push(items, rich_completion_item(tm.name, "", 2, fn_signature(&tm), tdoc, "", "", false, no_edit_t));
@@ -5303,7 +5303,7 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
             }
             let mut docc: string = "";
             if s.doc_comment != null {
-                docc = s.doc_comment;
+                docc = doc_clean(s.doc_comment);
             }
             // When the decl lives in another module, ask build_import_edit
             // whether an import line must be added or an existing selective

@@ -391,6 +391,12 @@ fn _fn_signature(s: *Stmt) -> string {
 
 // Strip the `/// ` (or `///`) prefix from every line of `raw`.
 fn _strip_triple_slash(raw: string) -> string {
+    // Lexer \x02 ///-markers first — doc output wants plain text.
+    let raw2: string = doc_clean(raw);
+    return _strip_triple_slash_inner(raw2);
+}
+
+fn _strip_triple_slash_inner(raw: string) -> string {
     if raw == null || raw.eq("") {
         return "";
     }

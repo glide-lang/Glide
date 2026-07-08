@@ -1358,7 +1358,7 @@ fn _index_module_src(_state: *LspState, src: string, path: string, mod_name: str
                 }
             }
         }
-        let sym: ImportableSym = ImportableSym { name: sym_name, kind: sym_kind, module: module, signature: sig, label_extra: label_extra, doc: s.doc_comment, snippet: snip, has_snippet: has_snip, def_path: path, def_line: s.name_line, def_col: s.name_col, recv_type: "", trait_name: "" };
+        let sym: ImportableSym = ImportableSym { name: sym_name, kind: sym_kind, module: module, signature: sig, label_extra: label_extra, doc: doc_clean(s.doc_comment), snippet: snip, has_snippet: has_snip, def_path: path, def_line: s.name_line, def_col: s.name_col, recv_type: "", trait_name: "" };
         target.push(sym);
         if count < 12 {
             if !summary.eq("") {
@@ -1425,7 +1425,7 @@ fn _index_impl_methods(im: *Stmt, module: string, path: string, target: *Vector<
         }
         let mut mdoc: string = "";
         if m.doc_comment != null {
-            mdoc = m.doc_comment;
+            mdoc = doc_clean(m.doc_comment);
         }
         let msym: ImportableSym = ImportableSym { name: m.name, kind: SYMKIND_METHOD, module: module, signature: fn_signature(&m), label_extra: fn_label_extra(&m), doc: mdoc, snippet: fn_snippet(&m), has_snippet: true, def_path: path, def_line: m.name_line, def_col: m.name_col, recv_type: rn, trait_name: im.impl_trait_name };
         target.push(msym);

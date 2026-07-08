@@ -126,8 +126,13 @@ impl Lexer {
                             self.advance();
                             // Strip any extra leading `/` so `///` and `////` yield
                             // the same content as `//` (no leading slash leak into
-                            // hover markdown).
+                            // hover markdown) — but REMEMBER doc-style `///`: fmt
+                            // must re-emit the same marker. It rides only in the fmt
+                            // buffers (lead/trail) as a \x02 line prefix; `doc`
+                            // stays clean for hover.
+                            let mut extra_slash: bool = false;
                             while self.pos < self.src_len && self.peek().to_int() == 47 {
+                                extra_slash = true;
                                 self.advance();
                             }
                             // Skip a single leading space after the slash run.
@@ -146,11 +151,15 @@ impl Lexer {
                                 self.advance();
                             }
                             let line_text: string = self.src.substring(line_start, self.pos);
+                            let mut marked_text: string = line_text;
+                            if extra_slash {
+                                marked_text = "\x02".concat(line_text);
+                            }
                             if total_nl == 0 && self.emitted {
                                 // Same line as the previous token: a trailing comment
                                 // that belongs to the token already emitted.
                                 if self.pending_trail.eq("") {
-                                    self.pending_trail = line_text;
+                                    self.pending_trail = marked_text;
                                 } else {
                                     self.pending_trail = self.pending_trail.concat(" ").concat(line_text);
                                 }
@@ -163,9 +172,9 @@ impl Lexer {
                                     self.pending_doc = "";
                                 }
                                 if had_doc {
-                                    self.pending_doc = self.pending_doc.concat("\n").concat(line_text);
+                                    self.pending_doc = self.pending_doc.concat("\n").concat(marked_text);
                                 } else {
-                                    self.pending_doc = line_text;
+                                    self.pending_doc = marked_text;
                                 }
                                 had_doc = true;
                                 if !self.pending_lead.eq("") {
@@ -175,9 +184,13 @@ impl Lexer {
                                     }
                                 }
                                 if line_text.eq("") {
-                                    self.pending_lead = self.pending_lead.concat("\x01");
+                                    if extra_slash {
+                                        self.pending_lead = self.pending_lead.concat("\x02");
+                                    } else {
+                                        self.pending_lead = self.pending_lead.concat("\x01");
+                                    }
                                 } else {
-                                    self.pending_lead = self.pending_lead.concat(line_text);
+                                    self.pending_lead = self.pending_lead.concat(marked_text);
                                 }
                                 newlines_in_row = 0;
                             }

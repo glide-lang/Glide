@@ -1923,7 +1923,7 @@ fn _sig_json_for_fn(s: *Stmt, drop_self: bool) -> *JsonValue {
     if s.doc_comment != null && !s.doc_comment.eq("") {
         let docj: *JsonValue = json_object();
         json_obj_set(docj, "kind", json_string("markdown"));
-        json_obj_set(docj, "value", json_string(s.doc_comment));
+        json_obj_set(docj, "value", json_string(doc_clean(s.doc_comment)));
         json_obj_set(sig, "documentation", docj);
     }
     return sig;
@@ -3554,7 +3554,7 @@ pub fn handle_hover(req: *JsonValue, state: *LspState) {
             }
             content = "```glide\n".concat(kind_label).concat(" ").concat(word).concat("\n```");
             if pm.doc_comment != null && !pm.doc_comment.eq("") {
-                content = content.concat("\n\n---\n\n").concat(pm.doc_comment);
+                content = content.concat("\n\n---\n\n").concat(doc_clean(pm.doc_comment));
             }
         } else {
             // Builtin attribute (`@cfg`, `@derive`, `@expect`, `@allow`,
@@ -3617,7 +3617,7 @@ pub fn handle_hover(req: *JsonValue, state: *LspState) {
         }
         // Append the decl's doc comment (the contiguous `//` block above it).
         if !content.eq("") && decl.doc_comment != null && !decl.doc_comment.eq("") {
-            content = content.concat("\n\n---\n\n").concat(decl.doc_comment);
+            content = content.concat("\n\n---\n\n").concat(doc_clean(decl.doc_comment));
         }
     }
     // Local: search the fn body for a `let` (or `for let`) by name, and the
@@ -3755,7 +3755,7 @@ pub fn handle_hover(req: *JsonValue, state: *LspState) {
             }
             content = "```glide\n".concat(sig).concat("\n```");
             if m.doc_comment != null && !m.doc_comment.eq("") {
-                content = content.concat("\n\n---\n\n").concat(m.doc_comment);
+                content = content.concat("\n\n---\n\n").concat(doc_clean(m.doc_comment));
             }
         }
     }
@@ -3790,7 +3790,7 @@ pub fn handle_hover(req: *JsonValue, state: *LspState) {
             }
             content = "```glide\n".concat(sig).concat("\n```");
             if fhit.doc != null && !fhit.doc.eq("") {
-                content = content.concat("\n\n---\n\n").concat(fhit.doc);
+                content = content.concat("\n\n---\n\n").concat(doc_clean(fhit.doc));
             }
         }
     }
@@ -3806,7 +3806,7 @@ pub fn handle_hover(req: *JsonValue, state: *LspState) {
             }
             content = "```glide\n".concat(sig).concat("\n```");
             if m.doc_comment != null && !m.doc_comment.eq("") {
-                content = content.concat("\n\n---\n\n").concat(m.doc_comment);
+                content = content.concat("\n\n---\n\n").concat(doc_clean(m.doc_comment));
             }
         }
     }
@@ -3828,7 +3828,7 @@ pub fn handle_hover(req: *JsonValue, state: *LspState) {
             }
             content = "```glide\n".concat(macro_signature(&md)).concat("\n```");
             if md.doc_comment != null && !md.doc_comment.eq("") {
-                content = content.concat("\n\n---\n\n").concat(md.doc_comment);
+                content = content.concat("\n\n---\n\n").concat(doc_clean(md.doc_comment));
             }
             break;
         }

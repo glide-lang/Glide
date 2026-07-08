@@ -1014,6 +1014,7 @@ fn parse_trait(p: *Parser) -> *Stmt {
     let assocs: *Vector<Param> = Vector::new();
     while !p.at_op("}") && !p.at_eof() {
         let doc: string = p.current.doc;
+        let mlead: string = p.current.lead;
         let mut is_pub: bool = false;
         if p.eat_kw("pub") {
             is_pub = true;
@@ -1036,6 +1037,9 @@ fn parse_trait(p: *Parser) -> *Stmt {
                 m.is_pub = is_pub;
                 if doc != null && !doc.eq("") {
                     m.doc_comment = doc;
+                }
+                if mlead != null && !mlead.eq("") {
+                    m.leading_comments = mlead;
                 }
                 methods.push(*m);
             }
@@ -1098,6 +1102,9 @@ fn parse_impl(p: *Parser) -> *Stmt {
         // so hover can render it. The lexer attaches doc to the next non-doc
         // token, which is `pub` (if present) or `fn`/`macro` otherwise.
         let doc: string = p.current.doc;
+        // The fmt-facing lead too — it carries the \x02 ///-marker so a
+        // reformat re-emits the method's doc block with the same style.
+        let mlead: string = p.current.lead;
         // Member-level attributes: `@deprecated(...)`, `@allow(...)`, etc.
         // Collected in source order so the lint passes can read them
         // off `Stmt.attrs`.
@@ -1144,6 +1151,9 @@ fn parse_impl(p: *Parser) -> *Stmt {
                 if doc != null && !doc.eq("") {
                     m.doc_comment = doc;
                 }
+                if mlead != null && !mlead.eq("") {
+                    m.leading_comments = mlead;
+                }
                 if mem_attrs.len() > 0 {
                     m.attrs = mem_attrs;
                 }
@@ -1156,6 +1166,9 @@ fn parse_impl(p: *Parser) -> *Stmt {
                     m.is_pub = is_pub;
                     if doc != null && !doc.eq("") {
                         m.doc_comment = doc;
+                    }
+                    if mlead != null && !mlead.eq("") {
+                        m.leading_comments = mlead;
                     }
                     if mem_attrs.len() > 0 {
                         m.attrs = mem_attrs;
