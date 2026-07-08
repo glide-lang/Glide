@@ -1,0 +1,55 @@
+// A generic struct with an `own *Self<T>` field (a recursive generic data
+// structure) gets a MONOMORPHIZED recursive drop `__glide_drop_LinkedList__i32`,
+// not one keyed on the un-instantiable template name — which used to emit
+// `__glide_drop_LinkedList(LinkedList* p)` referencing a non-existent C type and
+// ICE the build. The chain must build, read back correctly, and free without a
+// leak or double-free (the drop recurses through `.next` by the mono name).
+
+struct LinkedList<T> {
+    data: T,
+    next: own *LinkedList<T>,
+    index: i32,
+}
+
+impl<T> LinkedList<T> {
+    pub fn new(data: T) -> *LinkedList<T> {
+        let n: *LinkedList<T> = malloc(sizeof(LinkedList<T>)) as *LinkedList<T>;
+        n.data = data;
+        n.next = null;
+        n.index = 0;
+        return n;
+    }
+    pub fn prepend(self: *LinkedList<T>, data: T) -> *LinkedList<T> {
+        let h: *LinkedList<T> = LinkedList::new(data);
+        h.next = self;
+        h.index = self.index + 1;
+        return h;
+    }
+}
+
+// i32 payload: sum the chain (proves construction + traversal + recursive drop).
+fn sum_chain() -> i32 {
+    let mut l: *LinkedList<i32> = LinkedList::new(3);
+    l = l.prepend(2);
+    l = l.prepend(1);
+    return l.data + l.next.data + l.next.next.data;   // 1 + 2 + 3
+}
+
+fn test_generic_recursive_own_i32() -> i32 {
+    assert!(sum_chain() == 6);
+    return 0;
+}
+
+// string payload: a distinct mono (`LinkedList__string`) must also get its own
+// recursive drop — exercises a second instantiation of the same template.
+fn head_of_string_chain() -> string {
+    let mut l: *LinkedList<string> = LinkedList::new("c".concat(""));
+    l = l.prepend("b".concat(""));
+    l = l.prepend("a".concat(""));
+    return l.data.concat(l.next.data).concat(l.next.next.data);   // "abc"
+}
+
+fn test_generic_recursive_own_string() -> i32 {
+    assert!(head_of_string_chain().eq("abc"));
+    return 0;
+}

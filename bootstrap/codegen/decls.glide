@@ -1554,46 +1554,110 @@ fn _struct_has_own_fields_by_name(g: *CG, name: string) -> bool {
     return _stmt_has_own_field(&sd);
 }
 
-// Emit `void __glide_drop_T(T* p) { ...; free(p); }` for each struct with
-// `own *F` fields. An own field whose type itself has own fields is freed via
-// that type's drop fn (recursion / self-recursion handles linked structures);
-// a leaf own field is freed directly. Non-own `*T` fields are left untouched.
+// True when generic-struct template `name` (in generic_structs) has any own field.
+fn _generic_has_own_field(g: *CG, name: string) -> bool {
+    if name == null || !g.generic_structs.contains(name) {
+        return false;
+    }
+    let tpl: Stmt = g.generic_structs.get(name);
+    return _stmt_has_own_field(&tpl);
+}
+// Emit the drop of ONE owned field `p->fname` whose CONCRETE (post-subst) type is
+// `fty`: a matching `_free` method wins (custom cleanup), else the type's
+// recursive drop (own fields), else a plain free. Handles both a concrete
+// `*Named` field and a monomorphized `*Generic<..>` field (e.g. the self-pointer
+// of a recursive generic struct: `next: own *LinkedList<T>` -> `LinkedList__i32`).
+fn _emit_drop_field(g: *CG, fname: string, fty: *Type) {
+    if fty == null || fty.kind != TY_POINTER || fty.inner == null {
+        // Non-pointer own value is inline — freed with the parent, nothing here.
+        return;
+    }
+    let inner: *Type = fty.inner;
+    if inner.kind == TY_NAMED && inner.name != null {
+        let nm: string = inner.name;
+        if g.fns.contains(nm.concat("_free")) {
+            println!("  ".concat(nm).concat("_free(p->").concat(c_safe_ident(fname)).concat(");"));
+        } else if _struct_has_own_fields_by_name(g, nm) {
+            println!("  __glide_drop_".concat(nm).concat("(p->").concat(c_safe_ident(fname)).concat(");"));
+        } else {
+            println!("  free((void*)(p->".concat(c_safe_ident(fname)).concat("));"));
+        }
+        return;
+    }
+    if inner.kind == TY_GENERIC && inner.name != null {
+        let mn: string = mangle_generic(inner.name, inner.args);
+        if _generic_has_own_field(g, inner.name) {
+            println!("  __glide_drop_".concat(mn).concat("(p->").concat(c_safe_ident(fname)).concat(");"));
+        } else {
+            println!("  free((void*)(p->".concat(c_safe_ident(fname)).concat("));"));
+        }
+        return;
+    }
+    println!("  free((void*)(p->".concat(c_safe_ident(fname)).concat("));"));
+}
+// Emit `void __glide_drop_<cname>(<cname>* p) { … }`. `params`/`args` non-null
+// substitute the template's type params (for a mono); null = a concrete struct.
+fn _emit_one_drop_body(g: *CG, cname: string, fields: *Vector<Field>, params: *Vector<string>, args: *Vector<Type>) {
+    println!("void __glide_drop_".concat(cname).concat("(").concat(cname).concat("* p) {"));
+    println!("  if (!p) return;");
+    if fields != null {
+        for let j: i32 = 0; j < fields.len(); j = j + 1 {
+            let f: Field = fields.get(j);
+            if !f.is_own {
+                continue;
+            }
+            let mut fty: *Type = f.ty;
+            if params != null && args != null {
+                fty = subst_type(f.ty, params, args);
+            }
+            _emit_drop_field(g, f.name, fty);
+        }
+    }
+    println!("  free((void*)p);");
+    println!("}");
+}
+// Emit `void __glide_drop_T(T* p) { ...; free(p); }` for each struct with `own`
+// fields — CONCRETE structs by their name, and each MONOMORPHIZED instance of a
+// generic struct (skipping the un-instantiable template, whose name is not a C
+// type). Recursion / self-recursion handles linked + recursive-generic structs.
 fn emit_struct_drop_bodies(g: *CG, program: *Vector<Stmt>) {
+    // Concrete (non-generic) structs.
     for let i: i32 = 0; i < program.len(); i = i + 1 {
         let s: Stmt = program.get(i);
         if s.kind != ST_STRUCT || !_stmt_has_own_field(&s) {
             continue;
         }
-        println!("void __glide_drop_".concat(s.name).concat("(").concat(c_safe_ident(s.name)).concat("* p) {"));
-        println!("  if (!p) return;");
-        for let j: i32 = 0; j < s.struct_fields.len(); j = j + 1 {
-            let f: Field = s.struct_fields.get(j);
-            if !f.is_own {
-                continue;
-            }
-            // Drop the owned field by F's own rule: an `F_free` method if it has
-            // one (custom cleanup), else F's recursive drop (own fields), else a
-            // plain free.
-            let mut handled: bool = false;
-            if f.ty != null && f.ty.kind == TY_POINTER && f.ty.inner != null && f.ty.inner.kind == TY_NAMED {
-                let _fn: string = f.ty.inner.name;
-                if g.fns.contains(_fn.concat("_free")) {
-                    println!("  ".concat(_fn).concat("_free(p->").concat(c_safe_ident(f.name)).concat(");"));
-                    handled = true;
-                } else if _struct_has_own_fields_by_name(g, _fn) {
-                    println!("  __glide_drop_".concat(_fn).concat("(p->").concat(c_safe_ident(f.name)).concat(");"));
-                    handled = true;
-                }
-            }
-            if !handled && f.ty != null && f.ty.kind == TY_POINTER {
-                println!("  free((void*)(p->".concat(c_safe_ident(f.name)).concat("));"));
-            }
-            // A non-pointer `own T` field is an inline value (auto-box not yet
-            // implemented): it lives inside the parent and is freed with it, so
-            // nothing to free here.
+        if s.type_params != null && s.type_params.len() > 0 {
+            continue; // generic template — handled per-mono below
         }
-        println!("  free((void*)p);");
-        println!("}");
+        _emit_one_drop_body(g, s.name, s.struct_fields, null, null);
+    }
+    // Monomorphized generic structs (from the drained mono queue). Forward-decl
+    // all first (mutual recursion), then bodies. Dedup: the same mono can be
+    // queued many times — a repeated forward-decl is harmless, a repeated body
+    // is a C redefinition, so both are gated on a per-mono marker.
+    let seen_fwd: *HashMap<bool> = HashMap::new();
+    for let i: i32 = 0; i < g.struct_mono_queue.len(); i = i + 1 {
+        let t: Type = g.struct_mono_queue.get(i);
+        if _generic_has_own_field(g, t.name) {
+            let mn: string = mangle_generic(t.name, t.args);
+            if !seen_fwd.contains(mn) {
+                seen_fwd.insert(mn, true);
+                println!("void __glide_drop_".concat(mn).concat("(").concat(mn).concat("* p);"));
+            }
+        }
+    }
+    let seen_body: *HashMap<bool> = HashMap::new();
+    for let i: i32 = 0; i < g.struct_mono_queue.len(); i = i + 1 {
+        let t: Type = g.struct_mono_queue.get(i);
+        if _generic_has_own_field(g, t.name) {
+            let mn: string = mangle_generic(t.name, t.args);
+            if !seen_body.contains(mn) {
+                seen_body.insert(mn, true);
+                let tpl: Stmt = g.generic_structs.get(t.name);
+                _emit_one_drop_body(g, mn, tpl.struct_fields, tpl.type_params, t.args);
+            }
+        }
     }
 }
 
@@ -1724,7 +1788,9 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
     // emitted near the end, after every struct body is in scope).
     for let i: i32 = 0; i < program.len(); i = i + 1 {
         let sd: Stmt = program.get(i);
-        if sd.kind == ST_STRUCT && _stmt_has_own_field(&sd) {
+        // Generic templates are skipped — their name is not a C type; each mono's
+        // drop is forward-declared next to its body in emit_struct_drop_bodies.
+        if sd.kind == ST_STRUCT && _stmt_has_own_field(&sd) && (sd.type_params == null || sd.type_params.len() == 0) {
             println!("void __glide_drop_".concat(sd.name).concat("(").concat(c_safe_ident(sd.name)).concat("* p);"));
         }
     }
