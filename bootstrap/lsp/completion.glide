@@ -4226,10 +4226,12 @@ fn _arm_insert(ctor: string, has_bind: bool, snip: bool) -> string {
         bind = "e";
     }
     if !has_bind {
+        // Payload-less arm: canonical Glide is bare `none => {}` (the parser
+        // tolerates `none()`, but the completion should teach the real form).
         if snip {
-            return ctor.concat("() => {$0}");
+            return ctor.concat(" => {$0}");
         }
-        return ctor.concat("() => {}");
+        return ctor.concat(" => {}");
     }
     if snip {
         return ctor.concat("(\${1:").concat(bind).concat("}) => {$0}");
@@ -4264,7 +4266,7 @@ fn _emit_arm(covered: *HashMap<bool>, ctor: string, insert: string, detail: stri
         label = "err(e) => {}";
     }
     if ctor.eq("none") {
-        label = "none() => {}";
+        label = "none => {}";
     }
     json_arr_push(items, _arg_item(label, 20, detail, insert, snip));
 }
