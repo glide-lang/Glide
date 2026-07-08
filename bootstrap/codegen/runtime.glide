@@ -202,6 +202,12 @@ pub fn emit_field_render_c(g: *CG, cexpr: string, fty: *Type, depth: i32) {
             return;
         }
         if g.structs.contains(n) {
+            // Display-recursive struct: a generated runtime renderer prints
+            // it in full (the inline expansion would hit the depth cap).
+            if g.render_fns.contains(n) {
+                print!("__glide_render_".concat(n).concat("("), cexpr, ")");
+                return;
+            }
             emit_struct_render_c(g, cexpr, n, depth + 1);
             return;
         }
@@ -211,6 +217,10 @@ pub fn emit_field_render_c(g: *CG, cexpr: string, fty: *Type, depth: i32) {
     if k == TY_POINTER && fty.inner != null {
         let it: *Type = fty.inner;
         if it.kind == TY_NAMED && g.structs.contains(it.name) && !it.name.eq("i128") && !it.name.eq("u128") && !it.name.eq("i256") && !it.name.eq("u256") {
+            if g.render_fns.contains(it.name) {
+                print!("((", cexpr, ") ? __glide_render_".concat(it.name).concat("(*("), cexpr, ")) : \"null\")");
+                return;
+            }
             print!("((", cexpr, ") ? ");
             emit_struct_render_c(g, "(*(".concat(cexpr).concat("))"), it.name, depth + 1);
             print!(" : \"null\")");
@@ -281,6 +291,11 @@ pub fn emit_field_render_c(g: *CG, cexpr: string, fty: *Type, depth: i32) {
             print!(") : \"Box(null)\")");
             return;
         }
+        let gm: string = mangle_generic(fty.name, fty.args);
+        if g.render_fns.contains(gm) {
+            print!("__glide_render_".concat(gm).concat("("), cexpr, ")");
+            return;
+        }
         emit_generic_struct_render_c(g, cexpr, fty, depth + 1);
         return;
     }
@@ -306,6 +321,167 @@ pub fn emit_field_render_c(g: *CG, cexpr: string, fty: *Type, depth: i32) {
         return;
     }
     print!("\"...\"");
+}
+
+// ---- Recursive display renderers -----------------------------------------
+// The inline renderer expands the TYPE at compile time, so a recursive type
+// (`LinkedList<T>` via `?Box<LinkedList<T>>`, `*Node` self-links) hits the
+// inline depth cap and prints "...". Every struct — concrete name or mono
+// mangling — whose fields REACH the type itself gets a real recursive C
+// function `const char* __glide_render_<M>(M v)`; the dispatcher routes
+// recursive occurrences to the call, so any length prints in full at
+// runtime. Non-recursive types keep the pure-inline path.
+
+// Does `t` reach the struct identity `root` (concrete name or mono mangling)
+// through fields / wrappers / pointers / generic args? `seen` breaks cycles
+// that do not pass through root.
+fn _display_reaches(g: *CG, t: *Type, root: string, seen: *HashMap<bool>) -> bool {
+    if t == null {
+        return false;
+    }
+    if t.kind == TY_POINTER || t.kind == TY_BORROW || t.kind == TY_BORROW_MUT || t.kind == TY_SLICE
+        || t.kind == TY_OPTION || t.kind == TY_RESULT || t.kind == TY_OPT_RESULT {
+        return _display_reaches(g, t.inner, root, seen);
+    }
+    if t.kind == TY_TUPLE {
+        if t.args != null {
+            for let i: i32 = 0; i < t.args.len(); i++ {
+                let a: Type = t.args.get(i);
+                if _display_reaches(g, &a, root, seen) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    if t.kind == TY_NAMED && t.name != null && g.structs.contains(t.name) {
+        if t.name.eq(root) {
+            return true;
+        }
+        if seen.contains(t.name) {
+            return false;
+        }
+        seen.insert(t.name, true);
+        let sd: Stmt = g.structs.get(t.name);
+        if sd.struct_fields != null {
+            for let i: i32 = 0; i < sd.struct_fields.len(); i++ {
+                let f: Field = sd.struct_fields.get(i);
+                if _display_reaches(g, f.ty, root, seen) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    if t.kind == TY_GENERIC && t.name != null && g.generic_structs.contains(t.name) {
+        let m: string = mangle_generic(t.name, t.args);
+        if m.eq(root) {
+            return true;
+        }
+        if seen.contains(m) {
+            return false;
+        }
+        seen.insert(m, true);
+        let tmpl: Stmt = g.generic_structs.get(t.name);
+        if tmpl.struct_fields != null && tmpl.type_params != null {
+            for let i: i32 = 0; i < tmpl.struct_fields.len(); i++ {
+                let f: Field = tmpl.struct_fields.get(i);
+                let fsub: *Type = subst_type(f.ty, tmpl.type_params, t.args);
+                if _display_reaches(g, fsub, root, seen) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    return false;
+}
+
+// Emit `__glide_render_<M>` decls + bodies for every display-recursive
+// struct known at this point (concrete structs + queued struct monos). Runs
+// BEFORE user fn bodies so the calls are properly declared (the return value
+// is used — an implicit decl would misread it as int). Box is excluded: its
+// deref sugar inlines and the boxed node routes to ITS renderer.
+pub fn emit_struct_render_fns(g: *CG, program: *Vector<Stmt>) {
+    // Concrete structs.
+    for let i: i32 = 0; i < program.len(); i++ {
+        let s: Stmt = program.get(i);
+        if s.kind != ST_STRUCT || s.struct_fields == null {
+            continue;
+        }
+        if s.type_params != null && s.type_params.len() > 0 {
+            continue;
+        }
+        let seen: *HashMap<bool> = HashMap::new();
+        let mut rec: bool = false;
+        for let j: i32 = 0; j < s.struct_fields.len(); j++ {
+            let f: Field = s.struct_fields.get(j);
+            if _display_reaches(g, f.ty, s.name, seen) {
+                rec = true;
+            }
+        }
+        seen.free();
+        if rec {
+            g.render_fns.insert(s.name, true);
+        }
+    }
+    // Queued struct monos (skip Box — the dispatcher's deref sugar covers it).
+    for let i: i32 = 0; i < g.struct_mono_queue.len(); i++ {
+        let t: Type = g.struct_mono_queue.get(i);
+        if t.name == null || t.name.eq("Box") || !g.generic_structs.contains(t.name) {
+            continue;
+        }
+        let m: string = mangle_generic(t.name, t.args);
+        if g.render_fns.contains(m) {
+            continue;
+        }
+        let tmpl: Stmt = g.generic_structs.get(t.name);
+        if tmpl.struct_fields == null || tmpl.type_params == null {
+            continue;
+        }
+        let seen: *HashMap<bool> = HashMap::new();
+        let mut rec: bool = false;
+        for let j: i32 = 0; j < tmpl.struct_fields.len(); j++ {
+            let f: Field = tmpl.struct_fields.get(j);
+            let fsub: *Type = subst_type(f.ty, tmpl.type_params, t.args);
+            if _display_reaches(g, fsub, m, seen) {
+                rec = true;
+            }
+        }
+        seen.free();
+        if rec {
+            g.render_fns.insert(m, true);
+        }
+    }
+    // Decls first (mutual recursion), then bodies. The body renders ONE level
+    // inline (direct emit_*_render_c call, bypassing the dispatcher's routing
+    // for the top type); nested recursive occurrences dispatch to the calls.
+    let names: *Vector<string> = g.render_fns.keys();
+    for let i: i32 = 0; i < names.len(); i++ {
+        let n: string = names.get(i);
+        println!("const char* __glide_render_".concat(n).concat("(").concat(n).concat(" __v);"));
+    }
+    for let i: i32 = 0; i < names.len(); i++ {
+        let n: string = names.get(i);
+        print!("const char* __glide_render_".concat(n).concat("(").concat(n).concat(" __v) { return "));
+        if g.structs.contains(n) {
+            emit_struct_render_c(g, "__v", n, 1);
+        } else {
+            // Recover the mono's generic type from the queue entry.
+            for let j: i32 = 0; j < g.struct_mono_queue.len(); j++ {
+                let t: Type = g.struct_mono_queue.get(j);
+                if t.name != null && g.generic_structs.contains(t.name) && mangle_generic(t.name, t.args).eq(n) {
+                    let gp: *Type = __glide_palloc(sizeof(Type)) as *Type;
+                    *gp = t;
+                    emit_generic_struct_render_c(g, "__v", gp, 1);
+                    break;
+                }
+            }
+        }
+        println!("; }");
+    }
+    println!("");
+    names.free();
 }
 
 // Mono variant of emit_struct_render_c: fields come from the generic

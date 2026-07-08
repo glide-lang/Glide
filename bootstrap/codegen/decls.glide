@@ -2432,6 +2432,10 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         }
     }
     println!("");
+    // Recursive display renderers — decls + bodies must precede the user fn
+    // bodies that call them (the const char* return is consumed; an implicit
+    // decl would misread it as int).
+    emit_struct_render_fns(g, program);
     // Pre-pass: walk all fn bodies to discover EX_FNEXPR uses. Lift each
     // into g.anon_fns and rewrite the expression in place to EX_IDENT
     // referring to the synthetic name. Output forward decls so the user

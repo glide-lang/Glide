@@ -965,6 +965,11 @@ pub struct CG {
     // Recursion guard for the free-once alias check in _sv_stmt_escapes
     // (`let b = a` chains / shadow cycles); above the cap => treat as escape.
     pub sv_alias_depth: i32,
+    // Struct names (concrete) / mono manglings whose display rendering is
+    // RECURSIVE: they get a generated `__glide_render_<M>` C function and the
+    // inline renderer routes recursive occurrences to a call — so a linked
+    // list prints in full instead of hitting the inline depth cap.
+    pub render_fns: *HashMap<bool>,
     pub str_retains: *HashMap<bool>, // "fn#argidx" -> does that fn retain that string arg
     pub str_retain_building: bool,   // true while computing the summary (forces all-retain)
     // "fn" -> does that fn return a FRESHLY-OWNED string on every return path
@@ -2433,6 +2438,7 @@ impl CG {
         g.str_acc_ctr = 0;
         g.vec_elem_drop = HashMap::new();
         g.sv_alias_depth = 0;
+        g.render_fns = HashMap::new();
         let sret: *HashMap<bool> = HashMap::new();
         g.str_retains = sret;
         g.str_retain_building = false;
