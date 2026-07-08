@@ -3450,6 +3450,28 @@ fn _let_binding_escapes(t: *Typer, bname: string) -> bool {
     return false;
 }
 
+// One-level field type of `<ident>.<field>` via the declared-field table —
+// a pure scope + struct_field_types lookup, NO infer_expr re-run (that would
+// duplicate its diagnostics). infer_expr defers member types to codegen, so
+// checks that need a field's declared type (the option-null-compare reject)
+// use this. Generic receivers resolve to the template's RAW field type
+// (`?Box<LL<T>>`): only its KIND is consulted, which substitution preserves.
+fn _simple_field_ty(t: *Typer, e: *Expr) -> *Type {
+    if e == null || e.kind != EX_MEMBER || e.field == null || e.field.eq("") { return null; }
+    if e.lhs == null || e.lhs.kind != EX_IDENT || e.lhs.str_val == null { return null; }
+    if !t.scope.contains(e.lhs.str_val) { return null; }
+    let vt: Type = t.scope.get(e.lhs.str_val);
+    let st: *Type = strip_ptr(&vt);
+    if st == null || st.name == null || st.name.eq("") { return null; }
+    if st.kind != TY_NAMED && st.kind != TY_GENERIC { return null; }
+    let key: string = st.name.concat("::").concat(e.field);
+    if !t.struct_field_types.contains(key) { return null; }
+    let ft: Type = t.struct_field_types.get(key);
+    let p: *Type = __glide_palloc(sizeof(Type)) as *Type;
+    *p = ft;
+    return p;
+}
+
 fn _body_uses_name_after(body: *Vector<Stmt>, idx: i32, name: string) -> bool {
     let n: i32 = body.len();
     let mut i: i32 = idx + 1;
@@ -5465,6 +5487,41 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
                 let ls: *Type = strip_ptr(lt);
                 if ls != null && ls.kind == TY_NAMED && t.structs.contains(ls.name) && !t.fns.contains(ls.name.concat("_cmp")) {
                     t.err_code_range(e.line, e.column, _op_symbol(op).len(), "no-operator", "no `".concat(_op_symbol(op)).concat("` operator for `").concat(ls.name).concat("`; implement `fn cmp(self: *").concat(ls.name).concat(", other: *").concat(ls.name).concat(") -> i32`"));
+                }
+            }
+            // `?T` / `!T` / `?!T` are VALUES, not pointers: comparing one with
+            // `null` is the manual layer's idiom leaking into the safe layer —
+            // it has no lowering and previously died as invalid C in cc.
+            // Reject with the value-side idiom instead. infer_expr defers
+            // FIELD types to codegen (returns null), so `n.v != null` needs
+            // the one-level lookup helper to be caught too.
+            if op == OP_EQ || op == OP_NE {
+                let mut ltx: *Type = lt;
+                if ltx == null { ltx = _simple_field_ty(t, e.lhs); }
+                let mut rtx: *Type = rt;
+                if rtx == null { rtx = _simple_field_ty(t, e.rhs); }
+                let mut wrap_ty: *Type = null;
+                let mut null_e: *Expr = null;
+                if ltx != null && (ltx.kind == TY_OPTION || ltx.kind == TY_RESULT || ltx.kind == TY_OPT_RESULT) && e.rhs != null && e.rhs.kind == EX_NULL {
+                    wrap_ty = ltx;
+                    null_e = e.rhs;
+                }
+                if rtx != null && (rtx.kind == TY_OPTION || rtx.kind == TY_RESULT || rtx.kind == TY_OPT_RESULT) && e.lhs != null && e.lhs.kind == EX_NULL {
+                    wrap_ty = rtx;
+                    null_e = e.lhs;
+                }
+                if wrap_ty != null {
+                    let mut how: string = "`match`";
+                    if wrap_ty.kind == TY_OPTION {
+                        how = "`.is_none()`";
+                        if op == OP_NE { how = "`.is_some()`"; }
+                    }
+                    if wrap_ty.kind == TY_RESULT {
+                        how = "`.is_err()`";
+                        if op == OP_NE { how = "`.is_ok()`"; }
+                    }
+                    t.err_code_range(null_e.line, null_e.column, 4, "option-null-compare", "`".concat(type_to_string(wrap_ty)).concat("` is a value, not a pointer — it cannot be compared with `null`; use ").concat(how).concat(" or `match` on it"));
+                    return ty_named("bool");
                 }
             }
             // Operands must be comparable. Without this, `5 == "x"` compiled to a

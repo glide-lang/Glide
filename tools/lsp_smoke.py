@@ -2149,6 +2149,17 @@ case_diagnostics("using a &mut binder after copying it is use-after-move",
     '    a.v = 2;\n    return b.v;\n}',
     expect_codes_present=["use-after-move"])
 
+case_diagnostics("comparing an option local with null is rejected (value, not pointer)",
+    'fn main() {\n'
+    '    let o: ?i32 = some(1);\n    if o == null { println!("x"); }\n}',
+    expect_codes_present=["option-null-compare"])
+
+case_diagnostics("comparing an option FIELD with null is rejected",
+    'struct N { v: ?i32 }\n'
+    'fn main() {\n'
+    '    let n: N = N { v: some(1) };\n    if n.v != null { println!("x"); }\n}',
+    expect_codes_present=["option-null-compare"])
+
 case_diagnostics("assigning to a struct while a field borrow lives is rejected",
     'struct S { v: i32 }\n'
     'fn main() -> i32 {\n'
