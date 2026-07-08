@@ -1264,6 +1264,11 @@ fn _str_selectarms_escape(g: *CG, name: string, arms: *Vector<SelectArm>) -> boo
 }
 fn _str_stmt_escapes(g: *CG, name: string, st: *Stmt) -> bool {
     if st == null { return false; }
+    // A spawned call outlives the caller's scope: the worker reads its arg
+    // copy AFTER the scope-end drop may have run, so a non-retaining callee
+    // does NOT make the pass safe here — any mention under spawn escapes.
+    // (ASAN-proven UAF: `spawn show(s)` freed by T0, read by the worker.)
+    if st.kind == ST_SPAWN { return _ment_expr(name, st.expr_value); }
     if _str_expr_escapes(g, name, st.let_value) { return true; }
     if _str_expr_escapes(g, name, st.expr_value) { return true; }
     if _str_expr_escapes(g, name, st.cond) { return true; }
