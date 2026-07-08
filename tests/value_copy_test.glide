@@ -1,8 +1,9 @@
 // Value semantics (2B): a non-POD struct copy `let b = a` is a COPY when b is
 // contained (only read/projected locally), so `a` stays usable — no more spurious
 // use-after-move on the second reuse. The shared string is read through every
-// alias; value-asserted so a wrong copy (corruption) would surface. (The source's
-// heap field leaks conservatively for now — sound, never double-free/UAF.)
+// alias; value-asserted so a wrong copy (corruption) would surface. (Free-once:
+// when every copy is contained the source's heap field is dropped exactly once
+// at scope end; an escaping copy keeps the conservative leak — never UAF.)
 
 struct User { name: string }
 
@@ -15,6 +16,17 @@ fn joined() -> string {
 
 fn test_contained_copy_reuses() -> i32 {
     assert!(joined().eq("ababab"));
+    return 0;
+}
+
+// Free-once: with the copy contained, the source's string field is freed
+// exactly once at scope end — AFTER the last read through either alias, so
+// both reads see the intact value (a premature free would corrupt them).
+fn test_free_once_reads_before_drop() -> i32 {
+    let u = User { name: "x".concat("y") };
+    let b = u;
+    assert!(u.name.eq("xy"));
+    assert!(b.name.eq("xy"));
     return 0;
 }
 

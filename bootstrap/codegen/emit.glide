@@ -962,6 +962,9 @@ pub struct CG {
     // (collection-droppable + string elements + no retained get-alias). See the
     // gap#3 element-drop walkers.
     pub vec_elem_drop: *HashMap<bool>,
+    // Recursion guard for the free-once alias check in _sv_stmt_escapes
+    // (`let b = a` chains / shadow cycles); above the cap => treat as escape.
+    pub sv_alias_depth: i32,
     pub str_retains: *HashMap<bool>, // "fn#argidx" -> does that fn retain that string arg
     pub str_retain_building: bool,   // true while computing the summary (forces all-retain)
     // "fn" -> does that fn return a FRESHLY-OWNED string on every return path
@@ -1366,7 +1369,24 @@ fn _sv_stmts_escape(g: *CG, name: string, list: *Vector<Stmt>) -> bool {
 }
 fn _sv_stmt_escapes(g: *CG, name: string, st: *Stmt) -> bool {
     if st == null { return false; }
-    if _sv_expr_escapes(g, name, st.let_value) { return true; }
+    // Free-once: `let b = a` copies the struct VALUE. b shares a's string
+    // fields but never sv-drops itself (a copy has no struct-lit RHS), so a
+    // stays the single owner and its scope-end free stays exactly-once. The
+    // alias is safe IFF b is itself contained — b's uses pass this same
+    // walker and no defer mentions b (b's lifetime nests inside a's block, so
+    // the free lands after b's last use). Alias chains (`let c = b`) recurse;
+    // depth-capped against shadow cycles, cap exceeded => escape (keep leak).
+    if st.let_value != null && st.let_value.kind == EX_IDENT
+        && st.let_value.str_val != null && st.let_value.str_val.eq(name)
+        && st.name != null && !st.name.eq("") && !st.name.eq(name)
+        && g.cur_fn_body != null {
+        if g.sv_alias_depth >= 4 { return true; }
+        g.sv_alias_depth = g.sv_alias_depth + 1;
+        let copy_escapes: bool = _sv_stmts_escape(g, st.name, g.cur_fn_body)
+            || _defer_uses_stmts(st.name, g.cur_fn_body);
+        g.sv_alias_depth = g.sv_alias_depth - 1;
+        if copy_escapes { return true; }
+    } else if _sv_expr_escapes(g, name, st.let_value) { return true; }
     if _sv_expr_escapes(g, name, st.expr_value) { return true; }
     if _sv_expr_escapes(g, name, st.cond) { return true; }
     if _sv_expr_escapes(g, name, st.for_step) { return true; }
@@ -2295,6 +2315,7 @@ impl CG {
         g.str_acc = sacc;
         g.str_acc_ctr = 0;
         g.vec_elem_drop = HashMap::new();
+        g.sv_alias_depth = 0;
         let sret: *HashMap<bool> = HashMap::new();
         g.str_retains = sret;
         g.str_retain_building = false;
