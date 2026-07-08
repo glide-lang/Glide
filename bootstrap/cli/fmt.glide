@@ -319,48 +319,6 @@ pub fn fmt_expr(e: *Expr) -> string {
     return fmt_expr_prec(e, 0);
 }
 
-fn stmt_has_comment(s: *Stmt) -> bool {
-    if s == null {
-        return false;
-    }
-    if s.kind == ST_COMMENT {
-        return true;
-    }
-    if s.leading_comments != null && !s.leading_comments.eq("") {
-        return true;
-    }
-    if s.trailing_comment != null && !s.trailing_comment.eq("") {
-        return true;
-    }
-    return false;
-}
-
-// True if a match-as-expression carries any comment (on an arm or inside an
-// arm body) that the single-line form would drop.
-fn match_has_comment(e: *Expr) -> bool {
-    if e.match_arms == null {
-        return false;
-    }
-    for let i: i32 = 0; i < e.match_arms.len(); i++ {
-        let a: MatchArm = e.match_arms.get(i);
-        if a.lead != null && !a.lead.eq("") {
-            return true;
-        }
-        if a.trail != null && !a.trail.eq("") {
-            return true;
-        }
-        if a.body != null {
-            for let j: i32 = 0; j < a.body.len(); j++ {
-                let b: Stmt = a.body.get(j);
-                if stmt_has_comment(&b) {
-                    return true;
-                }
-            }
-        }
-    }
-    return false;
-}
-
 // True if a comment lives anywhere in an operator chain (`a || b // c\n || d`).
 fn binary_has_comment(e: *Expr) -> bool {
     if e == null || e.kind != EX_BINARY {
@@ -477,7 +435,38 @@ fn fmt_value(e: *Expr, depth: i32) -> string {
     if depth >= 0 && e.kind == EX_BINARY && binary_has_comment(e) {
         return fmt_binary_ml(e, depth);
     }
+    // A long &&/|| chain wraps one operand per line even without comments —
+    // joining `a || b || … || p` into a 250-column condition buries it.
+    if depth >= 0 && e.kind == EX_BINARY {
+        let opv: string = fmt_binop(e.op_code);
+        if opv.eq("&&") || opv.eq("||") {
+            let flat: string = fmt_expr(e);
+            if flat.len() + depth * 4 > 100 {
+                return fmt_binary_wrap(e, depth);
+            }
+        }
+    }
     return fmt_expr(e);
+}
+
+// Width-driven operand-per-line rendering of an &&/|| chain. Recurses into a
+// left-nested same-shape chain while ITS flat form still overflows, so the
+// first line keeps a fitting prefix and each overflow operand gets its own
+// continuation line (`\n    || field.eq("find")`).
+fn fmt_binary_wrap(e: *Expr, depth: i32) -> string {
+    let ind: string = fmt_indent(depth + 1);
+    let bp: i32 = fmt_binop_bp(e.op_code);
+    let mut out: string = "";
+    let mut lhs_done: bool = false;
+    if e.lhs != null && e.lhs.kind == EX_BINARY {
+        let lop: string = fmt_binop(e.lhs.op_code);
+        if (lop.eq("&&") || lop.eq("||")) && fmt_expr(e.lhs).len() + (depth + 1) * 4 > 100 {
+            out = fmt_binary_wrap(e.lhs, depth);
+            lhs_done = true;
+        }
+    }
+    if !lhs_done { out = fmt_expr_prec(e.lhs, bp); }
+    return out.concat("\n").concat(ind).concat(fmt_binop(e.op_code)).concat(" ").concat(fmt_expr_prec(e.rhs, bp + 1));
 }
 
 fn fmt_expr_prec(e: *Expr, min_bp: i32) -> string {
@@ -973,6 +962,32 @@ fn fmt_stmt_inner(s: *Stmt, depth: i32) -> string {
         return pad.concat(kw).concat(module).concat(tail_s).concat(";\n");
     }
     if s.kind == ST_IF {
+        // House idiom: a guard with a single simple then-stmt and no else
+        // stays on one line (`if x == null { return; }`) when it fits in 100
+        // columns. Comments anywhere in the guard force the block form so
+        // they keep their place.
+        if s.else_body == null && s.then_body != null && s.then_body.len() == 1 && !binary_has_comment(s.cond) {
+            let b0: Stmt = s.then_body.get(0);
+            let clean: bool = (b0.leading_comments == null || b0.leading_comments.eq(""))
+                && (b0.trailing_comment == null || b0.trailing_comment.eq(""))
+                && (b0.doc_comment == null || b0.doc_comment.eq(""));
+            let mut inline_s: string = "";
+            if b0.kind == ST_RETURN || b0.kind == ST_EXPR {
+                inline_s = fmt_stmt_inline(&b0);
+            }
+            if b0.kind == ST_BREAK {
+                inline_s = "break;";
+            }
+            if b0.kind == ST_CONTINUE {
+                inline_s = "continue;";
+            }
+            if clean && !inline_s.eq("") && !inline_s.contains("\n") {
+                let one: string = pad.concat("if ").concat(fmt_expr(s.cond)).concat(" { ").concat(inline_s).concat(" }\n");
+                if one.len() <= 101 {
+                    return one;
+                }
+            }
+        }
         let mut out: string = pad.concat("if ").concat(fmt_value(s.cond, depth)).concat(" {\n");
         out = out.concat(fmt_body(s.then_body, depth + 1));
         if s.else_body != null {
@@ -1564,7 +1579,7 @@ fn _fmt_prune_unused_imports(stmts: *Vector<Stmt>) -> *HashMap<bool> {
             // All named items are dead — but a selective import also grants
             // the module qualifier, so if `mod::` is still used, degrade to a
             // plain module import instead of deleting the line.
-            let mut qual: string = last_path_segment(s.import_path);
+            let qual: string = last_path_segment(s.import_path);
             if !qual.eq("") && used.contains(qual) {
                 let mut sm: Stmt = s;
                 let none_items: *Vector<string> = null;
