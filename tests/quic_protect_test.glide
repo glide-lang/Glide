@@ -116,3 +116,18 @@ fn test_decode_datagram_stops_at_short_header() -> i32 {
     assert_eq!(got.get(0).pn as i64, 0);
     return 0;
 }
+
+// A short-header (1-RTT) packet encodes and decodes back with the right pn and
+// frames; its first byte carries no long-header type bits.
+fn test_short_header_roundtrip() -> i32 {
+    let dcid: string = _h("0011223344556677"); // 8-byte connection id
+    let ck: *QuicKeys = quic_client_initial_keys(_h("8394c8f03e515708")).unwrap();
+    let frames: string = frame_stream(0, 0, "application data\x00over 1-RTT", true);
+    let wire: string = quic_encode_short(AEAD_AES128_GCM, ck, dcid, 42, frames).unwrap();
+    assert_eq!(wire.at(0).to_int() & 0x80, 0); // short header: high bit clear
+    let dec: *QuicPacket = quic_decode_short(AEAD_AES128_GCM, ck, wire, 0, 8).unwrap();
+    assert_eq!(dec.kind, PKT_ONERTT);
+    assert_eq!(dec.pn as i64, 42);
+    assert!(dec.payload.eq(frames));
+    return 0;
+}

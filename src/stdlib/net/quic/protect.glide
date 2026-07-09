@@ -200,6 +200,44 @@ pub fn quic_encode_initial(aead: i32, keys: *QuicKeys, version: u32, dcid: strin
     return ok(wire);
 }
 
+/// Encode a fully-protected short-header (1-RTT) packet. The destination
+/// connection ID length is implicit (the peer knows it), so there is no Length
+/// field — a 1-RTT packet is always last in its datagram.
+pub fn quic_encode_short(aead: i32, keys: *QuicKeys, dcid: string, packet_number: u64, frames: string) -> !string {
+    let pn_len: i32 = 4;
+    let full: string = build_short(dcid, packet_number, pn_len, frames);
+    let pn_offset: i32 = 1 + dcid.len();
+    let header: string = full.substring(0, pn_offset + pn_len);
+    let sealed: string = quic_seal(aead, keys.key, keys.iv, packet_number, header, frames)?;
+    let wire: string = quic_apply_hp(aead, keys.hp, header.concat(sealed), pn_offset)?;
+    return ok(wire);
+}
+
+/// Decode + decrypt a short-header (1-RTT) packet at `off`. `dcid_len` is the
+/// length of the connection ID we told the peer to use (our SCID length); a
+/// short header has no Length field, so the packet runs to the datagram end.
+pub fn quic_decode_short(aead: i32, keys: *QuicKeys, packet: string, off: i32, dcid_len: i32) -> !*QuicPacket {
+    if off >= packet.len() { return err("quic: empty short header"); }
+    if (_ppb(packet, off) & 0x80) != 0 { return err("quic: not a short header"); }
+    let pn_offset: i32 = off + 1 + dcid_len;
+    let hp: *HpOpen = quic_remove_hp(aead, keys.hp, packet, off, pn_offset)?;
+    let ct_start: i32 = pn_offset + hp.pn_len;
+    if ct_start > packet.len() {
+        free(hp as *void);
+        return err("quic: truncated short packet");
+    }
+    let ciphertext: string = packet.substring(ct_start, packet.len());
+    let payload: string = quic_open(aead, keys.key, keys.iv, hp.pn, hp.header, ciphertext)?;
+    let out: *QuicPacket = malloc(sizeof(QuicPacket)) as *QuicPacket;
+    out.kind = PKT_ONERTT;
+    out.pn = hp.pn;
+    out.payload = payload;
+    out.scid = "";
+    out.end = packet.len();
+    free(hp as *void);
+    return ok(out);
+}
+
 /// Decode + decrypt one long-header packet at `off` in a (possibly coalesced)
 /// datagram. Removes header protection, opens the AEAD payload, and reports
 /// where the next coalesced packet begins.

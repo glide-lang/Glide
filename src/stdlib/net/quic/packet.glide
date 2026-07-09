@@ -337,6 +337,7 @@ pub fn parse_frames(payload: string) -> !*Vector<*Frame> {
 // ---- long-header packets (RFC 9000 §17.2) -----------------------------
 pub const PKT_INITIAL: i32 = 0;
 pub const PKT_HANDSHAKE: i32 = 2;
+pub const PKT_ONERTT: i32 = 4; // short-header 1-RTT (not a long-header type code)
 
 /// Build the UNPROTECTED bytes of a long-header Initial packet:
 ///   first_byte || version(4) || DCID len+bytes || SCID len+bytes ||
