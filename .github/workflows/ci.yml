@@ -57,7 +57,7 @@ jobs:
         # release can no longer compile `main`.
         run: |
           set -e
-          BOOT_TAG=v0.6.1
+          BOOT_TAG=v0.7.0
           ver="${BOOT_TAG#v}"
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${BOOT_TAG}"
           mkdir -p .boot
@@ -156,7 +156,7 @@ jobs:
       - name: Bootstrap compiler from a published release
         run: |
           set -e
-          BOOT_TAG=v0.6.1
+          BOOT_TAG=v0.7.0
           ver="${BOOT_TAG#v}"
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${BOOT_TAG}"
           mkdir -p .boot

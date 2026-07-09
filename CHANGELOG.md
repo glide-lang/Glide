@@ -1,10 +1,13 @@
 # Changelog
 
-## 0.8.0 — 2026-07-06
+## 0.8.0 — 2026-07-08
 
-The memory-safety release. Glide gains Rust-level memory safety **without Rust's
-complexity** — no lifetime annotations, ever — plus fat-pointer slices, and a
-stdlib that no longer leaks. The compiler self-hosts through all of it.
+The big one. Three releases in one: Glide gains **Rust-level memory safety with
+zero lifetime annotations**; it becomes **self-sufficient** — its own
+constant-time crypto, its own TLS 1.2/1.3 stack, no more `curl`; and it grows a
+genuinely smart compiler, a mature language server, and a formatter that
+round-trips the whole tree. Groundwork for a native QUIC/HTTP-3 stack lands too.
+The compiler self-hosts through all of it, byte-for-byte at the C level.
 
 ### Memory safety — second-class borrows
 
@@ -18,12 +21,35 @@ stdlib that no longer leaks. The compiler self-hosts through all of it.
   `borrow-vector-element`, `borrow-alias-in-call`, `overlap-borrow`,
   `assign-while-borrowed`, `use-while-mut-borrowed`, `free-while-borrowed`, and
   `use-after-move` (NLL-shaped: a borrow dies at its last use).
+- **Full borrow exclusivity**, NLL-shaped: mutation/read/free are checked against
+  live borrows, a borrow can't cross into a spawned task, and `&mut` params emit C
+  `restrict` (closing a receiver-aliasing hole). Writes through a *shared* borrow are
+  rejected at type-check, not left to the C compiler.
 - **Two-layer model.** The safe layer is values + second-class exclusive borrows +
   owned heap (`let v =` auto-drop with move tracking): no dangling, no aliased
   mutation, no use-after-free. The manual layer stays `*T` with `malloc`/`free` for
   FFI and data-structure internals.
-- **impl-method bodies are borrow-checked.** Violations inside a method body that
-  previously slipped through the LSP-only path are now hard errors at build time.
+- **impl-method bodies are borrow-checked** at build time, not only in the LSP.
+
+### Memory — auto-drop and a leak-free stdlib
+
+- **Locals free themselves.** A `let v = Vector::new()` / `HashMap::new()` (or any
+  owned heap value) that doesn't escape its scope is dropped automatically — **you no
+  longer call `.free()`** on a local Vector/HashMap/string. Ownership moves on
+  return/store; a manual `free` of an already-tracked binding no longer double-frees.
+- **Ephemeral strings are reclaimed by analysis, at zero cost** — no refcounting. The
+  compiler tracks which freshly-allocated strings never escape (across an
+  interprocedural retention summary resolved to a least fixpoint) and drops them:
+  `concat`/`substring`/transform results, string struct fields of non-escaping
+  values, `Vector<string>` elements at scope end and on `clear()`, and scalar
+  `.to_string()` results. An "owned" bit in the string header makes a stray drop of
+  an arena or literal string a safe no-op instead of a bad free.
+- **Box<T>** — a safe owning heap box with automatic alloc and free, and a value
+  handle: recursive shapes like `?Box<Node<T>>` compile and run end-to-end (linked
+  lists, trees), with `Box.get_mut` for in-place mutation.
+- **~65 stdlib memory leaks fixed** across 26 modules (http, tls, json, compress,
+  net, process, …) plus a recursive `JsonValue::free`, so long-running servers no
+  longer bleed memory.
 
 ### Slices — fat pointers and the `&str` of Glide
 
@@ -35,42 +61,170 @@ stdlib that no longer leaks. The compiler self-hosts through all of it.
   `&str`, without lifetimes. Indexing a safe-layer slice is **bounds-checked** and
   panics on out-of-range instead of reading wild memory.
 
-### Memory — auto-drop and leak-free stdlib
+### Self-sufficiency — pure-Glide crypto, TLS, and a curl-free toolchain
 
-- **Locals free themselves.** A `let v = Vector::new()` (or any owned heap value)
-  that doesn't escape its scope is dropped automatically — **you no longer call
-  `.free()`** on a local Vector/string. Ownership moves on return/store; a manual
-  `free` of an already-tracked binding no longer double-frees.
-- **~60 stdlib memory leaks fixed** across 26 modules (http, tls, json, compress,
-  net, process, …) plus a recursive `JsonValue::free`, so long-running servers no
-  longer bleed memory. A short-lived string acquires an "owned" bit so a stray drop
-  of an arena/literal string is a safe no-op instead of a bad free.
+Glide no longer leans on OpenSSL or curl for the common path; the cryptography and
+the entire TLS handshake are written in Glide, gated on the official test vectors.
+
+- **Cryptographic primitives** (constant-time C kernels orchestrated by Glide, each
+  gated on RFC / NIST CAVP / Wycheproof vectors): OS CSPRNG (getrandom / getentropy /
+  BCryptGenRandom), HKDF-SHA256, SHA-512/384 + HMAC, ChaCha20-Poly1305 and
+  AES-128/256-GCM AEADs, X25519 ECDH, NIST P-256 (ECDH + ECDSA), P-384 ECDSA, and
+  RSA PKCS#1 v1.5 + RSA-PSS (verify and sign).
+- **X.509 / PKI, pure Glide**: an ASN.1 DER reader and encoder, certificate parsing,
+  signature verification, RFC 6125 hostname matching, fail-closed chain verification
+  against the OS trust store, PEM decoding, and self-signed P-256 certificate
+  generation. Real chains verify end-to-end (RSA + P-256 + P-384).
+- **TLS 1.3 and TLS 1.2, client and server, in Glide.** A working pure-Glide HTTPS
+  client (verified live against Cloudflare, Google, GitHub, Mozilla, …), a TLS 1.3
+  and 1.2 server (ECDSA + RSA), STARTTLS attach, and an insecure mode. The HTTP
+  client runs on either backend through one API; **the pure-Glide TLS 1.3 backend is
+  now the default** for verifying clients (`GLIDE_TLS_BACKEND=openssl` opts back).
+- **`curl` is gone from the toolchain.** `glide fetch` / `add` download over the
+  pure-Glide TLS stack in-process (redirects, chunked, connection-close). Because the
+  OpenSSL backend is now dead code on the default path, the compiler links **neither
+  libssl nor libcrypto** — programs that use only the Glide path come out
+  OpenSSL-free automatically.
+
+### QUIC transport groundwork (RFC 9000 / 9001)
+
+A pure-Glide QUIC transport, built and tested against the RFC vectors, reusing the
+crypto and TLS above. Not yet wired into HTTP/3 (still ngtcp2-backed), but the
+packet and connection layers are complete:
+
+- Packet protection (header protection + AEAD) with encode/decode gated on RFC 9001
+  Appendix A; varints and the frame set (RFC 9000 §19) with a full frame parser;
+  Initial / Handshake / short-header (1-RTT) packets; datagram coalescing with
+  per-type decode routing.
+- Connection state — CRYPTO-stream reassembly, packet-number spaces with ACK
+  generation, and a `QuicConn` that builds and ingests an Initial flight (client ↔
+  server round-trip).
+- The TLS binding — QUIC transport parameters, a QUIC ClientHello, and deriving the
+  QUIC packet-protection keys from the TLS 1.3 key schedule.
+
+### Language
+
+- **Rust-style receivers** across impls and traits: `fn take(self)` (= `self: *Self`),
+  `fn get(&self)`, `fn bump(&mut self)`; a `&mut self` call requires a `mut` receiver,
+  and `fn m(mut self)` is rejected instead of silently dropped. The stdlib and
+  compiler adopted them throughout.
+- **Traits get more expressive**: `fn a(ao: impl Alelo2)` argument sugar, implicit
+  `dyn` coercion at call sites, no-receiver trait methods via `dyn`, auto-ref of a
+  value into an `impl Trait` / `<T: Bound>` parameter, and dot-calling a `&self` trait
+  method on an rvalue. Struct/impl type-param **bounds are enforced**.
+- **File+folder packages**: `import stdlib::http;` then `http::client::HttpClient`
+  works (only referenced children load). **Brace imports** group submodules —
+  `import stdlib::http::{client, cookies::{CookieJar}};` (nested), which the formatter
+  folds and the LSP auto-import splices.
+- **Rust-style imports are qualified-only** — `import a;` gives `a::X`, never a
+  bring-all; a bare name needs `import a::{X}` or `::*`, and using a type now *requires*
+  importing it. `fn` / `struct` / `enum` / `trait` share **one namespace per file**.
+- **Match got Rust semantics**: an arm `=> v` *yields* a value while `return` exits the
+  function; arms carry positions (per-arm diagnostics, arity and duplicate checks) and
+  their real binding types; exhaustiveness covers `Result`/`Option` and **field
+  scrutinees**; a void match and incompatible-type arms are rejected; pattern
+  qualifiers are checked against the scrutinee.
+- **Generics** are properly monomorphized: recursive drop of generic owned structs,
+  wrapper fields that emit their templates + nested monos, `Self` struct-literals
+  carrying their concrete type, generic method dispatch, an **occurs check** for
+  wrapper ctor args, `Type::method(args)` binding type params from its own arguments,
+  and a generic ctor now monomorphizes from a `let`, a struct field, a cast, a call
+  arg, **or an assignment target**.
+- **Numeric literal type suffixes** (`200u8`, `5i64`), per-binding `mut` in tuple
+  destructure (`let (mut a, b) = …`), opaque **extern types** registered instead of
+  discarded, extern-only variadic `...` that survives fn-ptr casts, and reserved words
+  rejected as binder names.
+- **`let` is immutable by default** — an `assign-immutable` error with a mechanical
+  `mut` fix; writes to `const` and to closure params (immutable unless `mut`) are
+  caught.
+- Comparing `?T` / `!T` with `null` is a clean error (options are values, not
+  pointers); an unknown macro is an error instead of silently emitting nothing; `dbg!`
+  pretty-prints (structs expand multi-line) while `println!` stays compact.
+
+### Diagnostics & type checking
+
+- **Every typer error underlines its exact offending token** — a repo-wide sweep, not
+  the first character or the whole expression.
+- A large **"clean error, not a compiler crash"** pass: dozens of constructs that used
+  to emit invalid C or ICE now produce targeted messages — generic-impl misuse, `new
+  T{}` literals, `as *dyn Trait` without an impl, a literal `null` as a `&T` argument,
+  non-asm `naked fn` bodies, a `??` fallback whose type doesn't match, unknown struct
+  field types, same-file duplicate definitions, and more.
+- `unwrap()` **panics uniformly** on failure — the silent zero-fallback path is gone.
+  Explain-help (`glide explain`) entries were added for the new safety diagnostics.
+
+### Language server
+
+- **Correct positions across Unicode**: the LSP negotiates UTF-8/UTF-16 position
+  encoding and converts byte columns to UTF-16 at the protocol boundary — hovers and
+  highlights no longer drift after a multi-byte character.
+- **Richer navigation**: full tuple support (hover/completion/inlay/goto/highlight/
+  rename), cross-file completion for loose-layout projects, trait-impl completion that
+  stubs the missing methods, member completion that offers cross-file trait methods and
+  auto-imports the trait, and signature help resolved by the **receiver's type**.
+- **Hover explains ownership** — a Move / Copy / pointer / borrow card per binding —
+  plus module-qualifier hover, import hover showing the module's header comment, and
+  generic `T` constrained from a constructor's own args.
+- **Precise anchoring**: references/rename land on the real token (not the module
+  qualifier); highlights are scoped (self/param/local to their function, module
+  qualifiers, macro invocations); `self`/`Self` are classified as their real semantic
+  roles. Auto-import merges into brace groups; unused-import detection is sharper and
+  edited files reindex on `didChange`.
+
+### Formatter
+
+- **`glide fmt` round-trips the whole tree.** It never touches a file that doesn't
+  parse, renders one match arm per line, folds sibling imports into brace groups,
+  keeps one-line guards while width-wrapping long `&&`/`||` chains, preserves `///` doc
+  comments and low-precedence parens, and re-renders `else if` ladders, macro
+  definitions, integer-literal spellings (hex/binary/suffix), and `spawn_thread`
+  faithfully. The compiler and stdlib are now fully formatted (a net −9k lines).
 
 ### Performance
 
-- A **bump allocator** backs short-lived string allocations on the build/run path,
-  a **hand-rolled `format!`** replaces `vsnprintf` (~31% faster on the int/string
-  path), integers stringify through a hand-rolled `itoa`, and `&mut` parameters emit
-  C `restrict`.
+- A **bump allocator** backs short-lived string allocations on the build/run path (so
+  strings beat the C baseline), a **hand-rolled `format!`** replaces `vsnprintf` (~31%
+  faster on the int/string path), and integers stringify through a hand-rolled `itoa`.
+
+### Standard library
+
+- **`stdlib::errors`** — a centralized, recognizable error model that the fallible
+  APIs share.
+- **`stdlib::fs`** — `File`, `Metadata`, `read_dir` (with `for … in`), `OpenOptions`,
+  seek, and unprefixed fallible free functions (`fs::read_to_string` / `write` /
+  `exists` / …) over `stdlib::errors`.
 
 ### Fixes
 
-- **`${bool}` interpolation no longer crashes.** `format!` (which every `${expr}`
-  lowers to) materialized `bool` args as a raw `0`/`1` against a `%s` spec, which
-  `printf` dereferenced as a pointer and segfaulted. It now renders `"true"`/`"false"`
-  like the direct `println!` path.
+- **`${bool}` interpolation no longer crashes** — `format!` materializes `bool` args as
+  `"true"`/`"false"` instead of dereferencing `0`/`1` as a pointer.
+- **Binary-safe strings & I/O**: `substring` no longer stops at the first NUL, socket
+  reads keep embedded NULs, `read_to_end` accumulates into a doubling `ByteBuffer`
+  (O(n), not O(n²)), and the HTTP client decodes chunked transfer-encoding and honors
+  `Content-Length` and `HTTP(S)_PROXY` / `NO_PROXY`.
+- **`\xNN` string escapes are exactly two hex digits** (Rust/Python semantics), emitted
+  as octal so C can't extend them.
+- Codegen memory-safety fixes: a `defer`-mentioned local is never scope-end-dropped
+  (UAF), the drop walker visits `select!`/`asm!` operands, `__glide_pfree` recognizes
+  run-bump pointers, and the cc-failure diagnostic renderer is bounded (cap 20 errors).
 
 ### Breaking changes
 
-- **Borrows can't escape.** Code that returned a borrow (`-> &T`), stored one in a
-  struct field, or used `Vector<&T>` / a borrow in a generic now fails to compile —
-  use `*T` (the manual layer) for those. This is the headline change; most code that
-  only *passes* borrows into calls is unaffected.
-- **Borrow checks in impl bodies.** Method bodies that relied on the previously
-  unchecked path may surface new borrow errors.
-- **Slice out-of-bounds panics** instead of silently reading past the end.
-- Qualified module imports from 0.7.0 remain in force (`import stdlib::x::*` or a
-  qualified name; no implicit bring-all).
+- **Borrows can't escape.** Returning a borrow (`-> &T`), storing one in a field, or
+  using `Vector<&T>` / a borrow in a generic no longer compiles — use `*T` (the manual
+  layer). Most code that only *passes* borrows into calls is unaffected.
+- **Imports are qualified-only.** `import a;` no longer brings names into scope; use
+  `import a::{X}` / `import a::*`, and import a type before using it.
+- **`Result` `.ok` / `.val` / `.err` fields are deprecated** — use `.is_ok()` /
+  `.unwrap()` / `.unwrap_err()` (and `?` / `??`). `glide fix` migrates them.
+- **`let` is immutable by default** — add `mut` (a glide-fix inserts it) where you
+  reassign.
+- **Match `=> v` yields** a value; use `return` to exit the function from an arm.
+- **Rust-style receivers** are the idiom (`self` / `&self` / `&mut self`); `&mut self`
+  calls need a `mut` receiver.
+- **`unwrap()` panics** on failure (no zero-fallback), an **unknown macro is an error**,
+  **`new T{}` is rejected** (use the `malloc`-cast idiom), and **slice out-of-bounds
+  panics** instead of reading past the end.
 
 ## 0.7.0 — 2026-07-02
 
