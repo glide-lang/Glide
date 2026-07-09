@@ -5,6 +5,7 @@ import stdlib::fs;
 import stdlib::fs::{File, Metadata, ReadDir, DirEntry, OpenOptions, SeekFrom, FileType};
 import stdlib::errors::*;
 import stdlib::bytes::*;
+import stdlib::os::{os_name};
 
 // A relative temp dir under the cwd — portable across Linux/macOS/Windows
 // (a hardcoded `/tmp` doesn't exist on Windows, so every op under it failed and
@@ -119,14 +120,18 @@ fn test_metadata_symlink() -> i32 {
     assert_eq!(m.val.len() as i32, 5);
     assert!(m.val.is_file());
     m.val.free();
-    let lk: string = fs::join(D, "lnk");
-    let sl: ! = fs::symlink(p, lk);
-    if sl.ok {
-        let tgt: !string = fs::read_link(lk);
-        assert_str_eq!(tgt.val, p);
-        let sm: !*fs::Metadata = fs::symlink_metadata(lk);
-        assert!(sm.val.is_symlink());
-        sm.val.free();
+    // POSIX symlink semantics: Windows gates symlinks behind admin rights and
+    // normalizes the stored target path, so this block is Linux/macOS only.
+    if !os_name().eq("windows") {
+        let lk: string = fs::join(D, "lnk");
+        let sl: ! = fs::symlink(p, lk);
+        if sl.ok {
+            let tgt: !string = fs::read_link(lk);
+            assert_str_eq!(tgt.val, p);
+            let sm: !*fs::Metadata = fs::symlink_metadata(lk);
+            assert!(sm.val.is_symlink());
+            sm.val.free();
+        }
     }
     return 0;
 }

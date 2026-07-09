@@ -145,6 +145,15 @@ jobs:
         run: |
           [ -f tests/http_h3_test.glide ] && mv tests/http_h3_test.glide tests/http_h3_test.glide.skip || true
 
+      - name: Skip the live-TLS test on Windows
+        # net_tls_test opens a real TLS connection to example.com. The compiler
+        # binary builds and runs on Windows, but the pure-Glide net/socket stack
+        # has never had a working Windows build and isn't validated there yet;
+        # Linux/macOS cover this path. (Windows net porting is a follow-up.)
+        if: matrix.os == 'windows-latest'
+        run: |
+          [ -f tests/net_tls_test.glide ] && mv tests/net_tls_test.glide tests/net_tls_test.glide.skip || true
+
       - name: Run regression suite (tools/test_all.sh)
         run: |
           if [ "${{ runner.os }}" = "Windows" ]; then GLIDE="$PWD/glide.exe" bash tools/test_all.sh; \
