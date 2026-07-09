@@ -1,0 +1,117 @@
+// QUIC connection state: CRYPTO-stream reassembly (in-order, gapped, overlap,
+// duplicate) and packet-number-space ACK generation (round-tripped through the
+// frame parser).
+import stdlib::testing::*;
+import stdlib::net::quic::conn::*;
+import stdlib::net::quic::packet::*;
+
+// In-order fragments deliver immediately and advance the offset.
+fn test_rx_in_order() -> i32 {
+    let rs: *RxStream = rx_stream_new();
+    rs.push(0 as u64, "abc");
+    assert!(rs.pull().eq("abc"));
+    rs.push(3 as u64, "def");
+    assert!(rs.pull().eq("def"));
+    assert_eq!(rs.delivered as i64, 6);
+    rs.free();
+    return 0;
+}
+
+// A gap holds bytes back until the missing prefix arrives, then flushes both.
+fn test_rx_out_of_order() -> i32 {
+    let rs: *RxStream = rx_stream_new();
+    rs.push(3 as u64, "def");
+    assert!(rs.pull().eq("")); // 0..3 still missing
+    rs.push(0 as u64, "abc");
+    assert!(rs.pull().eq("abcdef"));
+    rs.free();
+    return 0;
+}
+
+// Overlapping fragments are stitched without duplicating the shared bytes.
+fn test_rx_overlap() -> i32 {
+    let rs: *RxStream = rx_stream_new();
+    rs.push(0 as u64, "abcd");
+    rs.push(2 as u64, "cdef"); // overlaps "cd"
+    assert!(rs.pull().eq("abcdef"));
+    assert_eq!(rs.delivered as i64, 6);
+    rs.free();
+    return 0;
+}
+
+// A duplicate of already-delivered bytes is a no-op.
+fn test_rx_duplicate() -> i32 {
+    let rs: *RxStream = rx_stream_new();
+    rs.push(0 as u64, "hello");
+    assert!(rs.pull().eq("hello"));
+    rs.push(0 as u64, "hello"); // fully old
+    assert!(rs.pull().eq(""));
+    rs.free();
+    return 0;
+}
+
+// Binary-safe: an embedded NUL survives reassembly.
+fn test_rx_binary_safe() -> i32 {
+    let rs: *RxStream = rx_stream_new();
+    rs.push(0 as u64, "a\x00b");
+    assert!(rs.pull().eq("a\x00b"));
+    rs.free();
+    return 0;
+}
+
+// Packet numbers are handed out sequentially from 0.
+fn test_pn_next() -> i32 {
+    let sp: *PnSpace = pn_space_new();
+    assert_eq!(sp.next() as i64, 0);
+    assert_eq!(sp.next() as i64, 1);
+    assert_eq!(sp.next() as i64, 2);
+    sp.free();
+    return 0;
+}
+
+// Recorded packet numbers coalesce into descending ranges; the generated ACK
+// frame parses back to the same ranges (encode/decode inverse).
+fn test_pn_ack_roundtrip() -> i32 {
+    let sp: *PnSpace = pn_space_new();
+    sp.record(2 as u64);
+    sp.record(0 as u64);
+    sp.record(1 as u64);
+    sp.record(6 as u64);
+    sp.record(5 as u64);
+    assert!(sp.ack_pending);
+    assert_eq!(sp.largest_recv as i64, 6);
+    let ranges: *Vector<AckRange> = sp.ack_ranges();
+    assert_eq!(ranges.len(), 2);
+    assert_eq!(ranges.get(0).hi as i64, 6);
+    assert_eq!(ranges.get(0).lo as i64, 5);
+    assert_eq!(ranges.get(1).hi as i64, 2);
+    assert_eq!(ranges.get(1).lo as i64, 0);
+    let frame: string = sp.ack_frame(0 as u64);
+    assert!(!sp.ack_pending); // cleared
+    let fs: *Vector<*Frame> = parse_frames(frame).unwrap();
+    assert_eq!(fs.len(), 1);
+    let a: *Frame = fs.get(0);
+    assert_eq!(a.kind, FRAME_ACK);
+    assert_eq!(a.largest as i64, 6);
+    assert_eq!(a.ack_ranges.len(), 2);
+    assert_eq!(a.ack_ranges.get(0).hi as i64, 6);
+    assert_eq!(a.ack_ranges.get(0).lo as i64, 5);
+    assert_eq!(a.ack_ranges.get(1).hi as i64, 2);
+    assert_eq!(a.ack_ranges.get(1).lo as i64, 0);
+    sp.free();
+    return 0;
+}
+
+// Duplicate records don't create phantom ranges; nothing received => empty ACK.
+fn test_pn_dedup_and_empty() -> i32 {
+    let sp: *PnSpace = pn_space_new();
+    assert!(sp.ack_frame(0 as u64).eq("")); // nothing to ack
+    sp.record(4 as u64);
+    sp.record(4 as u64); // dup
+    let ranges: *Vector<AckRange> = sp.ack_ranges();
+    assert_eq!(ranges.len(), 1);
+    assert_eq!(ranges.get(0).hi as i64, 4);
+    assert_eq!(ranges.get(0).lo as i64, 4);
+    sp.free();
+    return 0;
+}

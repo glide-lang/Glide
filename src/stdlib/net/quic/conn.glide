@@ -1,0 +1,197 @@
+// QUIC connection state (RFC 9000). This file holds the pieces the send/recv
+// loop is built from that can be driven and tested WITHOUT a live peer:
+//
+//   - RxStream: reassembles an offset-addressed byte stream (the CRYPTO
+//     stream, or a QUIC STREAM) from fragments that arrive out of order,
+//     overlap, or duplicate.
+//   - PnSpace: one packet-number space (Initial / Handshake / 1-RTT) — the
+//     next number to send and the received numbers to acknowledge, plus ACK
+//     frame generation (the inverse of packet::parse_frames' ACK decode).
+//
+// The UDP socket loop and the TLS-1.3-in-QUIC handshake build on top of these.
+import stdlib::net::quic::packet::*;
+import stdlib::bytes::*;
+
+// ---- CRYPTO / stream reassembly ---------------------------------------
+struct RxFrag {
+    off: u64,
+    data: string,
+}
+
+/// Reassembles an offset-addressed byte stream from fragments that may arrive
+/// out of order, overlap, or duplicate. `pull` yields the bytes that have
+/// become contiguous since the last call.
+pub struct RxStream {
+    pub delivered: u64, // next contiguous offset not yet pulled
+    frags: *Vector<*RxFrag>, // pending fragments (some may be fully consumed)
+}
+
+pub fn rx_stream_new() -> *RxStream {
+    let s: *RxStream = malloc(sizeof(RxStream)) as *RxStream;
+    s.delivered = 0 as u64;
+    // A typed local drives Vector::new's monomorphization; a bare field
+    // assignment does not instantiate the element type.
+    let frags: *Vector<*RxFrag> = Vector::new();
+    s.frags = frags;
+    return s;
+}
+
+impl RxStream {
+    /// Add a fragment at `offset`. Bytes at or below `delivered` are trimmed;
+    /// a fragment that is entirely old is dropped.
+    pub fn push(self, offset: u64, data: string) {
+        let mut off: u64 = offset;
+        let mut d: string = data;
+        if off < self.delivered {
+            let skip: u64 = self.delivered - off;
+            if skip as i32 >= d.len() { return; } // entirely already delivered
+            d = d.substring(skip as i32, d.len());
+            off = self.delivered;
+        }
+        if d.len() == 0 { return; }
+        let f: *RxFrag = malloc(sizeof(RxFrag)) as *RxFrag;
+        f.off = off;
+        f.data = d;
+        self.frags.push(f);
+    }
+
+    /// Return the bytes that have become contiguous since the last pull,
+    /// advancing `delivered`. Returns "" when the next byte is still missing.
+    pub fn pull(self) -> string {
+        let out: *ByteBuffer = ByteBuffer::new();
+        let mut progress: bool = true;
+        while progress {
+            progress = false;
+            for let i: i32 = 0; i < self.frags.len(); i++ {
+                let f: *RxFrag = self.frags.get(i);
+                let end: u64 = f.off + f.data.len() as u64;
+                if f.off <= self.delivered && end > self.delivered {
+                    let start: i32 = (self.delivered - f.off) as i32;
+                    out.push_str(f.data.substring(start, f.data.len()));
+                    self.delivered = end;
+                    progress = true;
+                }
+            }
+        }
+        let s: string = out.to_string();
+        out.free();
+        return s;
+    }
+
+    pub fn free(self) {
+        for let i: i32 = 0; i < self.frags.len(); i++ {
+            free(self.frags.get(i) as *void);
+        }
+        self.frags.free();
+        free(self as *void);
+    }
+}
+
+// ---- packet number space ----------------------------------------------
+
+/// One packet-number space: the next number to send and the received numbers
+/// awaiting acknowledgement (kept sorted descending for range coalescing).
+pub struct PnSpace {
+    pub next_pn: u64,
+    pub largest_recv: u64,
+    pub has_recv: bool,
+    pub ack_pending: bool,
+    received: *Vector<u64>,
+}
+
+pub fn pn_space_new() -> *PnSpace {
+    let s: *PnSpace = malloc(sizeof(PnSpace)) as *PnSpace;
+    s.next_pn = 0 as u64;
+    s.largest_recv = 0 as u64;
+    s.has_recv = false;
+    s.ack_pending = false;
+    let received: *Vector<u64> = Vector::new();
+    s.received = received;
+    return s;
+}
+
+impl PnSpace {
+    /// Allocate the next packet number to send.
+    pub fn next(self) -> u64 {
+        let pn: u64 = self.next_pn;
+        self.next_pn = self.next_pn + 1 as u64;
+        return pn;
+    }
+
+    /// Record a received packet number for later acknowledgement. Duplicates
+    /// are ignored; the received list stays sorted descending.
+    pub fn record(self, pn: u64) {
+        let r: *Vector<u64> = self.received;
+        for let i: i32 = 0; i < r.len(); i++ {
+            let v: u64 = r.get(i);
+            if v == pn { return; }
+            if v < pn {
+                r.insert(i, pn);
+                self._bump(pn);
+                return;
+            }
+        }
+        r.push(pn);
+        self._bump(pn);
+    }
+
+    fn _bump(self, pn: u64) {
+        self.ack_pending = true;
+        if !self.has_recv || pn > self.largest_recv {
+            self.largest_recv = pn;
+            self.has_recv = true;
+        }
+    }
+
+    /// The received packets as inclusive ranges, descending by `hi`. Empty when
+    /// nothing has been received.
+    pub fn ack_ranges(self) -> *Vector<AckRange> {
+        let out: *Vector<AckRange> = Vector::new();
+        let r: *Vector<u64> = self.received;
+        if r.len() == 0 { return out; }
+        let mut hi: u64 = r.get(0);
+        let mut lo: u64 = r.get(0);
+        for let i: i32 = 1; i < r.len(); i++ {
+            let v: u64 = r.get(i);
+            if v == lo - 1 as u64 {
+                lo = v;
+            } else {
+                out.push(AckRange { hi: hi, lo: lo });
+                hi = v;
+                lo = v;
+            }
+        }
+        out.push(AckRange { hi: hi, lo: lo });
+        return out;
+    }
+
+    /// Encode an ACK frame acknowledging every received packet, or "" if there
+    /// is nothing to acknowledge. Clears the `ack_pending` flag.
+    pub fn ack_frame(self, ack_delay: u64) -> string {
+        let ranges: *Vector<AckRange> = self.ack_ranges();
+        if ranges.len() == 0 { return ""; }
+        let first: AckRange = ranges.get(0);
+        let bb: *ByteBuffer = ByteBuffer::new();
+        bb.push((FRAME_ACK & 255) as u8);
+        bb.push_str(varint_encode(first.hi));
+        bb.push_str(varint_encode(ack_delay));
+        bb.push_str(varint_encode((ranges.len() - 1) as u64));
+        bb.push_str(varint_encode(first.hi - first.lo));
+        for let i: i32 = 1; i < ranges.len(); i++ {
+            let prev: AckRange = ranges.get(i - 1);
+            let cur: AckRange = ranges.get(i);
+            bb.push_str(varint_encode(prev.lo - cur.hi - 2 as u64));
+            bb.push_str(varint_encode(cur.hi - cur.lo));
+        }
+        let s: string = bb.to_string();
+        bb.free();
+        ranges.free();
+        self.ack_pending = false;
+        return s;
+    }
+
+    pub fn free(self) {
+        self.received.free();
+        free(self as *void);
+    }
+}
