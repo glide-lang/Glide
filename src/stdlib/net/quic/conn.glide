@@ -10,6 +10,9 @@
 //
 // The UDP socket loop and the TLS-1.3-in-QUIC handshake build on top of these.
 import stdlib::net::quic::packet::*;
+import stdlib::net::quic::crypto::*;
+import stdlib::net::quic::protect::*;
+import stdlib::net::tls13::record::*; // AEAD_* constants
 import stdlib::bytes::*;
 
 // ---- CRYPTO / stream reassembly ---------------------------------------
@@ -189,5 +192,108 @@ impl PnSpace {
     pub fn free(self) {
         self.received.free();
         free(self as *void);
+    }
+}
+
+// ---- connection (Initial space) ---------------------------------------
+
+/// Keys for one packet-number space: the AEAD to protect what we send (`tx`)
+/// and open what we receive (`rx`), and whether they've been installed yet.
+pub struct KeySet {
+    pub tx: *QuicKeys,
+    pub rx: *QuicKeys,
+    pub aead: i32,
+    pub have: bool,
+}
+
+/// A QUIC connection's transport state for the Initial space: connection IDs,
+/// the packet-number space, the peer's CRYPTO-stream reassembly, how much
+/// CRYPTO we've queued, and the Initial keys. The handshake / 1-RTT spaces and
+/// the UDP socket layer build on top of this; the CRYPTO payload is opaque
+/// bytes so the TLS handshake plugs in without touching the transport.
+pub struct QuicConn {
+    pub version: u32,
+    pub dcid: string, // peer's connection id (we send TO it); "" until learned
+    pub scid: string, // our connection id (peer sends TO it)
+    pub is_server: bool,
+    pub initial: *PnSpace,
+    pub rx_crypto: *RxStream,
+    tx_crypto_off: u64,
+    pub k_initial: *KeySet,
+}
+
+/// Set up a connection's Initial space. `initial_dcid` is the client's chosen
+/// initial Destination Connection ID; BOTH directions' Initial keys derive from
+/// it (RFC 9001 §5.2). `dcid` is who we send to ("" for a server that learns it
+/// from the client's first packet); `scid` is our own connection id.
+pub fn quic_conn_new(is_server: bool, initial_dcid: string, dcid: string, scid: string) -> !*QuicConn {
+    let ck: *QuicKeys = quic_client_initial_keys(initial_dcid)?;
+    let sk: *QuicKeys = quic_server_initial_keys(initial_dcid)?;
+    let ks: *KeySet = malloc(sizeof(KeySet)) as *KeySet;
+    ks.aead = AEAD_AES128_GCM;
+    ks.have = true;
+    if is_server {
+        ks.tx = sk;
+        ks.rx = ck;
+    } else {
+        ks.tx = ck;
+        ks.rx = sk;
+    }
+    let c: *QuicConn = malloc(sizeof(QuicConn)) as *QuicConn;
+    c.version = 1 as u32;
+    c.dcid = dcid;
+    c.scid = scid;
+    c.is_server = is_server;
+    c.initial = pn_space_new();
+    c.rx_crypto = rx_stream_new();
+    c.tx_crypto_off = 0 as u64;
+    c.k_initial = ks;
+    return ok(c);
+}
+
+impl QuicConn {
+    /// Build one Initial datagram carrying `crypto` (TLS handshake bytes) after
+    /// any pending ACK. When `pad_to > 0` the datagram is inflated with PADDING
+    /// frames to at least that many bytes — a client's first flight must be
+    /// >= 1200 (RFC 9000 §14.1). Advances the packet number and CRYPTO offset.
+    pub fn build_initial(self, crypto: string, pad_to: i32) -> !string {
+        let pn: u64 = self.initial.next();
+        let bb: *ByteBuffer = ByteBuffer::new();
+        bb.push_str(self.initial.ack_frame(0 as u64));
+        if crypto.len() > 0 {
+            bb.push_str(frame_crypto(self.tx_crypto_off, crypto));
+            self.tx_crypto_off = self.tx_crypto_off + crypto.len() as u64;
+        }
+        let frames: string = bb.to_string();
+        bb.free();
+        let wire: string = quic_encode_initial(self.k_initial.aead, self.k_initial.tx, self.version, self.dcid, self.scid, "", pn, frames)?;
+        if pad_to > 0 && wire.len() < pad_to {
+            // PADDING lives inside the (AEAD-protected) packet payload; adding N
+            // bytes grows the encoded packet by exactly N within a varint regime.
+            let padded: string = frames.concat(frame_padding(pad_to - wire.len()));
+            return quic_encode_initial(self.k_initial.aead, self.k_initial.tx, self.version, self.dcid, self.scid, "", pn, padded);
+        }
+        return ok(wire);
+    }
+
+    /// Ingest a received datagram of Initial packets: open each, record its
+    /// packet number for acknowledgement, learn the peer's connection id, and
+    /// feed CRYPTO frames into reassembly. Returns the newly-contiguous CRYPTO
+    /// stream bytes (the peer's handshake data), or "" if none completed.
+    pub fn ingest_initial(self, datagram: string) -> !string {
+        let pkts: *Vector<*QuicPacket> = quic_decode_datagram(datagram, self.k_initial.rx, self.k_initial.aead, null, 0)?;
+        for let i: i32 = 0; i < pkts.len(); i++ {
+            let pkt: *QuicPacket = pkts.get(i);
+            self.initial.record(pkt.pn);
+            if self.dcid.len() == 0 && pkt.scid.len() > 0 {
+                self.dcid = pkt.scid; // learn who to reply to
+            }
+            let frames: *Vector<*Frame> = parse_frames(pkt.payload)?;
+            for let j: i32 = 0; j < frames.len(); j++ {
+                let f: *Frame = frames.get(j);
+                if f.kind == FRAME_CRYPTO { self.rx_crypto.push(f.offset, f.data); }
+            }
+        }
+        return ok(self.rx_crypto.pull());
     }
 }

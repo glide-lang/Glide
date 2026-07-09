@@ -4,6 +4,11 @@
 import stdlib::testing::*;
 import stdlib::net::quic::conn::*;
 import stdlib::net::quic::packet::*;
+import stdlib::hex::*;
+
+fn _h(s: string) -> string {
+    return hex_decode(s).unwrap();
+}
 
 // In-order fragments deliver immediately and advance the offset.
 fn test_rx_in_order() -> i32 {
@@ -113,5 +118,36 @@ fn test_pn_dedup_and_empty() -> i32 {
     assert_eq!(ranges.get(0).hi as i64, 4);
     assert_eq!(ranges.get(0).lo as i64, 4);
     sp.free();
+    return 0;
+}
+
+// A client's first Initial flight round-trips through the transport: the server
+// opens it, recovers the CRYPTO bytes, learns the client's connection id, and
+// has an ACK pending. The datagram is padded to the 1200-byte minimum.
+fn test_conn_initial_client_to_server() -> i32 {
+    let idcid: string = _h("8394c8f03e515708");
+    let client: *QuicConn = quic_conn_new(false, idcid, idcid, _h("c1c1c1c1")).unwrap();
+    let server: *QuicConn = quic_conn_new(true, idcid, "", _h("5e5e")).unwrap();
+    let hello: string = "CLIENTHELLO handshake bytes\x00with a NUL for the crypto stream";
+    let dgram: string = client.build_initial(hello, 1200).unwrap();
+    assert!(dgram.len() >= 1200); // RFC 9000 §14.1 anti-amplification floor
+    let got: string = server.ingest_initial(dgram).unwrap();
+    assert!(got.eq(hello));
+    assert!(server.dcid.eq(_h("c1c1c1c1"))); // learned the client's SCID
+    assert!(server.initial.ack_pending);
+    assert_eq!(server.initial.largest_recv as i64, 0);
+    return 0;
+}
+
+// The server's reply Initial (protected with server keys) round-trips back to
+// the client, which opens it with the matching rx keys.
+fn test_conn_initial_server_to_client() -> i32 {
+    let idcid: string = _h("8394c8f03e515708");
+    let client: *QuicConn = quic_conn_new(false, idcid, idcid, _h("c1c1c1c1")).unwrap();
+    let server: *QuicConn = quic_conn_new(true, idcid, _h("c1c1c1c1"), _h("5e5e")).unwrap();
+    let sh: string = "SERVERHELLO + EncryptedExtensions + Cert bytes\x00here";
+    let dgram: string = server.build_initial(sh, 0).unwrap();
+    let got: string = client.ingest_initial(dgram).unwrap();
+    assert!(got.eq(sh));
     return 0;
 }
