@@ -8,7 +8,7 @@ fn test_roundtrip() -> i32 {
     let s: string = Error::new("fs", "open", ErrorKind::NotFound,
                                "no such file or directory", "/tmp/x", 2).emit();
     assert_str_eq!(s, "fs: open: NotFound: no such file or directory [/tmp/x] (os:2)");
-    let e* = Error::of(s);
+    let e = Error::of(s);
     assert_str_eq!(e.module(), "fs");
     assert_str_eq!(e.op(), "open");
     assert!(e.kind() == ErrorKind::NotFound);
@@ -22,7 +22,7 @@ fn test_roundtrip() -> i32 {
 
 // A message with an embedded ':' does not confuse the parser (path/os come from the tail).
 fn test_colon_in_message() -> i32 {
-    let e* = Error::of("net: connect: Other: dns: name not resolved [host:443] (os:0)");
+    let e = Error::of("net: connect: Other: dns: name not resolved [host:443] (os:0)");
     assert_str_eq!(e.module(), "net");
     assert_str_eq!(e.op(), "connect");
     assert_str_eq!(e.message(), "dns: name not resolved");
@@ -34,7 +34,7 @@ fn test_colon_in_message() -> i32 {
 fn test_no_optionals() -> i32 {
     let s: string = Error::new("fs", "flush", ErrorKind::Other, "boom", "", 0).emit();
     assert_str_eq!(s, "fs: flush: Other: boom");
-    let e* = Error::of(s);
+    let e = Error::of(s);
     assert_str_eq!(e.path(), "");
     assert_eq!(e.os_code(), 0);
     assert_str_eq!(e.message(), "boom");
@@ -43,7 +43,7 @@ fn test_no_optionals() -> i32 {
 
 // A non-canonical string never breaks: it becomes Other with the whole message.
 fn test_non_canonical() -> i32 {
-    let e* = Error::of("something went wrong");
+    let e = Error::of("something went wrong");
     assert!(e.kind() == ErrorKind::Other);
     assert_str_eq!(e.message(), "something went wrong");
     assert_str_eq!(e.module(), "");
@@ -71,7 +71,7 @@ fn test_token_roundtrip() -> i32 {
 // The error() shortcut derives kind+message from the errno and stays parseable.
 fn test_error_shortcut() -> i32 {
     let s: string = error("fs", "read", "/nonexistent", 2);
-    let e* = Error::of(s);
+    let e = Error::of(s);
     assert!(e.kind() == ErrorKind::NotFound);
     assert_str_eq!(e.op(), "read");
     assert_str_eq!(e.path(), "/nonexistent");
