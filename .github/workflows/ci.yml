@@ -14,6 +14,12 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Windows Python defaults to a legacy console codec that can't encode the
+# emoji the LSP smoke prints; force UTF-8 everywhere (harmless on Linux/macOS).
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: "utf-8"
+
 jobs:
   test:
     name: ${{ matrix.name }}
@@ -53,8 +59,11 @@ jobs:
           sudo apt-get install -y build-essential clang lld libssl-dev curl python3 python-is-python3
 
       - name: Install build deps (macOS)
+        # Native build only (Apple clang compiles the emitted C); no lld — its
+        # presence would make the freestanding smoke think it can emit an
+        # x86_64 ELF kernel, which Apple clang can't.
         if: matrix.os == 'macos-latest'
-        run: brew install openssl@3 lld
+        run: brew install openssl@3
 
       - name: Bootstrap the compiler from the released C
         # Glide is self-hosting; rather than seed from a previous *binary*
