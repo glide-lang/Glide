@@ -16,7 +16,6 @@ fn test_roundtrip() -> i32 {
     assert_str_eq!(e.path(), "/tmp/x");
     assert_eq!(e.os_code(), 2);
     assert_str_eq!(e.message(), "no such file or directory");
-    e.free();
     return 0;
 }
 

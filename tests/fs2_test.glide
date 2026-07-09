@@ -141,7 +141,6 @@ fn test_error_recognition() -> i32 {
     assert_str_eq!(e.op(), "open");
     assert_str_eq!(e.path(), "/nonexistent/file");
     assert_str_eq!(e.module(), "fs");
-    e.free();
     // removing a non-empty directory -> DirectoryNotEmpty
     let _m: ! = fs::create_dir_all(fs::join(D, "ne"));
     let _w: ! = fs::write(fs::join(D, "ne/f"), "x");

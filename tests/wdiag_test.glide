@@ -24,6 +24,8 @@ fn test_wdiag() -> i32 {
     println!("I kind ok");
     let oc: i32 = e.os_code();
     println!("J os_code ok");
+    e.free();
+    println!("Kfree freed ok");
     assert!(m.eq("fs"));
     println!("K done");
     return 0;
