@@ -137,6 +137,18 @@ jobs:
             tar -xzf sysroot.tar.gz -C "$DEST"
           fi
 
+      - name: Self-host - rebuild the compiler from HEAD sources
+        # The emit-C bootstrap above only proves the RELEASED compiler builds;
+        # the suite must run against the compiler built from THIS checkout or
+        # compiler changes are never exercised (the binary-seed flow always
+        # did this and the emit-C migration dropped it). Build to a temp name
+        # first: Windows can't overwrite the running glide.exe in place.
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then EXE=.exe; else EXE=; fi
+          ./glide$EXE build bootstrap/main.glide -o glide_head$EXE
+          ./glide_head$EXE version
+          mv -f glide_head$EXE glide$EXE
+
       - name: Skip HTTP/3 test where ngtcp2 is unavailable
         # The macOS sysroot (Homebrew) ships no static ngtcp2_crypto_ossl,
         # so the HTTP/3 test can't link there. Linux runs it against the
