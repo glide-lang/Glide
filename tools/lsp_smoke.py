@@ -45,7 +45,12 @@ def write_tmp(name: str, body: str) -> str:
     # (a `/` in a label would otherwise be read as a directory separator).
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", name)
     path = os.path.join(tempfile.gettempdir(), safe).replace(os.sep, "/")
-    with open(path, "w", encoding="utf-8") as f:
+    # newline="" disables the platform newline translation: on Windows, text
+    # mode rewrites "\n" -> "\r\n" on disk, so the imported files the LSP reads
+    # back from disk no longer matched the "\n" bodies sent via didOpen, and
+    # cross-file symbol resolution (project-index completion / auto-import) came
+    # up empty. Keep "\n" on every OS.
+    with open(path, "w", encoding="utf-8", newline="") as f:
         f.write(body)
     return path, "file:///" + path
 
