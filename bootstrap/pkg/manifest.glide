@@ -152,6 +152,15 @@ pub fn find_manifest_root(start_dir: string) -> string {
 fn parent_of(dir: string) -> string {
     if dir.eq("") { return ""; }
     if dir.eq(".") { return ".."; }
+    // A bare drive letter ("d:") is a Windows filesystem root — the climb
+    // is over. Without this it fell through to the single-segment fallback
+    // below and became ".", so find_manifest_root next probed
+    // ./glide.glide in the process CWD: a loose temp dir on any Windows
+    // drive then "found" whatever manifest the LSP server was started
+    // under and indexed that project instead of the doc's own directory
+    // (loose-dir cross-file completion returned repo symbols — every
+    // sibling-file lsp_smoke case on Windows came back empty).
+    if dir.len() == 2 && dir.at(1).to_int() == 58 { return ""; }
     let mut cut: i32 = -1;
     for let i: i32 = 0; i < dir.len(); i++ {
         let c: i32 = dir.at(i).to_int();

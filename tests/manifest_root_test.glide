@@ -1,0 +1,25 @@
+// find_manifest_root: the upward walk from an absolute Windows-style path
+// must stop at the drive letter, never fall through to probing the CWD.
+// parent_of("d:") used to hit the single-segment relative fallback and
+// become ".", so a loose temp dir on any Windows drive "found" whatever
+// manifest the process was started under — the LSP then indexed the
+// server's own project instead of the doc's directory (the 8 red loose-dir
+// lsp_smoke checks on the Windows CI lane).
+import stdlib::testing::*;
+import stdlib::env;
+import bootstrap::pkg::manifest::*;
+
+fn test_drive_letter_walk_stops_forward() -> i32 {
+    assert!(find_manifest_root("d:/no/such/dir/glide-mrt-2c9f").eq(""));
+    return 0;
+}
+
+fn test_drive_letter_walk_stops_backslash() -> i32 {
+    assert!(find_manifest_root("D:\\also\\missing\\glide-mrt-2c9f").eq(""));
+    return 0;
+}
+
+fn test_bare_drive_letter_is_a_root() -> i32 {
+    assert!(find_manifest_root("d:").eq(""));
+    return 0;
+}
