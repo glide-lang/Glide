@@ -5,19 +5,30 @@ import stdlib::fs;
 import stdlib::fs::{File, Metadata, ReadDir, DirEntry, OpenOptions, SeekFrom, FileType};
 import stdlib::errors::*;
 import stdlib::bytes::*;
-import stdlib::os::{os_name};
+import stdlib::os::{os_name, os_pid, os_temp_dir};
 
-// A relative temp dir under the cwd — portable across Linux/macOS/Windows
-// (a hardcoded `/tmp` doesn't exist on Windows, so every op under it failed and
-// the unchecked `.val` reads crashed).
-const D: string = "_glide_fs2_tmp";
+// The system temp dir, per-pid — NOT a dir under the repo cwd. The old
+// cwd-relative `_glide_fs2_tmp` was a workaround for hardcoded `/tmp` not
+// existing on Windows, but it left litter in the checkout whenever a run
+// died mid-test (a root-owned leftover from a container run then failed
+// every later local run on its first create). os_temp_dir() answers the
+// portability problem properly; the pid suffix keeps concurrent `glide
+// test` invocations apart.
+fn _d() -> string {
+    let t: !string = os_temp_dir();
+    if !t.is_ok() { return "_glide_fs2_tmp"; } // last resort: old behaviour
+    return fs::join(t.val, "glide_fs2_".concat(os_pid().to_string()));
+}
 
-fn _setup() { let _r: ! = fs::remove_dir_all(D); let _c: ! = fs::create_dir_all(D); }
+fn _setup() {
+    let _r: ! = fs::remove_dir_all(_d());
+    let _c: ! = fs::create_dir_all(_d());
+}
 
 // File: create -> write_all (binary with NUL) -> open -> binary read_to_end.
 fn test_file_roundtrip() -> i32 {
     _setup();
-    let p: string = fs::join(D, "a.bin");
+    let p: string = fs::join(_d(), "a.bin");
     let f: !*fs::File = fs::File::create(p);
     assert!(f.ok);
     let w: ! = f.val.write_all("ab\x00cd\x00ef");   // 8 bytes, two embedded NULs
@@ -36,7 +47,7 @@ fn test_file_roundtrip() -> i32 {
 // seek: Start/Current/End + stream_position.
 fn test_seek() -> i32 {
     _setup();
-    let p: string = fs::join(D, "s.txt");
+    let p: string = fs::join(_d(), "s.txt");
     let _w: ! = fs::write(p, "0123456789");
     let f: !*fs::File = fs::File::open(p);
     let s1: !i64 = f.val.seek(fs::SeekFrom::Start(3));
@@ -54,18 +65,18 @@ fn test_seek() -> i32 {
 // Free functions: read/write/read_to_string, copy, rename.
 fn test_free_ops() -> i32 {
     _setup();
-    let a: string = fs::join(D, "a.txt");
+    let a: string = fs::join(_d(), "a.txt");
     let _w: ! = fs::write(a, "content");
     let t: !string = fs::read_to_string(a);
     assert_str_eq!(t.val, "content");
     let b: !*ByteBuffer = fs::read(a);
     assert!(b.ok);
     b.val.free();
-    let c: string = fs::join(D, "c.txt");
+    let c: string = fs::join(_d(), "c.txt");
     let n: !i64 = fs::copy(a, c);
     assert!(n.ok);
     assert!(fs::exists(c));
-    let d: string = fs::join(D, "d.txt");
+    let d: string = fs::join(_d(), "d.txt");
     let _r: ! = fs::rename(c, d);
     assert!(fs::exists(d));
     assert!(!fs::exists(c));
@@ -75,10 +86,10 @@ fn test_free_ops() -> i32 {
 // Directories: create_dir_all, read_dir + for-in + file_type, remove_dir_all.
 fn test_dirs() -> i32 {
     _setup();
-    let _m: ! = fs::create_dir_all(fs::join(D, "sub/deep"));
-    let _w1: ! = fs::write(fs::join(D, "f1"), "x");
-    let _w2: ! = fs::write(fs::join(D, "f2"), "y");
-    let rd: !*fs::ReadDir = fs::read_dir(D);
+    let _m: ! = fs::create_dir_all(fs::join(_d(), "sub/deep"));
+    let _w1: ! = fs::write(fs::join(_d(), "f1"), "x");
+    let _w2: ! = fs::write(fs::join(_d(), "f2"), "y");
+    let rd: !*fs::ReadDir = fs::read_dir(_d());
     assert!(rd.ok);
     let mut files: i32 = 0;
     let mut dirs: i32 = 0;
@@ -89,15 +100,15 @@ fn test_dirs() -> i32 {
     rd.val.free();
     assert_eq!(files, 2);
     assert_eq!(dirs, 1);
-    let _rm: ! = fs::remove_dir_all(fs::join(D, "sub"));
-    assert!(!fs::exists(fs::join(D, "sub")));
+    let _rm: ! = fs::remove_dir_all(fs::join(_d(), "sub"));
+    assert!(!fs::exists(fs::join(_d(), "sub")));
     return 0;
 }
 
 // OpenOptions: append accumulates; create_new fails with AlreadyExists.
 fn test_open_options() -> i32 {
     _setup();
-    let p: string = fs::join(D, "log");
+    let p: string = fs::join(_d(), "log");
     let _w: ! = fs::write(p, "1");
     let ap: !*fs::File = fs::OpenOptions::new().write(true).append(true).open(p);
     assert!(ap.ok);
@@ -113,7 +124,7 @@ fn test_open_options() -> i32 {
 // Metadata + symlink + read_link.
 fn test_metadata_symlink() -> i32 {
     _setup();
-    let p: string = fs::join(D, "m.txt");
+    let p: string = fs::join(_d(), "m.txt");
     let _w: ! = fs::write(p, "12345");
     let m: !*fs::Metadata = fs::metadata(p);
     assert!(m.ok);
@@ -123,7 +134,7 @@ fn test_metadata_symlink() -> i32 {
     // POSIX symlink semantics: Windows gates symlinks behind admin rights and
     // normalizes the stored target path, so this block is Linux/macOS only.
     if !os_name().eq("windows") {
-        let lk: string = fs::join(D, "lnk");
+        let lk: string = fs::join(_d(), "lnk");
         let sl: ! = fs::symlink(p, lk);
         if sl.ok {
             let tgt: !string = fs::read_link(lk);
@@ -147,9 +158,9 @@ fn test_error_recognition() -> i32 {
     assert_str_eq!(e.path(), "/nonexistent/file");
     assert_str_eq!(e.module(), "fs");
     // removing a non-empty directory -> DirectoryNotEmpty
-    let _m: ! = fs::create_dir_all(fs::join(D, "ne"));
-    let _w: ! = fs::write(fs::join(D, "ne/f"), "x");
-    let rd: ! = fs::remove_dir(fs::join(D, "ne"));
+    let _m: ! = fs::create_dir_all(fs::join(_d(), "ne"));
+    let _w: ! = fs::write(fs::join(_d(), "ne/f"), "x");
+    let rd: ! = fs::remove_dir(fs::join(_d(), "ne"));
     assert!(!rd.ok);
     assert!(kind_of(rd.err) == ErrorKind::DirectoryNotEmpty);
     return 0;
@@ -169,7 +180,7 @@ fn _write_read(p: string) -> !string {
 }
 fn test_idiomatic() -> i32 {
     _setup();
-    let r: !string = _write_read(fs::join(D, "id.txt"));
+    let r: !string = _write_read(fs::join(_d(), "id.txt"));
     assert!(r.ok);
     assert_str_eq!(r.val, "idiom");
     return 0;
