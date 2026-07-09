@@ -740,6 +740,17 @@ fn _split_path(p: string) -> *Vector<string> {
     return out;
 }
 
+// One-line index/root summary appended to the empty-completion debug logs,
+// so a silent cross-file miss (empty project index? wrong root?) is
+// diagnosable from ~/.glide/lsp.log without an instrumented rebuild.
+fn _index_sizes_dbg(state: *LspState) -> string {
+    let mut sl: i64 = -1;
+    if state.stdlib_index != null { sl = state.stdlib_index.len() as i64; }
+    let mut pl: i64 = -1;
+    if state.project_index != null { pl = state.project_index.len() as i64; }
+    return " (stdlib=".concat(int_to_str(sl)).concat(", project=").concat(int_to_str(pl)).concat(", root=").concat(state.project_root).concat(")");
+}
+
 // Push completion items for every `pub` symbol whose module path matches
 // `path`. Accepts both fully-qualified ("stdlib::math") and short
 // ("math") forms. The single-segment "stdlib" path is special-cased to
@@ -2026,6 +2037,9 @@ pub fn _doc_val_option(inner: string) -> string {
 // accepting it makes the call resolve. Scans both the project and stdlib index.
 fn _offer_index_trait_methods(state: *LspState, text: string, recv_name: string, items: *JsonValue, seen: *HashMap<bool>) {
     if state == null || recv_name == null || recv_name.eq("") { return; }
+    if state.project_index == null || state.project_index.len() == 0 {
+        _lsp_log("trait-method offer for '".concat(recv_name).concat("': project index empty").concat(_index_sizes_dbg(state)));
+    }
     let imps: *HashMap<ImportInfo> = current_imports(text);
     let insert_line: i32 = find_import_insertion_pos(text);
     _offer_from_index(state.project_index, recv_name, imps, insert_line, items, seen);
@@ -3987,6 +4001,9 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
     if imp_kind == IMPCTX_PATH {
         let prefix: string = import_path_prefix(doc.text, line0, col0);
         list_import_path_children(state, prefix, items, seen);
+        if items.arr.len() == 0 {
+            _lsp_log("import-path completion '".concat(prefix).concat("' -> 0 items").concat(_index_sizes_dbg(state)));
+        }
         seen.free();
         _strip_call_parens(doc.text, line0, col0, items);
         lsp_send_response(id, items);
@@ -4017,6 +4034,9 @@ pub fn handle_completion(req: *JsonValue, state: *LspState) {
         let mp_imps: *HashMap<ImportInfo> = current_imports(doc.text);
         let mp_ins: i32 = find_import_insertion_pos(doc.text);
         list_module_members(state, mp_eff, items, seen, mp_imps, mp_ins);
+        if items.arr.len() == 0 {
+            _lsp_log("module-path completion '".concat(mod_path).concat("' (resolved '").concat(mp_eff).concat("') -> 0 items").concat(_index_sizes_dbg(state)));
+        }
         seen.free();
         _strip_call_parens(doc.text, line0, col0, items);
         lsp_send_response(id, items);

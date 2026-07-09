@@ -57,9 +57,30 @@ def write_tmp(name: str, body: str) -> str:
 PASS, FAIL = "PASS", "FAIL"
 results = []
 
+def _server_log_tail(n=60):
+    """Tail of the LSP server's own log (~/.glide/lsp.log). The server probes
+    USERPROFILE before HOME (see _lsp_log_path), so mirror that order — on the
+    Windows CI runner msys2's HOME differs from the USERPROFILE the server
+    used. Each `glide lsp` session truncates the file, so after a failing
+    run_session this is exactly that session's log."""
+    for base in (os.environ.get("USERPROFILE"), os.environ.get("HOME")):
+        if not base:
+            continue
+        p = os.path.join(base, ".glide", "lsp.log")
+        if os.path.exists(p):
+            try:
+                with open(p, encoding="utf-8", errors="replace") as f:
+                    return f.read().splitlines()[-n:]
+            except OSError:
+                return []
+    return []
+
 def check(name, ok, detail=""):
     tag = PASS if ok else FAIL
     print(f"  {tag} {name}" + (f"  ({detail})" if detail else ""))
+    if not ok:
+        for ln in _server_log_tail():
+            print("    | " + ln)
     results.append((name, ok))
 
 def case_diagnostics(label, body, expect_codes_present=None, expect_codes_absent=None):

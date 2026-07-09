@@ -839,13 +839,19 @@ fn _lsp_autofetch_deps(state: *LspState, root: string) {
 // qualifiable (`import alelo;`, `alelo::Penis`). Skips the manifest.
 fn _index_flat_glide_dir(state: *LspState, dir: string, target: *Vector<ImportableSym>) {
     let files: *Vector<string> = fs_list_dir(dir, ".glide");
-    if files == null { return; }
+    if files == null {
+        _lsp_log("  flat-dir ".concat(dir).concat(": list returned null"));
+        return;
+    }
+    _lsp_log("  flat-dir ".concat(dir).concat(": ").concat(int_to_str(files.len() as i64)).concat(" entries"));
     for let i: i32 = 0; i < files.len(); i++ {
         let fname: string = files.get(i);
         if fname.eq("") || fname.eq("glide.glide") { continue; }
         let path: string = dir.concat("/").concat(fname);
         let mod_name: string = drop_glide_ext(fname);
+        let before: i32 = target.len();
         _index_one_module(state, path, mod_name, mod_name, target);
+        _lsp_log("    ".concat(fname).concat(" -> ").concat(int_to_str((target.len() - before) as i64)).concat(" sym(s)"));
     }
 }
 
@@ -940,7 +946,9 @@ fn _refresh_project_index(state: *LspState, uri: string) {
     // common cases without forcing the user to restart the LSP.
     let fp: string = _project_dep_fingerprint(root);
     if state.project_root.eq(root) && state.project_dep_fp.eq(fp) { return; }
-    _lsp_log("project index: rebuilding for ".concat(root));
+    let mut layout: string = " (manifest)";
+    if !has_manifest { layout = " (loose)"; }
+    _lsp_log("project index: rebuilding for ".concat(root).concat(layout).concat(", doc ").concat(path));
     let prev_arena: *void = __glide_palloc_get();
     __glide_palloc_set(null);
     state.project_root = root.concat(""); // libc-heap copy
@@ -1077,7 +1085,10 @@ fn _fp_walk_glide_files_content(dir: string, out: *string) {
 // a SYMKIND_MODULE entry for the module itself.
 fn _index_one_module(_state: *LspState, path: string, mod_name: string, module: string, target: *Vector<ImportableSym>) {
     let src: string = read_file(path);
-    if src.eq("") { return; }
+    if src.eq("") {
+        _lsp_log("    read failed: ".concat(path));
+        return;
+    }
     _index_module_src(_state, src, path, mod_name, module, target);
 }
 
