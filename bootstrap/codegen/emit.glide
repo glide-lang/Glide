@@ -3104,7 +3104,14 @@ fn prescan_expr(g: *CG, e: *Expr, ret_hint: *Type) {
         prescan_expr(g, e.lhs, child_hint);
     }
     let no_hint: *Type = null;
-    if e.rhs != null { prescan_expr(g, e.rhs, no_hint); }
+    // A plain assignment `lhs = rhs` carries the LHS's type as the RHS hint, so
+    // an inline generic ctor (`s.items = Vector::new()`) monomorphizes from the
+    // assignment target — mirroring the `let` / struct-field / cast hint paths.
+    let mut rhs_hint: *Type = no_hint;
+    if e.kind == EX_ASSIGN && e.op_code == OP_ASSIGN && e.lhs != null {
+        rhs_hint = infer_for_codegen(g, e.lhs);
+    }
+    if e.rhs != null { prescan_expr(g, e.rhs, rhs_hint); }
     if e.operand != null { prescan_expr(g, e.operand, no_hint); }
     if e.args != null {
         for let i: i32 = 0; i < e.args.len(); i++ {

@@ -29,10 +29,7 @@ pub struct RxStream {
 pub fn rx_stream_new() -> *RxStream {
     let s: *RxStream = malloc(sizeof(RxStream)) as *RxStream;
     s.delivered = 0 as u64;
-    // A typed local drives Vector::new's monomorphization; a bare field
-    // assignment does not instantiate the element type.
-    let frags: *Vector<*RxFrag> = Vector::new();
-    s.frags = frags;
+    s.frags = Vector::new();
     return s;
 }
 
@@ -105,8 +102,7 @@ pub fn pn_space_new() -> *PnSpace {
     s.largest_recv = 0 as u64;
     s.has_recv = false;
     s.ack_pending = false;
-    let received: *Vector<u64> = Vector::new();
-    s.received = received;
+    s.received = Vector::new();
     return s;
 }
 

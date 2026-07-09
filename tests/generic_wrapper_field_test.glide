@@ -3,9 +3,38 @@
 // emitted — the program-wide wrapper pre-pass skips generic templates, so
 // these otherwise reference undeclared C typedefs (and a `none()` field init
 // stayed unmangled: undefined reference to `none`).
+import stdlib::hashmap::*;
 
 struct Stack<T> {
     top: ?T,
+}
+
+struct Bag {
+    items: *Vector<i32>,
+    seen: *HashMap<bool>,
+}
+
+// Assigning a generic constructor to a struct FIELD (not a typed `let`, not a
+// struct literal) must still monomorphize the element type from the assignment
+// target. Regression for a codegen gap where the field-assignment LHS didn't
+// drive Vector::new / HashMap::new instantiation (cc: `Vector_new__i32`
+// undeclared).
+fn bag_new() -> *Bag {
+    let b: *Bag = malloc(sizeof(Bag)) as *Bag;
+    b.items = Vector::new();
+    b.seen = HashMap::new();
+    return b;
+}
+
+fn test_field_assigned_generic_ctor() -> i32 {
+    let b: *Bag = bag_new();
+    b.items.push(7);
+    b.items.push(9);
+    b.seen.insert("k", true);
+    assert_eq!(b.items.len(), 2);
+    assert_eq!(b.items.get(1), 9);
+    assert!(b.seen.get("k"));
+    return 0;
 }
 
 struct Holder<T> {
@@ -22,17 +51,17 @@ fn test_option_field_mono() -> i32 {
     match s.top {
         some(x) => {
             assert!(false);
-        },
-        none => {},
+        }
+        none => {}
     }
     let s2: Stack<i32> = Stack { top: some(5) };
     match s2.top {
         some(x) => {
             assert!(x == 5);
-        },
+        }
         none => {
             assert!(false);
-        },
+        }
     }
     return 0;
 }
