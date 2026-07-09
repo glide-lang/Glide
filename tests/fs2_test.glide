@@ -6,7 +6,10 @@ import stdlib::fs::{File, Metadata, ReadDir, DirEntry, OpenOptions, SeekFrom, Fi
 import stdlib::errors::*;
 import stdlib::bytes::*;
 
-const D: string = "/tmp/glide_fs2_test";
+// A relative temp dir under the cwd — portable across Linux/macOS/Windows
+// (a hardcoded `/tmp` doesn't exist on Windows, so every op under it failed and
+// the unchecked `.val` reads crashed).
+const D: string = "_glide_fs2_tmp";
 
 fn _setup() { let _r: ! = fs::remove_dir_all(D); let _c: ! = fs::create_dir_all(D); }
 
