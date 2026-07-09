@@ -72,7 +72,7 @@ jobs:
           curl -fL -o glide-boot.c "${base}/glide-bootstrap-${BOOT_VER}.c"
           CF="-O2 -w -fwrapv -fno-omit-frame-pointer -Wno-error=implicit-function-declaration"
           if [ "${{ runner.os }}" = "Windows" ]; then
-            gcc glide-boot.c -o glide.exe $CF -lssl -lcrypto -lws2_32 -lcrypt32 -lbcrypt -ldbghelp -lpthread -lm
+            gcc glide-boot.c -o glide.exe $CF -lssl -lcrypto -lws2_32 -lmswsock -ldbghelp -lpsapi -lbcrypt -lcrypt32 -lpthread -lm
             ./glide.exe version
           elif [ "${{ runner.os }}" = "macOS" ]; then
             SSL="$(brew --prefix openssl@3)"
