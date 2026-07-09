@@ -1,6 +1,28 @@
 # Changelog
 
-## 0.8.0 — 2026-07-08
+## 0.8.0 — 2026-07-08 (assets rebuilt 2026-07-09)
+
+Post-release rebuild of the 0.8.0 binaries with the fixes and one feature
+that landed right after the tag:
+
+- **Auto-clone on divergent returns (2D-ii).** `return (t, t)` — the same
+  struct value moved out twice — now deep-clones every occurrence after the
+  first (`__glide_clone_<T>`, the dual of the generated drop): each returned
+  owner is fully independent, including recursive `?Box<Self>` lists.
+  Non-cloneable field kinds (Vector, HashMap, raw pointers…) keep the old
+  conservative sharing.
+- Tuples of generic struct monos (`(LL<string>, LL<string>)`) no longer ICE —
+  the tuple pre-pass emits the mono's definition first.
+- LSP: loose-dir cross-file completion works on Windows — the manifest
+  walk-up stopped treating a bare drive letter (`d:`) as a CWD-relative
+  segment and "finding" the server's own project.
+- Sanitizer builds (`-fsanitize` in the flags) skip the static-musl sysroot
+  promotion on Linux: sanitizer runtimes resolve libc via `dlsym(RTLD_NEXT)`,
+  which can't work in a fully-static binary. The UBSan CI lane now really
+  exercises the http/scheduler tests (and found no undefined behaviour).
+- `!` errors from the runtime (`__glide_strerror`) are properly headered
+  strings; assorted Windows/macOS test-suite portability fixes; CI runs the
+  whole suite against the compiler built from the checkout again.
 
 The big one. Three releases in one: Glide gains **Rust-level memory safety with
 zero lifetime annotations**; it becomes **self-sufficient** — its own
