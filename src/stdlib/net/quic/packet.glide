@@ -61,10 +61,17 @@ pub fn varint_decode(buf: string, off: i32) -> !*Varint {
 // ---- frames (RFC 9000 §19) --------------------------------------------
 pub const FRAME_PADDING: i32 = 0x00;
 pub const FRAME_PING: i32 = 0x01;
-pub const FRAME_ACK: i32 = 0x02;
+pub const FRAME_ACK: i32 = 0x02; // 0x02 plain, 0x03 with ECN counts
+pub const FRAME_NEW_TOKEN: i32 = 0x07;
 pub const FRAME_CRYPTO: i32 = 0x06;
 pub const FRAME_STREAM: i32 = 0x08; // 0x08..0x0f (flags in low bits)
-pub const FRAME_CONNECTION_CLOSE: i32 = 0x1c;
+pub const FRAME_MAX_DATA: i32 = 0x10;
+pub const FRAME_MAX_STREAM_DATA: i32 = 0x11;
+pub const FRAME_MAX_STREAMS: i32 = 0x12; // 0x12 bidi, 0x13 uni
+pub const FRAME_NEW_CONNECTION_ID: i32 = 0x18;
+pub const FRAME_CONNECTION_CLOSE: i32 = 0x1c; // transport error
+pub const FRAME_CONNECTION_CLOSE_APP: i32 = 0x1d; // application error
+pub const FRAME_HANDSHAKE_DONE: i32 = 0x1e;
 
 /// A CRYPTO frame (RFC 9000 §19.6): type || offset(varint) || length(varint)
 /// || data. Carries the TLS handshake inside QUIC.
@@ -88,6 +95,243 @@ pub fn frame_padding(n: i32) -> string {
 /// with no gaps: type || largest || ack_delay || range_count=0 || first_range.
 pub fn frame_ack(largest: u64, ack_delay: u64, first_range: u64) -> string {
     return ((FRAME_ACK & 255) as char).to_string().concat(varint_encode(largest)).concat(varint_encode(ack_delay)).concat(varint_encode(0)).concat(varint_encode(first_range));
+}
+
+/// A STREAM frame (RFC 9000 §19.8): type(flags) || stream_id || [offset] ||
+/// length || data. Always sets the LEN bit; sets OFF when offset > 0 and FIN
+/// when `fin`.
+pub fn frame_stream(stream_id: u64, offset: u64, data: string, fin: bool) -> string {
+    let mut t: i32 = FRAME_STREAM | 0x02; // LEN bit
+    if offset > 0 as u64 { t = t | 0x04; }
+    if fin { t = t | 0x01; }
+    let bb: *ByteBuffer = ByteBuffer::new();
+    bb.push((t & 255) as u8);
+    bb.push_str(varint_encode(stream_id));
+    if offset > 0 as u64 { bb.push_str(varint_encode(offset)); }
+    bb.push_str(varint_encode(data.len() as u64));
+    bb.push_str(data);
+    let s: string = bb.to_string();
+    bb.free();
+    return s;
+}
+
+/// A CONNECTION_CLOSE frame for a transport error (RFC 9000 §19.19, type
+/// 0x1c): type || error_code || frame_type || reason_len || reason.
+pub fn frame_connection_close(error_code: u64, frame_type: u64, reason: string) -> string {
+    return ((FRAME_CONNECTION_CLOSE & 255) as char).to_string().concat(varint_encode(error_code)).concat(varint_encode(frame_type)).concat(varint_encode(reason.len() as u64)).concat(reason);
+}
+
+// ---- frame parsing (RFC 9000 §19) -------------------------------------
+
+/// One inclusive range of acknowledged packet numbers (from an ACK frame).
+pub struct AckRange {
+    pub hi: u64,
+    pub lo: u64,
+}
+
+/// A parsed frame. `kind` is the canonical frame type (STREAM variants collapse
+/// to FRAME_STREAM); only the fields relevant to that kind are populated.
+pub struct Frame {
+    pub kind: i32,
+    pub offset: u64, // CRYPTO / STREAM offset
+    pub data: string, // CRYPTO/STREAM payload, NEW_TOKEN token, CLOSE reason, NEW_CONNECTION_ID cid
+    pub stream_id: u64, // STREAM / MAX_STREAM_DATA
+    pub fin: bool, // STREAM FIN bit
+    pub largest: u64, // ACK largest acknowledged
+    pub ack_delay: u64, // ACK delay (encoded units)
+    pub ack_ranges: *Vector<AckRange>, // ACK: inclusive acked ranges; null otherwise
+    pub error_code: u64, // CONNECTION_CLOSE error code
+    pub max: u64, // MAX_DATA / MAX_STREAM_DATA / MAX_STREAMS limit
+    pub seq: u64, // NEW_CONNECTION_ID sequence number
+}
+
+// A zeroed frame of the given kind; callers fill the fields that matter.
+fn _frame(kind: i32) -> *Frame {
+    let f: *Frame = malloc(sizeof(Frame)) as *Frame;
+    f.kind = kind;
+    f.offset = 0 as u64;
+    f.data = "";
+    f.stream_id = 0 as u64;
+    f.fin = false;
+    f.largest = 0 as u64;
+    f.ack_delay = 0 as u64;
+    f.ack_ranges = null;
+    f.error_code = 0 as u64;
+    f.max = 0 as u64;
+    f.seq = 0 as u64;
+    return f;
+}
+
+/// Parse the frames in a decrypted packet payload into a vector, in order.
+/// PADDING is skipped. Fails on truncation or an unknown frame type (which is
+/// a QUIC protocol violation).
+pub fn parse_frames(payload: string) -> !*Vector<*Frame> {
+    let out: *Vector<*Frame> = Vector::new();
+    let n: i32 = payload.len();
+    let mut p: i32 = 0;
+    while p < n {
+        let tv: *Varint = varint_decode(payload, p)?;
+        let t: i32 = tv.value as i32;
+        p = p + tv.len;
+        if t == FRAME_PADDING { continue; }
+        if t == FRAME_PING {
+            out.push(_frame(FRAME_PING));
+            continue;
+        }
+        if t == FRAME_ACK || t == 0x03 {
+            let lg: *Varint = varint_decode(payload, p)?;
+            p = p + lg.len;
+            let ad: *Varint = varint_decode(payload, p)?;
+            p = p + ad.len;
+            let rc: *Varint = varint_decode(payload, p)?;
+            p = p + rc.len;
+            let fr: *Varint = varint_decode(payload, p)?;
+            p = p + fr.len;
+            let ranges: *Vector<AckRange> = Vector::new();
+            ranges.push(AckRange { hi: lg.value, lo: lg.value - fr.value });
+            let mut smallest: u64 = lg.value - fr.value;
+            for let i: u64 = 0 as u64; i < rc.value; i = i + 1 as u64 {
+                let gap: *Varint = varint_decode(payload, p)?;
+                p = p + gap.len;
+                let rl: *Varint = varint_decode(payload, p)?;
+                p = p + rl.len;
+                let hi: u64 = smallest - gap.value - 2 as u64;
+                let lo: u64 = hi - rl.value;
+                ranges.push(AckRange { hi: hi, lo: lo });
+                smallest = lo;
+            }
+            if t == 0x03 {
+                // ECN counts: ect0, ect1, ecn_ce — consumed, not surfaced.
+                for let i: i32 = 0; i < 3; i++ {
+                    let ev: *Varint = varint_decode(payload, p)?;
+                    p = p + ev.len;
+                }
+            }
+            let f: *Frame = _frame(FRAME_ACK);
+            f.largest = lg.value;
+            f.ack_delay = ad.value;
+            f.ack_ranges = ranges;
+            out.push(f);
+            continue;
+        }
+        if t == FRAME_CRYPTO {
+            let off: *Varint = varint_decode(payload, p)?;
+            p = p + off.len;
+            let ln: *Varint = varint_decode(payload, p)?;
+            p = p + ln.len;
+            let l: i32 = ln.value as i32;
+            if p + l > n { return err("quic: truncated CRYPTO frame"); }
+            let f: *Frame = _frame(FRAME_CRYPTO);
+            f.offset = off.value;
+            f.data = payload.substring(p, p + l);
+            out.push(f);
+            p = p + l;
+            continue;
+        }
+        if t >= FRAME_STREAM && t <= 0x0f {
+            let sid: *Varint = varint_decode(payload, p)?;
+            p = p + sid.len;
+            let mut off: u64 = 0 as u64;
+            if (t & 0x04) != 0 {
+                let ov: *Varint = varint_decode(payload, p)?;
+                p = p + ov.len;
+                off = ov.value;
+            }
+            let mut dlen: i32 = n - p;
+            if (t & 0x02) != 0 {
+                let lv: *Varint = varint_decode(payload, p)?;
+                p = p + lv.len;
+                dlen = lv.value as i32;
+            }
+            if p + dlen > n { return err("quic: truncated STREAM frame"); }
+            let f: *Frame = _frame(FRAME_STREAM);
+            f.stream_id = sid.value;
+            f.offset = off;
+            f.fin = (t & 0x01) != 0;
+            f.data = payload.substring(p, p + dlen);
+            out.push(f);
+            p = p + dlen;
+            continue;
+        }
+        if t == FRAME_NEW_TOKEN {
+            let ln: *Varint = varint_decode(payload, p)?;
+            p = p + ln.len;
+            let l: i32 = ln.value as i32;
+            if p + l > n { return err("quic: truncated NEW_TOKEN frame"); }
+            let f: *Frame = _frame(FRAME_NEW_TOKEN);
+            f.data = payload.substring(p, p + l);
+            out.push(f);
+            p = p + l;
+            continue;
+        }
+        if t == FRAME_MAX_DATA {
+            let mv: *Varint = varint_decode(payload, p)?;
+            p = p + mv.len;
+            let f: *Frame = _frame(FRAME_MAX_DATA);
+            f.max = mv.value;
+            out.push(f);
+            continue;
+        }
+        if t == FRAME_MAX_STREAM_DATA {
+            let sid: *Varint = varint_decode(payload, p)?;
+            p = p + sid.len;
+            let mv: *Varint = varint_decode(payload, p)?;
+            p = p + mv.len;
+            let f: *Frame = _frame(FRAME_MAX_STREAM_DATA);
+            f.stream_id = sid.value;
+            f.max = mv.value;
+            out.push(f);
+            continue;
+        }
+        if t == FRAME_MAX_STREAMS || t == 0x13 {
+            let mv: *Varint = varint_decode(payload, p)?;
+            p = p + mv.len;
+            let f: *Frame = _frame(FRAME_MAX_STREAMS);
+            f.max = mv.value;
+            out.push(f);
+            continue;
+        }
+        if t == FRAME_NEW_CONNECTION_ID {
+            let seq: *Varint = varint_decode(payload, p)?;
+            p = p + seq.len;
+            let rpt: *Varint = varint_decode(payload, p)?;
+            p = p + rpt.len;
+            if p >= n { return err("quic: truncated NEW_CONNECTION_ID"); }
+            let cidlen: i32 = payload.at(p).to_int() & 255;
+            p = p + 1;
+            if p + cidlen + 16 > n { return err("quic: truncated NEW_CONNECTION_ID cid"); }
+            let f: *Frame = _frame(FRAME_NEW_CONNECTION_ID);
+            f.seq = seq.value;
+            f.data = payload.substring(p, p + cidlen);
+            out.push(f);
+            p = p + cidlen + 16; // skip the 16-byte stateless reset token
+            continue;
+        }
+        if t == FRAME_CONNECTION_CLOSE || t == FRAME_CONNECTION_CLOSE_APP {
+            let ec: *Varint = varint_decode(payload, p)?;
+            p = p + ec.len;
+            if t == FRAME_CONNECTION_CLOSE {
+                let ft: *Varint = varint_decode(payload, p)?;
+                p = p + ft.len; // triggering frame type
+            }
+            let rl: *Varint = varint_decode(payload, p)?;
+            p = p + rl.len;
+            let l: i32 = rl.value as i32;
+            if p + l > n { return err("quic: truncated CONNECTION_CLOSE reason"); }
+            let f: *Frame = _frame(t);
+            f.error_code = ec.value;
+            f.data = payload.substring(p, p + l);
+            out.push(f);
+            p = p + l;
+            continue;
+        }
+        if t == FRAME_HANDSHAKE_DONE {
+            out.push(_frame(FRAME_HANDSHAKE_DONE));
+            continue;
+        }
+        return err("quic: unknown frame type ${t}");
+    }
+    return ok(out);
 }
 
 // ---- long-header packets (RFC 9000 §17.2) -----------------------------

@@ -3,7 +3,9 @@ import stdlib::testing::*;
 import stdlib::net::quic::packet::*;
 import stdlib::hex::*;
 
-fn _h(s: string) -> string { return hex_decode(s).unwrap(); }
+fn _h(s: string) -> string {
+    return hex_decode(s).unwrap();
+}
 
 // RFC 9000 Appendix A.1 sample varints.
 fn test_varint_vectors() -> i32 {
@@ -20,8 +22,14 @@ fn test_varint_vectors() -> i32 {
 
 fn test_varint_roundtrip() -> i32 {
     let vals: *Vector<i64> = Vector::new();
-    vals.push(0); vals.push(63); vals.push(64); vals.push(16383); vals.push(16384);
-    vals.push(1073741823); vals.push(1073741824); vals.push(151288809941952652);
+    vals.push(0);
+    vals.push(63);
+    vals.push(64);
+    vals.push(16383);
+    vals.push(16384);
+    vals.push(1073741823);
+    vals.push(1073741824);
+    vals.push(151288809941952652);
     for let i: i32 = 0; i < vals.len(); i++ {
         let v: u64 = vals.get(i) as u64;
         let enc: string = varint_encode(v);
@@ -35,7 +43,7 @@ fn test_varint_roundtrip() -> i32 {
 // RFC 9000 §19.6: a CRYPTO frame is type 0x06 || offset || length || data.
 fn test_crypto_frame() -> i32 {
     let f: string = frame_crypto(0, _h("aabbcc"));
-    assert_str_eq!(hex_encode(f), "0600" + "03" + "aabbcc");   // type off=0 len=3 data
+    assert_str_eq!(hex_encode(f), "0600" + "03" + "aabbcc"); // type off=0 len=3 data
     return 0;
 }
 
@@ -51,5 +59,54 @@ fn test_initial_packet_shape() -> i32 {
     // dcid len 8 then dcid
     assert_eq!(pkt.at(5).to_int() & 255, 8);
     assert_str_eq!(hex_encode(pkt.substring(6, 14)), "8394c8f03e515708");
+    return 0;
+}
+
+// A mixed payload (CRYPTO + PING + STREAM + PADDING) parses back to the frames
+// in order, PADDING dropped, with binary-safe data preserved.
+fn test_parse_mixed_frames() -> i32 {
+    let payload: string = frame_crypto(0, "hello\x00tls").concat(((FRAME_PING & 255) as char).to_string()).concat(frame_stream(4, 0, "body\x00data", true)).concat(frame_padding(5));
+    let fs: *Vector<*Frame> = parse_frames(payload).unwrap();
+    assert_eq!(fs.len(), 3);
+    assert_eq!(fs.get(0).kind, FRAME_CRYPTO);
+    assert!(fs.get(0).data.eq("hello\x00tls"));
+    assert_eq!(fs.get(1).kind, FRAME_PING);
+    assert_eq!(fs.get(2).kind, FRAME_STREAM);
+    assert_eq!(fs.get(2).stream_id as i64, 4);
+    assert!(fs.get(2).fin);
+    assert!(fs.get(2).data.eq("body\x00data"));
+    return 0;
+}
+
+// An ACK with one extra range decodes both inclusive ranges: largest=10,
+// first_range=2 -> [8,10]; gap=1,len=1 -> [4,5].
+fn test_parse_ack_ranges() -> i32 {
+    let fs: *Vector<*Frame> = parse_frames(_h("020a0001020101")).unwrap();
+    assert_eq!(fs.len(), 1);
+    let a: *Frame = fs.get(0);
+    assert_eq!(a.kind, FRAME_ACK);
+    assert_eq!(a.largest as i64, 10);
+    assert_eq!(a.ack_ranges.len(), 2);
+    assert_eq!(a.ack_ranges.get(0).hi as i64, 10);
+    assert_eq!(a.ack_ranges.get(0).lo as i64, 8);
+    assert_eq!(a.ack_ranges.get(1).hi as i64, 5);
+    assert_eq!(a.ack_ranges.get(1).lo as i64, 4);
+    return 0;
+}
+
+// CONNECTION_CLOSE (transport) carries the error code and reason.
+fn test_parse_connection_close() -> i32 {
+    let payload: string = frame_connection_close(7, 0, "bad frame");
+    let fs: *Vector<*Frame> = parse_frames(payload).unwrap();
+    assert_eq!(fs.len(), 1);
+    assert_eq!(fs.get(0).kind, FRAME_CONNECTION_CLOSE);
+    assert_eq!(fs.get(0).error_code as i64, 7);
+    assert!(fs.get(0).data.eq("bad frame"));
+    return 0;
+}
+
+// An unknown frame type is a protocol violation, not a silent skip.
+fn test_parse_rejects_unknown_frame() -> i32 {
+    assert!(parse_frames(_h("3f")).is_err()); // 0x3f is not an assigned frame type
     return 0;
 }
