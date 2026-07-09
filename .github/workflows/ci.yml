@@ -191,6 +191,16 @@ jobs:
       - name: Run test suite under UBSan
         run: |
           export CC=clang
-          export GLIDE_CFLAGS="-fsanitize=undefined -fno-sanitize-recover=undefined -g"
+          # The host build promotes to the static musl sysroot, but clang's
+          # UBSan interception runtime references dlvsym — a glibc versioned-
+          # symbol extension musl lacks. Inject a weak fallback (musl has no
+          # symbol versioning, so dlvsym == dlsym). The forward-declare avoids
+          # pulling a system header, which would lock the libc feature set
+          # before the emitted C's own `#define _GNU_SOURCE`.
+          cat > ubsan_dlvsym.h <<'EOF'
+          extern void *dlsym(void *, const char *);
+          __attribute__((weak)) void *dlvsym(void *h, const char *s, const char *v) { (void)v; return dlsym(h, s); }
+          EOF
+          export GLIDE_CFLAGS="-fsanitize=undefined -fno-sanitize-recover=undefined -g -include $PWD/ubsan_dlvsym.h"
           export GLIDE_LDFLAGS="-fsanitize=undefined"
           ./glide test tests
