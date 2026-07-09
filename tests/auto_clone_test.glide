@@ -1,0 +1,112 @@
+// 2D-ii auto-clone: a divergent multi-move (`return (t, t)` / a struct
+// literal naming the same local twice) deep-clones every occurrence after
+// the first, so each returned owner is independent — mutating one can never
+// leak into the other through shared heap (strings, boxes, own pointers).
+// Non-cloneable field kinds (Vector & friends) keep the old conservative
+// sharing and must still compile and run.
+import stdlib::testing::*;
+
+struct AcLL<T> {
+    data: T,
+    next: ?Box<AcLL<T>>,
+}
+
+impl<T> AcLL<T> {
+    pub fn new(data: T) -> AcLL<T> {
+        return AcLL { data: data, next: none() };
+    }
+
+    pub fn push(self: AcLL<T>, data: T) -> AcLL<T> {
+        let mut h: AcLL<T> = AcLL::new(data);
+        h.next = some(Box::new(self));
+        return h;
+    }
+}
+
+fn _ll_pair() -> (AcLL<string>, AcLL<string>) {
+    let mut t: AcLL<string> = AcLL::new("tail".concat("!"));
+    t = t.push("head".concat(""));
+    return (t, t);
+}
+
+// The flagship shape: a recursive generic list returned twice. Mutating the
+// boxed node through one owner must not show through the other.
+fn _ll_check(x: AcLL<string>, y: AcLL<string>) -> i32 {
+    x.next.val.get_mut().data = "changed";
+    assert!(x.next.val.get().data.eq("changed"));
+    assert!(y.next.val.get().data.eq("tail!"));
+    return 0;
+}
+
+fn test_generic_list_owners_independent() -> i32 {
+    let (x, y) = _ll_pair();
+    return _ll_check(x, y);
+}
+
+struct AcUser {
+    name: string,
+}
+
+fn _user_pair() -> (AcUser, AcUser) {
+    let t = AcUser { name: "pe".concat("nis") };
+    return (t, t);
+}
+
+fn test_concrete_tuple_reads_both() -> i32 {
+    let (a, b) = _user_pair();
+    assert!(a.name.eq("penis"));
+    assert!(b.name.eq("penis"));
+    return 0;
+}
+
+struct AcDuo {
+    a: AcUser,
+    b: AcUser,
+}
+
+fn _duo() -> AcDuo {
+    let t = AcUser { name: "d".concat("uo") };
+    return AcDuo { a: t, b: t };
+}
+
+fn test_struct_literal_divergence() -> i32 {
+    let d = _duo();
+    assert!(d.a.name.eq("duo"));
+    assert!(d.b.name.eq("duo"));
+    return 0;
+}
+
+// Distinct locals take the plain-move path — both values intact.
+fn _distinct() -> (AcUser, AcUser) {
+    let a = AcUser { name: "a".concat("1") };
+    let b = AcUser { name: "b".concat("2") };
+    return (a, b);
+}
+
+fn test_distinct_locals_no_clone() -> i32 {
+    let (a, b) = _distinct();
+    assert!(a.name.eq("a1"));
+    assert!(b.name.eq("b2"));
+    return 0;
+}
+
+// A Vector field makes the struct non-cloneable: the divergent return keeps
+// the old conservative sharing and still works.
+struct AcBag {
+    items: *Vector<i32>,
+    tag: string,
+}
+
+fn _bag_pair() -> (AcBag, AcBag) {
+    let v: *Vector<i32> = Vector::new();
+    v.push(41);
+    let w = AcBag { items: v, tag: "t".concat("g") };
+    return (w, w);
+}
+
+fn test_non_cloneable_still_compiles() -> i32 {
+    let (w1, w2) = _bag_pair();
+    assert_eq!(w1.items.get(0), 41);
+    assert!(w2.tag.eq("tg"));
+    return 0;
+}

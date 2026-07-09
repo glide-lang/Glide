@@ -664,6 +664,12 @@ pub struct CG {
     // ctor inference where no static `let_ty` exposes the type). Drained
     // after fn-mono drain, before fn forward decls.
     pub struct_mono_queue: *Vector<Type>,
+    // Struct values (concrete names / generic monos) whose divergent return
+    // moves got an auto-inserted `__glide_clone_<c>` call — the deep-clone
+    // bodies (the dual of `__glide_drop_<c>`) are emitted at the end of the
+    // program, after every struct body is in scope. Transitively closed at
+    // enqueue time, so nested cloneable fields are already in the queue.
+    pub clone_queue: *Vector<Type>,
     pub defer_stack: *Vector<Expr>, // explicit `defer expr;` (fn-scoped)
     pub err_defer_stack: *Vector<Expr>, // `defer_err expr;` — fires only on err return / `?` (fn-scoped)
     pub auto_drop_stack: *Vector<Expr>, // `let v*` cleanups (block-scoped)
@@ -1298,6 +1304,225 @@ fn _sv_droppable_fields(g: *CG, st: *Stmt) -> *Vector<string> {
         if is_str_field && _str_rhs_fresh(g, &fval) { out.push(fname); }
     }
     return out;
+}
+
+// ---- 2D-ii auto-clone of divergent return moves ---------------------------
+// `return (t, t)` moves the same struct-value local out twice: the C copies
+// share every heap-backed field, so the two "owners" alias each other's
+// internals across the function boundary — mutating one silently mutates the
+// other, and no drop could ever fire without a double free. At the return
+// site the divergence is provable and purely local, so every occurrence after
+// the first is rewritten to a generated deep clone `__glide_clone_<c>(t)` —
+// the dual of `__glide_drop_<c>`: strings get a malloc-backed owned copy,
+// boxes/own-pointers a fresh allocation, nested cloneables recurse.
+//
+// Cloneability is transitive and conservative. A struct qualifies only when
+// every field is a scalar, a string, a cloneable struct value (concrete or
+// mono), an `own *` to a cloneable struct, a `Box<S>` of one, or `?T` of any
+// of those. Anything else (Vector, HashMap, raw pointers, dyn, closures,
+// enums, ...) keeps today's conservative sharing — never a wrong clone.
+
+// Classification: -1 = not cloneable, 0 = cloneable with no heap inside,
+// 1 = cloneable and heap-bearing (only heap-bearing types are worth a clone).
+// `seen` carries the structs already entered on this walk: re-entering one
+// (a self-recursive list via `?Box<Self>` / `own *Self`) is NOT a rejection —
+// the generated clone bodies recurse the same shape at runtime. The revisit
+// answers 0 ("fine, undecided heap"), which is conservative: the box/own
+// pointer that closed the cycle already reports heap itself.
+pub fn _clone_classify_struct(g: *CG, ty: *Type, depth: i32) -> i32 {
+    let seen: *HashMap<bool> = HashMap::new();
+    let r: i32 = _clone_classify_struct_s(g, ty, depth, seen);
+    seen.free();
+    return r;
+}
+
+fn _clone_classify_struct_s(g: *CG, ty: *Type, depth: i32, seen: *HashMap<bool>) -> i32 {
+    if ty == null || depth > 32 { return -1; }
+    let cn: string = _clone_cname(ty);
+    if !cn.eq("") && seen.contains(cn) { return 0; }
+    let mut fields: *Vector<Field> = null;
+    let mut params: *Vector<string> = null;
+    let mut args: *Vector<Type> = null;
+    if ty.kind == TY_NAMED {
+        if ty.name == null || !g.structs.contains(ty.name) { return -1; }
+        let sd: Stmt = g.structs.get(ty.name);
+        fields = sd.struct_fields;
+    } else {
+        if ty.kind != TY_GENERIC || ty.name == null || !g.generic_structs.contains(ty.name) {
+            return -1;
+        }
+        let tpl: Stmt = g.generic_structs.get(ty.name);
+        fields = tpl.struct_fields;
+        params = tpl.type_params;
+        args = ty.args;
+        if params == null || args == null || params.len() != args.len() { return -1; }
+    }
+    if fields == null { return -1; }
+    if !cn.eq("") { seen.insert(cn, true); }
+    let mut heap: i32 = 0;
+    for let i: i32 = 0; i < fields.len(); i = i + 1 {
+        let f: Field = fields.get(i);
+        let mut fty: *Type = f.ty;
+        if params != null { fty = subst_type(f.ty, params, args); }
+        let fc: i32 = _clone_classify_field(g, fty, f.is_own, depth, seen);
+        if fc < 0 { return -1; }
+        if fc > 0 { heap = 1; }
+    }
+    return heap;
+}
+
+fn _clone_classify_field(g: *CG, fty: *Type, is_own: bool, depth: i32, seen: *HashMap<bool>) -> i32 {
+    if fty == null || depth > 32 { return -1; }
+    if fty.kind == TY_NAMED {
+        if fty.name == null { return -1; }
+        if fty.name.eq("string") { return 1; }
+        if is_stdlib_primitive(fty.name) || fty.name.eq("int") || fty.name.eq("uint")
+            || fty.name.eq("byte")
+            || fty.name.eq("usize") {
+            return 0;
+        }
+        return _clone_classify_struct_s(g, fty, depth + 1, seen);
+    }
+    if fty.kind == TY_POINTER {
+        // Only an `own *S` pointer is this struct's to duplicate; a shared
+        // pointer field keeps pointing at the shared object (not cloneable —
+        // a clone would silently change aliasing expectations either way).
+        if !is_own { return -1; }
+        let cs: i32 = _clone_classify_struct_s(g, fty.inner, depth + 1, seen);
+        if cs < 0 { return -1; }
+        return 1;
+    }
+    if fty.kind == TY_GENERIC {
+        if fty.name != null && fty.name.eq("Box") && fty.args != null && fty.args.len() == 1 {
+            let bx: Type = fty.args.get(0);
+            let bs: i32 = _clone_classify_struct_s(g, &bx, depth + 1, seen);
+            if bs < 0 { return -1; }
+            return 1;
+        }
+        let ms: i32 = _clone_classify_struct_s(g, fty, depth + 1, seen);
+        return ms;
+    }
+    if fty.kind == TY_OPTION {
+        let ic: i32 = _clone_classify_field(g, fty.inner, is_own, depth + 1, seen);
+        return ic;
+    }
+    return -1;
+}
+
+// C-side name the clone fn is keyed on: the struct name for a concrete
+// struct, the mangled mono name for a generic instance.
+pub fn _clone_cname(ty: *Type) -> string {
+    if ty == null || ty.name == null { return ""; }
+    if ty.kind == TY_GENERIC { return mangle_generic(ty.name, ty.args); }
+    return ty.name;
+}
+
+// Queue `ty`'s clone body (dedup by cname) and transitively every cloneable
+// struct its fields reference, so the body-emit pass at the end of the
+// program is a flat loop with all forward-decls known up front.
+fn _clone_enqueue(g: *CG, ty: *Type, depth: i32) {
+    if ty == null || depth > 8 { return; }
+    let cn: string = _clone_cname(ty);
+    if cn.eq("") { return; }
+    for let i: i32 = 0; i < g.clone_queue.len(); i = i + 1 {
+        let q: Type = g.clone_queue.get(i);
+        if _clone_cname(&q).eq(cn) { return; }
+    }
+    g.clone_queue.push(*ty);
+    // Generic monos referenced only through the clone body still need their
+    // struct body + drop plumbing emitted.
+    if ty.kind == TY_GENERIC { g.struct_mono_queue.push(*ty); }
+    let mut fields: *Vector<Field> = null;
+    let mut params: *Vector<string> = null;
+    let mut args: *Vector<Type> = null;
+    if ty.kind == TY_NAMED && g.structs.contains(ty.name) {
+        let sd: Stmt = g.structs.get(ty.name);
+        fields = sd.struct_fields;
+    }
+    if ty.kind == TY_GENERIC && g.generic_structs.contains(ty.name) {
+        let tpl: Stmt = g.generic_structs.get(ty.name);
+        fields = tpl.struct_fields;
+        params = tpl.type_params;
+        args = ty.args;
+    }
+    if fields == null { return; }
+    for let i: i32 = 0; i < fields.len(); i = i + 1 {
+        let f: Field = fields.get(i);
+        let mut fty: *Type = f.ty;
+        if params != null && args != null { fty = subst_type(f.ty, params, args); }
+        _clone_enqueue_field(g, fty, depth + 1);
+    }
+}
+
+fn _clone_enqueue_field(g: *CG, fty: *Type, depth: i32) {
+    if fty == null || depth > 8 { return; }
+    if fty.kind == TY_NAMED || fty.kind == TY_GENERIC {
+        if fty.kind == TY_GENERIC && fty.name != null && fty.name.eq("Box") && fty.args != null
+            && fty.args.len() == 1 {
+            let bx: Type = fty.args.get(0);
+            _clone_enqueue_field(g, &bx, depth + 1);
+            return;
+        }
+        if _clone_classify_struct(g, fty, depth) >= 0 { _clone_enqueue(g, fty, depth); }
+        return;
+    }
+    if fty.kind == TY_POINTER || fty.kind == TY_OPTION {
+        _clone_enqueue_field(g, fty.inner, depth + 1);
+    }
+}
+
+// Rewrite pass over the RETURNED expression: walk the value slots of tuple
+// and struct literals (recursively), count bare-ident moves of each local,
+// and swap occurrences 2..n of a cloneable heap-bearing struct value for a
+// `__glide_clone_<c>(x)` call. Returns the cnames used at THIS return so the
+// caller can emit block-scope forward decls (the bodies land at the end of
+// the program; a block-scope prototype keeps the C compiler informed at the
+// call site regardless of emission order).
+fn _clone_rewrite_slots(g: *CG, e: *Expr, counts: *HashMap<i32>, used: *Vector<string>) {
+    if e == null || e.args == null { return; }
+    if e.kind != EX_TUPLE && e.kind != EX_STRUCT_LIT { return; }
+    for let i: i32 = 0; i < e.args.len(); i = i + 1 {
+        let a: Expr = e.args.get(i);
+        if a.kind == EX_TUPLE || a.kind == EX_STRUCT_LIT {
+            // The copy shares its `args` pointer with the tree, so nested
+            // slot rewrites through it land in the real AST.
+            _clone_rewrite_slots(g, &a, counts, used);
+            continue;
+        }
+        if a.kind != EX_IDENT || a.str_val == null || a.str_val.eq("") { continue; }
+        let ty: *Type = g.lookup(a.str_val);
+        if ty == null { continue; }
+        if ty.kind != TY_NAMED && ty.kind != TY_GENERIC { continue; }
+        if _clone_classify_struct(g, ty, 0) != 1 { continue; }
+        let mut n: i32 = 0;
+        if counts.contains(a.str_val) { n = counts.get(a.str_val); }
+        counts.insert(a.str_val, n + 1);
+        if n == 0 { continue; } // first occurrence stays a plain move
+        let cn: string = _clone_cname(ty);
+        if cn.eq("") { continue; }
+        _clone_enqueue(g, ty, 0);
+        let mut have: bool = false;
+        for let k: i32 = 0; k < used.len(); k = k + 1 {
+            if used.get(k).eq(cn) { have = true; }
+        }
+        if !have { used.push(cn); }
+        let callee: *Expr = expr_ident("__glide_clone_".concat(cn), a.line, a.column);
+        let cargs: *Vector<Expr> = Vector::new();
+        cargs.push(*expr_ident(a.str_val, a.line, a.column));
+        let call: *Expr = expr_call(callee, cargs);
+        e.args.set(i, *call);
+    }
+}
+
+// Entry point, called from the ST_RETURN emission before anything is printed.
+fn _auto_clone_divergent_return(g: *CG, s: *Stmt) -> *Vector<string> {
+    let used: *Vector<string> = Vector::new();
+    if s == null || s.expr_value == null { return used; }
+    if s.expr_value.kind != EX_TUPLE && s.expr_value.kind != EX_STRUCT_LIT { return used; }
+    let counts: *HashMap<i32> = HashMap::new();
+    _clone_rewrite_slots(g, s.expr_value, counts, used);
+    counts.free();
+    return used;
 }
 
 // ---- Owned-collection auto-drop (Vector / HashMap) -----------------------
@@ -2334,6 +2559,8 @@ impl CG {
         g.fn_mono_queue = q;
         let smq: *Vector<Type> = Vector::new();
         g.struct_mono_queue = smq;
+        let clq: *Vector<Type> = Vector::new();
+        g.clone_queue = clq;
         let mi: *HashMap<string> = HashMap::new();
         g.method_index = mi;
         let mf: *HashMap<bool> = HashMap::new();
@@ -6693,6 +6920,16 @@ fn emit_stmt_inner(g: *CG, s: *Stmt, depth: i32) {
         return;
     }
     if s.kind == ST_RETURN {
+        // 2D-ii auto-clone: a divergent multi-move (`return (t, t)`) gets its
+        // 2nd..nth occurrences deep-cloned so each returned owner is
+        // independent. Block-scope prototypes keep the C compiler informed at
+        // the call site — the bodies are emitted at the end of the program.
+        let _cl_used: *Vector<string> = _auto_clone_divergent_return(g, s);
+        for let _ci: i32 = 0; _ci < _cl_used.len(); _ci = _ci + 1 {
+            let _cn: string = _cl_used.get(_ci);
+            ind(depth);
+            println!(_cn.concat(" __glide_clone_").concat(_cn).concat("(").concat(_cn).concat(");"));
+        }
         // Detect `return err(...)` BEFORE rewriting `err` -> `__glide_err_X`
         // so `defer_err` cleanups can fire on this path only.
         let mut is_err_return: bool = false;

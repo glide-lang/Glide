@@ -1461,6 +1461,115 @@ fn emit_struct_drop_bodies(g: *CG, program: *Vector<Stmt>) {
     }
 }
 
+// Emit one field's deep-copy line inside `__glide_clone_<c>`: the receiver is
+// the by-value copy `v`, so scalar fields are already copied and only the
+// heap-backed ones are re-pointed at fresh allocations. Field kinds mirror
+// _clone_classify_field exactly — anything it rejects never reaches here.
+fn _emit_clone_field(g: *CG, fname: string, fty: *Type, is_own: bool) {
+    if fty == null { return; }
+    let fc: string = c_safe_ident(fname);
+    if fty.kind == TY_NAMED {
+        if fty.name != null && fty.name.eq("string") {
+            println!("  v.".concat(fc).concat(" = __glide_str_clone(v.").concat(fc).concat(");"));
+            return;
+        }
+        if fty.name != null && g.structs.contains(fty.name) && _clone_classify_struct(g, fty, 0) >= 0 {
+            println!("  v.".concat(fc).concat(" = __glide_clone_").concat(fty.name).concat("(v.").concat(fc).concat(");"));
+        }
+        return; // scalars: the by-value copy already did the work
+    }
+    if fty.kind == TY_POINTER && is_own {
+        let cn: string = _clone_cname(fty.inner);
+        if cn.eq("") { return; }
+        println!("  if (v.".concat(fc).concat(") { ").concat(cn).concat("* __cp = (").concat(cn).concat("*)malloc(sizeof(").concat(cn).concat(")); *__cp = __glide_clone_").concat(cn).concat("(*v.").concat(fc).concat("); v.").concat(fc).concat(" = __cp; }"));
+        return;
+    }
+    if fty.kind == TY_GENERIC {
+        if fty.name != null && fty.name.eq("Box") && fty.args != null && fty.args.len() == 1 {
+            let bx: Type = fty.args.get(0);
+            let cn: string = _clone_cname(&bx);
+            if cn.eq("") { return; }
+            println!("  if (v.".concat(fc).concat(".ptr) { ").concat(cn).concat("* __cp = (").concat(cn).concat("*)malloc(sizeof(").concat(cn).concat(")); *__cp = __glide_clone_").concat(cn).concat("(*v.").concat(fc).concat(".ptr); v.").concat(fc).concat(".ptr = __cp; v.").concat(fc).concat(".is_arena = 0; }"));
+            return;
+        }
+        let cn: string = _clone_cname(fty);
+        if cn.eq("") { return; }
+        println!("  v.".concat(fc).concat(" = __glide_clone_").concat(cn).concat("(v.").concat(fc).concat(");"));
+        return;
+    }
+    if fty.kind == TY_OPTION && fty.inner != null {
+        let inner: *Type = fty.inner;
+        if inner.kind == TY_NAMED && inner.name != null && inner.name.eq("string") {
+            println!("  if (v.".concat(fc).concat(".has) v.").concat(fc).concat(".val = __glide_str_clone(v.").concat(fc).concat(".val);"));
+            return;
+        }
+        if inner.kind == TY_GENERIC && inner.name != null && inner.name.eq("Box")
+            && inner.args != null
+            && inner.args.len() == 1 {
+            let bx2: Type = inner.args.get(0);
+            let cn: string = _clone_cname(&bx2);
+            if cn.eq("") { return; }
+            println!("  if (v.".concat(fc).concat(".has && v.").concat(fc).concat(".val.ptr) { ").concat(cn).concat("* __cp = (").concat(cn).concat("*)malloc(sizeof(").concat(cn).concat(")); *__cp = __glide_clone_").concat(cn).concat("(*v.").concat(fc).concat(".val.ptr); v.").concat(fc).concat(".val.ptr = __cp; v.").concat(fc).concat(".val.is_arena = 0; }"));
+            return;
+        }
+        if (inner.kind == TY_NAMED || inner.kind == TY_GENERIC)
+            && _clone_classify_struct(g, inner, 0) >= 0 {
+            let cn: string = _clone_cname(inner);
+            if cn.eq("") { return; }
+            println!("  if (v.".concat(fc).concat(".has) v.").concat(fc).concat(".val = __glide_clone_").concat(cn).concat("(v.").concat(fc).concat(".val);"));
+        }
+        return;
+    }
+}
+
+// Deep-clone bodies for the 2D-ii auto-clone — the dual of
+// emit_struct_drop_bodies, emitted right after it (every struct body and
+// option/box mono is in scope by then). The queue was transitively closed at
+// enqueue time, so one pass of forward-decls covers the recursion between
+// bodies (self-recursive linked structs included).
+fn emit_struct_clone_bodies(g: *CG) {
+    if g.clone_queue.len() == 0 { return; }
+    let seen_fwd: *HashMap<bool> = HashMap::new();
+    for let i: i32 = 0; i < g.clone_queue.len(); i = i + 1 {
+        let t: Type = g.clone_queue.get(i);
+        let cn: string = _clone_cname(&t);
+        if cn.eq("") || seen_fwd.contains(cn) { continue; }
+        seen_fwd.insert(cn, true);
+        println!(cn.concat(" __glide_clone_").concat(cn).concat("(").concat(cn).concat(" v);"));
+    }
+    let seen_body: *HashMap<bool> = HashMap::new();
+    for let i: i32 = 0; i < g.clone_queue.len(); i = i + 1 {
+        let t: Type = g.clone_queue.get(i);
+        let cn: string = _clone_cname(&t);
+        if cn.eq("") || seen_body.contains(cn) { continue; }
+        seen_body.insert(cn, true);
+        let mut fields: *Vector<Field> = null;
+        let mut params: *Vector<string> = null;
+        let mut args: *Vector<Type> = null;
+        if t.kind == TY_NAMED && g.structs.contains(t.name) {
+            let sd: Stmt = g.structs.get(t.name);
+            fields = sd.struct_fields;
+        }
+        if t.kind == TY_GENERIC && g.generic_structs.contains(t.name) {
+            let tpl: Stmt = g.generic_structs.get(t.name);
+            fields = tpl.struct_fields;
+            params = tpl.type_params;
+            args = t.args;
+        }
+        println!(cn.concat(" __glide_clone_").concat(cn).concat("(").concat(cn).concat(" v) {"));
+        if fields != null {
+            for let j: i32 = 0; j < fields.len(); j = j + 1 {
+                let f: Field = fields.get(j);
+                let mut fty: *Type = f.ty;
+                if params != null && args != null { fty = subst_type(f.ty, params, args); }
+                _emit_clone_field(g, f.name, fty, f.is_own);
+            }
+        }
+        println!("  return v;");
+        println!("}");
+    }
+}
+
 pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool) {
     // Alpha-rename shadowing locals to unique C names before anything is
     // emitted, so `let b = …; let b = b.val;` compiles.
@@ -2306,6 +2415,7 @@ pub fn emit_program_mode(program: *Vector<Stmt>, freestanding: bool, tiny: bool)
         println!("");
     }
     emit_struct_drop_bodies(g, program);
+    emit_struct_clone_bodies(g);
     g.free();
 }
 
