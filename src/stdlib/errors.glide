@@ -26,15 +26,16 @@ c_raw! {
     #include <string.h>
     #include <stdlib.h>
     #include <errno.h>
-    // Human OS message for an errno. Returns a heap copy (strerror points at a
-    // static buffer; a Glide string needs a pointer it owns, like read_file).
+    // Human OS message for an errno. strerror points at a static buffer, so
+    // copy it into a proper headered Glide string via __glide_string_from_buf.
+    // A raw malloc'd C string (no 4-byte SDS length header) makes the string
+    // runtime read s[-4..-1] out of bounds — benign on glibc, a heap overflow
+    // that ASan traps and Windows faults on (garbage length -> bad memcpy).
+    extern const char* __glide_string_from_buf(void* buf, int n);
     static const char* __glide_strerror(int e) {
         const char* m = strerror(e);
         if (!m) m = "";
-        size_t n = strlen(m);
-        char* out = (char*)malloc(n + 1);
-        memcpy(out, m, n + 1);
-        return out;
+        return __glide_string_from_buf((void*)m, (int)strlen(m));
     }
     // OS errno -> ErrorKind ordinal. Done in C so the platform's own errno
     // macros are used (the numeric values vary across platforms).
