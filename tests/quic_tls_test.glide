@@ -1,0 +1,56 @@
+// QUIC's TLS binding: the quic_transport_parameters codec round-trips, and a
+// QUIC ClientHello reuses the TLS ClientHello with the transport-parameters
+// extension carried alongside SNI / ALPN / key_share.
+import stdlib::testing::*;
+import stdlib::net::quic::tls::*;
+import stdlib::net::tls13::handshake::*;
+import stdlib::hex::*;
+
+fn _h(s: string) -> string {
+    return hex_decode(s).unwrap();
+}
+
+// Encode then decode the transport parameters: integer limits and the initial
+// source connection id survive, absent params stay zero.
+fn test_transport_params_roundtrip() -> i32 {
+    let tp: *TransportParams = quic_transport_params(_h("c1c1c1c1"));
+    tp.initial_max_data = 500000 as u64;
+    tp.max_idle_timeout = 45000 as u64;
+    let enc: string = encode_transport_params(tp);
+    let dec: *TransportParams = decode_transport_params(enc).unwrap();
+    assert_eq!(dec.initial_max_data as i64, 500000);
+    assert_eq!(dec.max_idle_timeout as i64, 45000);
+    assert_eq!(dec.initial_max_streams_bidi as i64, 16);
+    assert_eq!(dec.initial_max_stream_data_uni as i64, 262144);
+    assert!(dec.initial_scid.eq(_h("c1c1c1c1")));
+    return 0;
+}
+
+// An unknown transport parameter id is skipped without derailing the rest.
+fn test_transport_params_skips_unknown() -> i32 {
+    // id 0x20 (unknown) len 1 value 0xff, then id 0x04 (max_data) len 1 value 5.
+    let dec: *TransportParams = decode_transport_params(_h("2001ff040105")).unwrap();
+    assert_eq!(dec.initial_max_data as i64, 5);
+    return 0;
+}
+
+// The QUIC ClientHello parses as a ClientHello whose SNI / ALPN / key_share are
+// intact, and carries the transport-parameters extension verbatim.
+fn test_quic_client_hello() -> i32 {
+    let tp: *TransportParams = quic_transport_params(_h("abcd"));
+    let pk: string = "01234567890123456789012345678901"; // 32-byte X25519 pub
+    let rnd: string = "abcdefghijklmnopqrstuvwxyz012345"; // 32-byte client random
+    let alpn: *Vector<string> = Vector::new();
+    alpn.push("h3");
+    let ch: string = build_quic_client_hello("example.com", pk, alpn, rnd, tp).unwrap();
+    let msg: *HsMessage = read_handshake(ch, 0).unwrap();
+    assert_eq!(msg.msg_type, HS_CLIENT_HELLO);
+    let parsed: *ClientHello = parse_client_hello(msg.body).unwrap();
+    assert!(parsed.server_name.eq("example.com"));
+    assert_eq!(parsed.alpn.len(), 1);
+    assert!(parsed.alpn.get(0).eq("h3"));
+    assert!(parsed.client_key_share.eq(pk));
+    // the transport parameters ride inside the ClientHello
+    assert!(ch.contains(encode_transport_params(tp)));
+    return 0;
+}

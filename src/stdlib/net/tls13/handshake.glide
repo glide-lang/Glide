@@ -78,8 +78,10 @@ fn _hsext(ext_type: i32, body: string) -> string {
 /// Build a ClientHello handshake message (with its 4-byte handshake header)
 /// for `hostname`, offering X25519 with the given 32-byte public key. If
 /// `alpn` is non-empty each protocol id is offered (e.g. "h2", "http/1.1").
-/// `random32` is the client random; pass "" to generate one.
-pub fn build_client_hello(hostname: string, x25519_pub: string, alpn: *Vector<string>, random32: string) -> !string {
+/// `random32` is the client random; pass "" to generate one. `extra_exts` is
+/// appended verbatim to the extension list (each already `type||vec16(body)`) —
+/// QUIC passes its `quic_transport_parameters`; TCP TLS passes "".
+pub fn build_client_hello(hostname: string, x25519_pub: string, alpn: *Vector<string>, random32: string, extra_exts: string) -> !string {
     let mut rnd: string = random32;
     if rnd.len() != 32 {
         let r: !string = random_bytes(32);
@@ -121,7 +123,7 @@ pub fn build_client_hello(hostname: string, x25519_pub: string, alpn: *Vector<st
         protos.free();
         ext.push_str(_hsext(16, _hsvec16(plist)));
     }
-    let exts: string = ext.to_string();
+    let exts: string = ext.to_string().concat(extra_exts);
     ext.free();
     body.push_str(_hsvec16(exts));
     let ch: string = body.to_string();

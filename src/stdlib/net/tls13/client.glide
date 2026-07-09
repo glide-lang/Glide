@@ -244,7 +244,7 @@ fn _tls13_client_handshake_body(conn: *TlsConn, host: string, alpn: *Vector<stri
     if !skr.is_ok() { return err(skr.unwrap_err()); }
     let sk: string = skr.unwrap();
     let pk: string = x25519_base(sk);
-    let chr: !string = build_client_hello(host, pk, alpn, "");
+    let chr: !string = build_client_hello(host, pk, alpn, "", "");
     if !chr.is_ok() { return err(chr.unwrap_err()); }
     let ch: string = chr.unwrap();
     let transcript: *ByteBuffer = ByteBuffer::new();

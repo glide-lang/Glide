@@ -1,0 +1,147 @@
+// QUIC's binding to the TLS 1.3 handshake (RFC 9001 §8). QUIC carries raw TLS
+// handshake messages in CRYPTO frames (no TLS record layer), and adds one
+// mandatory ClientHello/EncryptedExtensions extension — quic_transport_
+// parameters (RFC 9000 §18) — that negotiates the transport limits. The TLS
+// message layer (build_client_hello / parse_server_hello / read_handshake) and
+// the key schedule are reused verbatim; this file adds the QUIC-specific glue.
+import stdlib::net::quic::packet::*; // varint_encode / varint_decode / Varint
+import stdlib::net::tls13::handshake::*; // build_client_hello
+import stdlib::bytes::*;
+
+pub const QUIC_TP_EXT: i32 = 0x39; // quic_transport_parameters extension type
+// Transport parameter ids (RFC 9000 §18.2) a minimal client sends/reads.
+pub const TP_MAX_IDLE_TIMEOUT: i32 = 0x01;
+pub const TP_INITIAL_MAX_DATA: i32 = 0x04;
+pub const TP_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL: i32 = 0x05;
+pub const TP_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE: i32 = 0x06;
+pub const TP_INITIAL_MAX_STREAM_DATA_UNI: i32 = 0x07;
+pub const TP_INITIAL_MAX_STREAMS_BIDI: i32 = 0x08;
+pub const TP_INITIAL_MAX_STREAMS_UNI: i32 = 0x09;
+pub const TP_INITIAL_SOURCE_CONNECTION_ID: i32 = 0x0f;
+
+/// The transport limits exchanged in the handshake. Integer fields are QUIC
+/// varints; `initial_scid` is the source connection id the sender used on its
+/// first packet (RFC 9000 §18.2), which the peer validates.
+pub struct TransportParams {
+    pub max_idle_timeout: u64,
+    pub initial_max_data: u64,
+    pub initial_max_stream_data_bidi_local: u64,
+    pub initial_max_stream_data_bidi_remote: u64,
+    pub initial_max_stream_data_uni: u64,
+    pub initial_max_streams_bidi: u64,
+    pub initial_max_streams_uni: u64,
+    pub initial_scid: string,
+}
+
+fn _tp_zero() -> *TransportParams {
+    let tp: *TransportParams = malloc(sizeof(TransportParams)) as *TransportParams;
+    tp.max_idle_timeout = 0 as u64;
+    tp.initial_max_data = 0 as u64;
+    tp.initial_max_stream_data_bidi_local = 0 as u64;
+    tp.initial_max_stream_data_bidi_remote = 0 as u64;
+    tp.initial_max_stream_data_uni = 0 as u64;
+    tp.initial_max_streams_bidi = 0 as u64;
+    tp.initial_max_streams_uni = 0 as u64;
+    tp.initial_scid = "";
+    return tp;
+}
+
+/// Sensible client defaults, carrying `scid` as the initial source connection
+/// id (the CID the client puts in its Initial packet's SCID field).
+pub fn quic_transport_params(scid: string) -> *TransportParams {
+    let tp: *TransportParams = _tp_zero();
+    tp.max_idle_timeout = 30000 as u64; // 30s
+    tp.initial_max_data = 1048576 as u64; // 1 MiB connection window
+    tp.initial_max_stream_data_bidi_local = 262144 as u64; // 256 KiB
+    tp.initial_max_stream_data_bidi_remote = 262144 as u64;
+    tp.initial_max_stream_data_uni = 262144 as u64;
+    tp.initial_max_streams_bidi = 16 as u64;
+    tp.initial_max_streams_uni = 16 as u64;
+    tp.initial_scid = scid;
+    return tp;
+}
+
+// One integer transport parameter: id(varint) || len(varint) || value(varint).
+fn _tp_int(id: i32, v: u64) -> string {
+    let val: string = varint_encode(v);
+    return varint_encode(id as u64).concat(varint_encode(val.len() as u64)).concat(val);
+}
+
+/// Encode the transport parameters value (the extension body).
+pub fn encode_transport_params(tp: *TransportParams) -> string {
+    let bb: *ByteBuffer = ByteBuffer::new();
+    bb.push_str(_tp_int(TP_MAX_IDLE_TIMEOUT, tp.max_idle_timeout));
+    bb.push_str(_tp_int(TP_INITIAL_MAX_DATA, tp.initial_max_data));
+    bb.push_str(_tp_int(TP_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL, tp.initial_max_stream_data_bidi_local));
+    bb.push_str(_tp_int(TP_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE, tp.initial_max_stream_data_bidi_remote));
+    bb.push_str(_tp_int(TP_INITIAL_MAX_STREAM_DATA_UNI, tp.initial_max_stream_data_uni));
+    bb.push_str(_tp_int(TP_INITIAL_MAX_STREAMS_BIDI, tp.initial_max_streams_bidi));
+    bb.push_str(_tp_int(TP_INITIAL_MAX_STREAMS_UNI, tp.initial_max_streams_uni));
+    // initial_source_connection_id: id || len || raw cid bytes
+    bb.push_str(varint_encode(TP_INITIAL_SOURCE_CONNECTION_ID as u64));
+    bb.push_str(varint_encode(tp.initial_scid.len() as u64));
+    bb.push_str(tp.initial_scid);
+    let s: string = bb.to_string();
+    bb.free();
+    return s;
+}
+
+/// Decode a transport parameters value. Unknown parameter ids are skipped
+/// (forward compatibility); absent parameters keep their zero/"" default.
+pub fn decode_transport_params(data: string) -> !*TransportParams {
+    let tp: *TransportParams = _tp_zero();
+    let n: i32 = data.len();
+    let mut p: i32 = 0;
+    while p < n {
+        let idv: *Varint = varint_decode(data, p)?;
+        p = p + idv.len;
+        let lenv: *Varint = varint_decode(data, p)?;
+        p = p + lenv.len;
+        let l: i32 = lenv.value as i32;
+        if p + l > n { return err("quic: truncated transport parameter"); }
+        let val: string = data.substring(p, p + l);
+        let id: i32 = idv.value as i32;
+        // Only KNOWN integer parameters have their varint value decoded — an
+        // unknown id carries an opaque value that must be skipped untouched
+        // (RFC 9000 §7.4.2), not misread as a varint.
+        if id == TP_INITIAL_SOURCE_CONNECTION_ID {
+            tp.initial_scid = val;
+        } else if id == TP_MAX_IDLE_TIMEOUT {
+            tp.max_idle_timeout = varint_decode(val, 0)?.value;
+        } else if id == TP_INITIAL_MAX_DATA {
+            tp.initial_max_data = varint_decode(val, 0)?.value;
+        } else if id == TP_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL {
+            tp.initial_max_stream_data_bidi_local = varint_decode(val, 0)?.value;
+        } else if id == TP_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE {
+            tp.initial_max_stream_data_bidi_remote = varint_decode(val, 0)?.value;
+        } else if id == TP_INITIAL_MAX_STREAM_DATA_UNI {
+            tp.initial_max_stream_data_uni = varint_decode(val, 0)?.value;
+        } else if id == TP_INITIAL_MAX_STREAMS_BIDI {
+            tp.initial_max_streams_bidi = varint_decode(val, 0)?.value;
+        } else if id == TP_INITIAL_MAX_STREAMS_UNI {
+            tp.initial_max_streams_uni = varint_decode(val, 0)?.value;
+        }
+        p = p + l;
+    }
+    return ok(tp);
+}
+
+/// The full ClientHello extension: type(0x39) || uint16(len) || value.
+pub fn quic_transport_params_ext(tp: *TransportParams) -> string {
+    let body: string = encode_transport_params(tp);
+    let bb: *ByteBuffer = ByteBuffer::new();
+    bb.push((QUIC_TP_EXT >> 8 & 255) as u8);
+    bb.push((QUIC_TP_EXT & 255) as u8);
+    bb.push((body.len() >> 8 & 255) as u8);
+    bb.push((body.len() & 255) as u8);
+    bb.push_str(body);
+    let s: string = bb.to_string();
+    bb.free();
+    return s;
+}
+
+/// Build a QUIC ClientHello (a raw TLS handshake message for a CRYPTO frame):
+/// the reused TLS ClientHello plus the quic_transport_parameters extension.
+pub fn build_quic_client_hello(hostname: string, x25519_pub: string, alpn: *Vector<string>, random32: string, tp: *TransportParams) -> !string {
+    return build_client_hello(hostname, x25519_pub, alpn, random32, quic_transport_params_ext(tp));
+}

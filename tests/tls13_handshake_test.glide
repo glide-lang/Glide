@@ -12,7 +12,7 @@ fn test_client_hello_is_well_formed() -> i32 {
     let pk: string = _h("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20");
     let alpn: *Vector<string> = Vector::new();
     alpn.push("h2");
-    let ch: !string = build_client_hello("example.com", pk, alpn, _h("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"));
+    let ch: !string = build_client_hello("example.com", pk, alpn, _h("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"), "");
     assert!(ch.is_ok());
     // parses as a handshake message of type client_hello
     let m: !*HsMessage = read_handshake(ch.unwrap(), 0);
