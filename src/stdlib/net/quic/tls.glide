@@ -5,7 +5,10 @@
 // message layer (build_client_hello / parse_server_hello / read_handshake) and
 // the key schedule are reused verbatim; this file adds the QUIC-specific glue.
 import stdlib::net::quic::packet::*; // varint_encode / varint_decode / Varint
+import stdlib::net::quic::crypto::*; // quic_derive_keys, QuicKeys
 import stdlib::net::tls13::handshake::*; // build_client_hello
+import stdlib::net::tls13::schedule::*; // key schedule
+import stdlib::crypto::*; // sha256 (transcript hash)
 import stdlib::bytes::*;
 
 pub const QUIC_TP_EXT: i32 = 0x39; // quic_transport_parameters extension type
@@ -144,4 +147,51 @@ pub fn quic_transport_params_ext(tp: *TransportParams) -> string {
 /// the reused TLS ClientHello plus the quic_transport_parameters extension.
 pub fn build_quic_client_hello(hostname: string, x25519_pub: string, alpn: *Vector<string>, random32: string, tp: *TransportParams) -> !string {
     return build_client_hello(hostname, x25519_pub, alpn, random32, quic_transport_params_ext(tp));
+}
+
+// ---- key schedule -> QUIC packet-protection keys (RFC 9001 §5) ---------
+
+/// The handshake-phase secrets: the handshake secret (carried forward to derive
+/// the application keys) and the client/server handshake traffic secrets.
+pub struct HandshakeSecrets {
+    pub handshake_secret: string,
+    pub client: string,
+    pub server: string,
+}
+
+/// Derive the handshake secrets from the (EC)DHE shared secret and the raw
+/// handshake transcript so far (ClientHello || ServerHello). The client/server
+/// traffic secrets feed `quic_keys_from_secret` for Handshake-space protection.
+pub fn quic_handshake_secrets(ecdhe: string, transcript: string) -> !*HandshakeSecrets {
+    let early: string = tls13_early_secret("");
+    let hs: string = tls13_handshake_secret(early, ecdhe)?;
+    let th: string = sha256(transcript);
+    let out: *HandshakeSecrets = malloc(sizeof(HandshakeSecrets)) as *HandshakeSecrets;
+    out.handshake_secret = hs;
+    out.client = derive_secret_r(hs, "c hs traffic", th)?;
+    out.server = derive_secret_r(hs, "s hs traffic", th)?;
+    return ok(out);
+}
+
+/// The 1-RTT application traffic secrets, derived from the handshake secret and
+/// the transcript through the server's Finished.
+pub struct AppSecrets {
+    pub client: string,
+    pub server: string,
+}
+
+pub fn quic_app_secrets(handshake_secret: string, transcript_through_server_finished: string) -> !*AppSecrets {
+    let master: string = tls13_master_secret(handshake_secret)?;
+    let th: string = sha256(transcript_through_server_finished);
+    let out: *AppSecrets = malloc(sizeof(AppSecrets)) as *AppSecrets;
+    out.client = derive_secret_r(master, "c ap traffic", th)?;
+    out.server = derive_secret_r(master, "s ap traffic", th)?;
+    return ok(out);
+}
+
+/// QUIC packet-protection keys from a TLS traffic secret (RFC 9001 §5.1): the
+/// secret feeds HKDF-Expand-Label with the "quic key"/"quic iv"/"quic hp"
+/// labels. `key_len` is 16 for AES-128-GCM, 32 for ChaCha20-Poly1305.
+pub fn quic_keys_from_secret(traffic_secret: string, key_len: i32) -> !*QuicKeys {
+    return quic_derive_keys(traffic_secret, key_len);
 }

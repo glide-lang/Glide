@@ -3,7 +3,10 @@
 // extension carried alongside SNI / ALPN / key_share.
 import stdlib::testing::*;
 import stdlib::net::quic::tls::*;
+import stdlib::net::quic::crypto::*;
 import stdlib::net::tls13::handshake::*;
+import stdlib::net::tls13::schedule::*;
+import stdlib::crypto::*;
 import stdlib::hex::*;
 
 fn _h(s: string) -> string {
@@ -52,5 +55,48 @@ fn test_quic_client_hello() -> i32 {
     assert!(parsed.client_key_share.eq(pk));
     // the transport parameters ride inside the ClientHello
     assert!(ch.contains(encode_transport_params(tp)));
+    return 0;
+}
+
+// The handshake secrets are exactly the RFC 8446 §7.1 composition: the
+// handshake secret matches the schedule primitive (anchored on the RFC 8448
+// ECDHE), and each traffic secret is Derive-Secret over the transcript hash.
+fn test_handshake_secrets_composition() -> i32 {
+    let ecdhe: string = _h("8bd4054fb55b9d63fdfbacf9f04b9f0d35e6d63f537563efd46272900f89492d");
+    let transcript: string = "ClientHello-bytes||ServerHello-bytes (raw handshake msgs)";
+    let hs: *HandshakeSecrets = quic_handshake_secrets(ecdhe, transcript).unwrap();
+    let expect_hs: string = tls13_handshake_secret(tls13_early_secret(""), ecdhe).unwrap();
+    assert!(hs.handshake_secret.eq(expect_hs));
+    let th: string = sha256(transcript);
+    assert!(hs.client.eq(derive_secret_r(expect_hs, "c hs traffic", th).unwrap()));
+    assert!(hs.server.eq(derive_secret_r(expect_hs, "s hs traffic", th).unwrap()));
+    assert!(!hs.client.eq(hs.server)); // directions use distinct secrets
+    assert_eq!(hs.client.len(), 32);
+    return 0;
+}
+
+// QUIC keys from a traffic secret have the RFC 9001 §5.1 shapes and match a
+// direct quic_derive_keys of the same secret.
+fn test_quic_keys_from_secret() -> i32 {
+    let secret: string = _h("b3eddb126e067f35a780b3abf45e2d8f3b1a950738f52e9600746a0e27a55a21");
+    let k: *QuicKeys = quic_keys_from_secret(secret, 16).unwrap();
+    assert_eq!(k.key.len(), 16);
+    assert_eq!(k.iv.len(), 12);
+    assert_eq!(k.hp.len(), 16);
+    let direct: *QuicKeys = quic_derive_keys(secret, 16).unwrap();
+    assert!(k.key.eq(direct.key));
+    assert!(k.iv.eq(direct.iv));
+    return 0;
+}
+
+// Application (1-RTT) secrets chain from the handshake secret; the two
+// directions differ.
+fn test_app_secrets() -> i32 {
+    let ecdhe: string = _h("8bd4054fb55b9d63fdfbacf9f04b9f0d35e6d63f537563efd46272900f89492d");
+    let hs: *HandshakeSecrets = quic_handshake_secrets(ecdhe, "CH||SH").unwrap();
+    let ap: *AppSecrets = quic_app_secrets(hs.handshake_secret, "CH..serverFinished").unwrap();
+    assert_eq!(ap.client.len(), 32);
+    assert_eq!(ap.server.len(), 32);
+    assert!(!ap.client.eq(ap.server));
     return 0;
 }
