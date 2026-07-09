@@ -74,20 +74,21 @@ pub struct HpOpen {
     pub header: string,
 }
 
-/// Remove header protection. `pn_offset` is where the packet number starts;
-/// the first byte and packet number are unmasked, and the packet-number
-/// length is recovered from the unmasked first byte. The returned `header`
-/// (bytes 0..pn_offset+pn_len, unmasked) is the AAD for AEAD open.
-pub fn quic_remove_hp(aead: i32, hp: string, packet: string, pn_offset: i32) -> !*HpOpen {
+/// Remove header protection. `start` is where this packet's first byte is (>0
+/// for a coalesced packet); `pn_offset` is where the packet number starts. The
+/// first byte and packet number are unmasked, and the packet-number length is
+/// recovered from the unmasked first byte. The returned `header` (bytes
+/// start..pn_offset+pn_len, unmasked) is the AAD for AEAD open.
+pub fn quic_remove_hp(aead: i32, hp: string, packet: string, start: i32, pn_offset: i32) -> !*HpOpen {
     let sample_off: i32 = pn_offset + 4;
     if sample_off + 16 > packet.len() { return err("quic: packet too short for HP sample"); }
     let sample: string = packet.substring(sample_off, sample_off + 16);
     let mask: string = quic_hp_mask(aead, hp, sample)?;
-    let first: i32 = _ppb(packet, 0) ^ _ppb(mask, 0) & _hp_bits(_ppb(packet, 0));
+    let first: i32 = _ppb(packet, start) ^ _ppb(mask, 0) & _hp_bits(_ppb(packet, start));
     let pn_len: i32 = (first & 3) + 1;
     let hb: *ByteBuffer = ByteBuffer::new();
     hb.push((first & 255) as u8);
-    for let i: i32 = 1; i < pn_offset; i++ {
+    for let i: i32 = start + 1; i < pn_offset; i++ {
         hb.push(_ppb(packet, i) as u8);
     }
     let mut pn: u64 = 0;
@@ -205,7 +206,7 @@ pub fn quic_encode_initial(aead: i32, keys: *QuicKeys, version: u32, dcid: strin
 pub fn quic_decode_long(aead: i32, keys: *QuicKeys, packet: string, off: i32) -> !*QuicPacket {
     let hdr: *LongHeader = quic_parse_long_header(packet, off)?;
     let pn_offset: i32 = hdr.pn_offset;
-    let hp: *HpOpen = quic_remove_hp(aead, keys.hp, packet, pn_offset)?;
+    let hp: *HpOpen = quic_remove_hp(aead, keys.hp, packet, off, pn_offset)?;
     // Ciphertext = the Length field's bytes after the packet number.
     let ct_start: i32 = pn_offset + hp.pn_len;
     let ct_end: i32 = pn_offset + hdr.length as i32;
@@ -224,5 +225,57 @@ pub fn quic_decode_long(aead: i32, keys: *QuicKeys, packet: string, off: i32) ->
     out.end = hdr.end;
     free(hdr as *void);
     free(hp as *void);
+    return ok(out);
+}
+
+// ---- datagram coalescing (RFC 9000 §12.2) -----------------------------
+
+/// Concatenate packets into one UDP datagram. QUIC allows several packets
+/// (e.g. an Initial followed by a Handshake) to share a datagram back to back.
+pub fn quic_coalesce(packets: *Vector<string>) -> string {
+    let bb: *ByteBuffer = ByteBuffer::new();
+    for let i: i32 = 0; i < packets.len(); i++ {
+        bb.push_str(packets.get(i));
+    }
+    let s: string = bb.to_string();
+    bb.free();
+    return s;
+}
+
+/// Decode every long-header packet in a received datagram, routing each to the
+/// keys for its packet type (Initial vs Handshake). A packet whose keys aren't
+/// available yet (null) is skipped by its header Length; decoding stops at the
+/// first short-header (1-RTT) packet, whose length isn't self-describing —
+/// decode that tail separately once 1-RTT keys exist. `hk` may be null during
+/// the Initial flight.
+pub fn quic_decode_datagram(datagram: string, ik: *QuicKeys, ik_aead: i32, hk: *QuicKeys, hk_aead: i32) -> !*Vector<*QuicPacket> {
+    let out: *Vector<*QuicPacket> = Vector::new();
+    let n: i32 = datagram.len();
+    let mut off: i32 = 0;
+    while off < n {
+        let first: i32 = _ppb(datagram, off);
+        if (first & 0x80) == 0 { break; } // short header: caller handles the 1-RTT tail
+        let kind: i32 = first >> 4 & 3;
+        let mut keys: *QuicKeys = null;
+        let mut aead: i32 = ik_aead;
+        if kind == PKT_INITIAL {
+            keys = ik;
+            aead = ik_aead;
+        } else if kind == PKT_HANDSHAKE {
+            keys = hk;
+            aead = hk_aead;
+        }
+        if keys == null {
+            // No keys for this packet type yet — skip it precisely by its
+            // Length field (which is not encrypted).
+            let hdr: *LongHeader = quic_parse_long_header(datagram, off)?;
+            off = hdr.end;
+            free(hdr as *void);
+            continue;
+        }
+        let pkt: *QuicPacket = quic_decode_long(aead, keys, datagram, off)?;
+        out.push(pkt);
+        off = pkt.end;
+    }
     return ok(out);
 }

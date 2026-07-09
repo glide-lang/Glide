@@ -33,7 +33,7 @@ fn test_remove_hp_inverts_apply() -> i32 {
     let header: string = _h("c300000001088394c8f03e5157080000449e00000002");
     let sample: string = _h("d1b1c98dd7689fb8ec11d242b123dc9b");
     let wire: string = quic_apply_hp(AEAD_AES128_GCM, hp, header.concat(sample), 18).unwrap();
-    let open: *HpOpen = quic_remove_hp(AEAD_AES128_GCM, hp, wire, 18).unwrap();
+    let open: *HpOpen = quic_remove_hp(AEAD_AES128_GCM, hp, wire, 0, 18).unwrap();
     assert_eq!(open.pn as i64, 2);
     assert_eq!(open.pn_len, 4);
     assert_eq!(open.first, 0xc3);
@@ -82,5 +82,37 @@ fn test_decode_rejects_tamper() -> i32 {
     let n: i32 = wire.len();
     let bad: string = wire.substring(0, n - 8).concat(((wire.at(n - 8).to_int() ^ 1) as char).to_string()).concat(wire.substring(n - 7, n));
     assert!(quic_decode_long(AEAD_AES128_GCM, ck, bad, 0).is_err());
+    return 0;
+}
+
+// Two Initial packets coalesced into one datagram both decode back, in order.
+fn test_coalesce_and_decode_datagram() -> i32 {
+    let dcid: string = _h("8394c8f03e515708");
+    let ck: *QuicKeys = quic_client_initial_keys(dcid).unwrap();
+    let p0: string = quic_encode_initial(AEAD_AES128_GCM, ck, 1, dcid, "", "", 0, frame_crypto(0, "first packet crypto data here").concat(frame_padding(8))).unwrap();
+    let p1: string = quic_encode_initial(AEAD_AES128_GCM, ck, 1, dcid, "", "", 1, frame_crypto(0, "second packet crypto data here").concat(frame_padding(8))).unwrap();
+    let pkts: *Vector<string> = Vector::new();
+    pkts.push(p0);
+    pkts.push(p1);
+    let dgram: string = quic_coalesce(pkts);
+    let got: *Vector<*QuicPacket> = quic_decode_datagram(dgram, ck, AEAD_AES128_GCM, null, 0).unwrap();
+    assert_eq!(got.len(), 2);
+    assert_eq!(got.get(0).pn as i64, 0);
+    assert_eq!(got.get(1).pn as i64, 1);
+    assert!(got.get(0).payload.eq(frame_crypto(0, "first packet crypto data here").concat(frame_padding(8))));
+    return 0;
+}
+
+// Decoding stops at a short-header (1-RTT) packet — its length isn't
+// self-describing, so the caller handles that tail with 1-RTT keys.
+fn test_decode_datagram_stops_at_short_header() -> i32 {
+    let dcid: string = _h("8394c8f03e515708");
+    let ck: *QuicKeys = quic_client_initial_keys(dcid).unwrap();
+    let p0: string = quic_encode_initial(AEAD_AES128_GCM, ck, 1, dcid, "", "", 0, frame_crypto(0, "only long-header packet here").concat(frame_padding(8))).unwrap();
+    // A short header has the high bit clear (0x40); append one as a tail.
+    let dgram: string = p0.concat("\x40\xaa\xbb\xcc");
+    let got: *Vector<*QuicPacket> = quic_decode_datagram(dgram, ck, AEAD_AES128_GCM, null, 0).unwrap();
+    assert_eq!(got.len(), 1);
+    assert_eq!(got.get(0).pn as i64, 0);
     return 0;
 }
