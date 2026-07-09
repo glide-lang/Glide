@@ -1,0 +1,30 @@
+// TEMP Windows crash bisect: markers around each errors op; the last marker
+// printed on the Windows runner points at the operation that faults in memcpy.
+import stdlib::testing::*;
+import stdlib::errors::*;
+
+fn test_wdiag() -> i32 {
+    println!("A start");
+    let e0: *Error = Error::new("fs", "open", ErrorKind::NotFound, "no such file", "/tmp/x", 2);
+    println!("B new ok");
+    let s: string = e0.emit();
+    println!("C emit ok len");
+    println!(s.len());
+    let e: *Error = Error::of(s);
+    println!("D of ok");
+    let m: string = e.module();
+    println!("E module ok");
+    let o: string = e.op();
+    println!("F op ok");
+    let p: string = e.path();
+    println!("G path ok");
+    let msg: string = e.message();
+    println!("H message ok");
+    let k: ErrorKind = e.kind();
+    println!("I kind ok");
+    let oc: i32 = e.os_code();
+    println!("J os_code ok");
+    assert!(m.eq("fs"));
+    println!("K done");
+    return 0;
+}
