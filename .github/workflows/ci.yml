@@ -39,42 +39,47 @@ jobs:
           update: true
           install: >-
             mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-openssl
             mingw-w64-ucrt-x86_64-python
             curl zip unzip tar gzip
 
       - name: Install build deps (Linux)
         # clang + lld drive cross/promoted builds against the sysroot's
-        # libc/ tree — the cross backend since the zig removal.
+        # libc/ tree — the cross backend since the zig removal. libssl-dev
+        # links the emitted-C bootstrap against the host OpenSSL.
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang lld curl python3 python-is-python3
+          sudo apt-get install -y build-essential clang lld libssl-dev curl python3 python-is-python3
 
-      - name: Bootstrap compiler from a published release
-        # Glide is self-hosting, so there is no checked-in C seed: download a
-        # previously published release binary and use it to build the current
-        # sources with the host C compiler. Bump BOOT_TAG only when an older
-        # release can no longer compile `main`.
+      - name: Install build deps (macOS)
+        if: matrix.os == 'macos-latest'
+        run: brew install openssl@3 lld
+
+      - name: Bootstrap the compiler from the released C
+        # Glide is self-hosting; rather than seed from a previous *binary*
+        # (which can't compile syntax newer than itself — 0.8.0's receivers
+        # broke every older release), the release ships the compiler's own
+        # emitted C. Each platform rebuilds it with its native C compiler — no
+        # per-platform Glide seed, no bootstrap chicken-and-egg. The C is
+        # platform-independent (the emitted source carries the __APPLE__/_WIN32
+        # feature guards), so one file bootstraps every OS. BOOT_VER tracks the
+        # release the C was emitted from.
         run: |
           set -e
-          BOOT_TAG=v0.8.0
-          ver="${BOOT_TAG#v}"
-          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${BOOT_TAG}"
-          mkdir -p .boot
+          BOOT_VER=0.8.0
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${BOOT_VER}"
+          curl -fL -o glide-boot.c "${base}/glide-bootstrap-${BOOT_VER}.c"
+          CF="-O2 -w -fwrapv -fno-omit-frame-pointer -Wno-error=implicit-function-declaration"
           if [ "${{ runner.os }}" = "Windows" ]; then
-            asset="glide-${{ matrix.name }}-${ver}.zip"
-            curl -fL -o ".boot/${asset}" "${base}/${asset}"
-            unzip -q ".boot/${asset}" -d .boot
-            cp "$(find .boot -name glide.exe | head -1)" glide_boot.exe
-            ./glide_boot.exe build bootstrap/main.glide -o glide.exe
+            gcc glide-boot.c -o glide.exe $CF -lssl -lcrypto -lws2_32 -lcrypt32 -lbcrypt -ldbghelp -lpthread -lm
             ./glide.exe version
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            SSL="$(brew --prefix openssl@3)"
+            clang glide-boot.c -o glide $CF -I"$SSL/include" -L"$SSL/lib" -lssl -lcrypto -lpthread -lm
+            ./glide version
           else
-            asset="glide-${{ matrix.name }}-${ver}.tar.gz"
-            curl -fL -o ".boot/${asset}" "${base}/${asset}"
-            tar -xzf ".boot/${asset}" -C .boot
-            cp "$(find .boot -name glide -type f | head -1)" glide_boot
-            chmod +x glide_boot
-            ./glide_boot build bootstrap/main.glide -o glide
+            cc glide-boot.c -o glide $CF -D_GNU_SOURCE -lssl -lcrypto -ldl -lpthread -lm
             ./glide version
           fi
 
