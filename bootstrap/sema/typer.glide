@@ -4536,6 +4536,21 @@ fn check_return(t: *Typer, s: *Stmt) {
         t.err_code_range(e.line, e.column, _arg_span(e), "return-in-void-fn", "return with value in fn declared without ret type");
         return;
     }
+    // Leaking a borrow out as `*T`: `return p` where `p: &mut T` (or `&T`)
+    // silently coerces to a `-> *T` return — types_compat treats
+    // `*T`/`&T`/`&mut T` as interconvertible, so no mismatch fires. The caller
+    // then holds what looks like an owned pointer but is really a borrow into a
+    // shorter-lived frame; freeing it or outliving the referent is UB. Borrows
+    // are second-class: they flow into calls, never out. `return &x` is caught
+    // above; this is the pass-through form the signature ban misses because the
+    // declared return is `*T`, not `&T`. An explicit `p as *T` cast returns
+    // `cast_to` (not a borrow) and is left to the author — the sanctioned
+    // escape hatch, mirroring the `&x as *T` stores allowed elsewhere.
+    if vt != null && (vt.kind == TY_BORROW || vt.kind == TY_BORROW_MUT)
+        && t.current_ret != null && t.current_ret.kind == TY_POINTER {
+        t.err_code_range(e.line, e.column, _arg_span(e), "return-borrow", "cannot return borrow `".concat(type_to_string(vt)).concat("` as `").concat(type_to_string(t.current_ret)).concat("` — a borrow may not leave the frame as an owned pointer (the caller could free it or outlive the borrowed value); return `*T` from an allocation you own, or write `... as *T` if you accept the aliasing"));
+        return;
+    }
     if !types_compat(t.current_ret, vt) {
         let mut rl: i32 = s.line;
         let mut rc: i32 = s.column;
