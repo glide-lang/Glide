@@ -124,6 +124,7 @@ jobs:
           update: true
           install: >-
             mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-openssl
             zip unzip tar gzip
 
       - name: Resolve version
@@ -137,29 +138,27 @@ jobs:
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Bootstrap compiler from a published release
-        # Glide is self-hosting (no checked-in C seed): download a previously
-        # published release binary and build the current sources with it. Bump
-        # BOOT_TAG only when an older release can no longer compile `main`.
+      - name: Bootstrap the compiler from the released C
+        # Self-hosting: rebuild the compiler from its own emitted C rather than a
+        # previous *binary* seed (which can't compile syntax newer than itself).
+        # The C is platform-independent, so every runner rebuilds it with its
+        # native cc + OpenSSL — no per-platform seed. Matches ci.yml. BOOT_VER is
+        # the release the C was emitted from.
         run: |
           set -e
-          BOOT_TAG=v0.8.0
-          ver="${BOOT_TAG#v}"
-          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${BOOT_TAG}"
-          mkdir -p .boot
+          BOOT_VER=0.8.0
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${BOOT_VER}"
+          curl -fL -o glide-boot.c "${base}/glide-bootstrap-${BOOT_VER}.c"
+          CF="-O2 -w -fwrapv -fno-omit-frame-pointer -Wno-error=implicit-function-declaration"
           if [ "${{ runner.os }}" = "Windows" ]; then
-            asset="glide-${{ matrix.name }}-${ver}.zip"
-            curl -fL -o ".boot/${asset}" "${base}/${asset}"
-            unzip -q ".boot/${asset}" -d .boot
-            cp "$(find .boot -name glide.exe | head -1)" glide_boot.exe
-            ./glide_boot.exe build bootstrap/main.glide -o glide.exe
+            gcc glide-boot.c -o glide.exe $CF -lssl -lcrypto -lws2_32 -lmswsock -ldbghelp -lpsapi -lbcrypt -lcrypt32 -lpthread -lm
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            brew install openssl@3 >/dev/null
+            SSL="$(brew --prefix openssl@3)"
+            clang glide-boot.c -o glide $CF -I"$SSL/include" -L"$SSL/lib" -lssl -lcrypto -lpthread -lm
           else
-            asset="glide-${{ matrix.name }}-${ver}.tar.gz"
-            curl -fL -o ".boot/${asset}" "${base}/${asset}"
-            tar -xzf ".boot/${asset}" -C .boot
-            cp "$(find .boot -name glide -type f | head -1)" glide_boot
-            chmod +x glide_boot
-            ./glide_boot build bootstrap/main.glide -o glide
+            sudo apt-get update && sudo apt-get install -y libssl-dev
+            cc glide-boot.c -o glide $CF -D_GNU_SOURCE -lssl -lcrypto -ldl -lpthread -lm
           fi
 
       - name: Package small release artifact
