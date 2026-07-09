@@ -2642,7 +2642,19 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     // Stored as `eff_target` because Glide's codegen emits param + same-
     // named local as two declarations in one C scope, which gcc rejects.
     let mut eff_target: string = target;
-    if eff_target.eq("") && needs_any_lib {
+    // A sanitizer build must not promote to the static musl sysroot: the
+    // clang/gcc sanitizer runtimes resolve the real libc functions through
+    // dlsym(RTLD_NEXT), which always fails inside a fully-static binary —
+    // the intercepted call (signal, in the trap-installing constructor)
+    // lands on NULL and the process segfaults before main. Only the Linux
+    // promotion produces a fully-static artefact (macOS keeps libSystem
+    // dynamic, so dyld still feeds the interceptors there); stay on the
+    // host cc + system libs for `-fsanitize` builds on Linux instead.
+    // (This is why the UBSan CI lane crashed on exactly the openssl-linking
+    // tests: those were the only promoted test binaries.)
+    let sanitized: bool = user_cflags.contains("-fsanitize") || user_ldflags.contains("-fsanitize");
+    let sanitizer_veto: bool = sanitized && _target_os(_host_triple()).eq("linux");
+    if eff_target.eq("") && needs_any_lib && !sanitizer_veto {
         let host_triple: string = _host_triple();
         // Promote only when a backend can actually drive the promoted
         // build (the native host toolchain on win/mac, or clang against
