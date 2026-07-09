@@ -5,7 +5,7 @@
 import foo;
 import a::b;
 
-struct Box { inner: foo::Bar }
+struct Wrap { inner: foo::Bar }
 
 fn make(n: i32) -> foo::Bar { return foo::Bar::mk(n); }   // qualified return
 fn bar_n(r: *foo::Bar) -> i32 { return r.n; }              // qualified *ptr param
@@ -19,7 +19,7 @@ fn classify(c: foo::Color) -> i32 {                       // qualified match-arm
 
 fn main() {
     let b: foo::Bar = make(7);                  // qualified let annotation -> 7
-    let bx: Box = Box { inner: foo::Bar::mk(5) };  // qualified struct field -> 5
+    let bx: Wrap = Wrap { inner: foo::Bar::mk(5) };  // qualified struct field -> 5
     let mut v = Vector::new();                   // qualified container element
     v.push(foo::Bar::mk(3));                     // -> 3
     let t: b::Thing = b::Thing::mk(9);           // submodule-qualified type -> 9
