@@ -151,6 +151,10 @@ c_raw! {
     #include <sys/sysctl.h>
     #include <sys/time.h>
     #endif
+    #ifdef __APPLE__
+    #include <mach-o/dyld.h>
+    #include <limits.h>
+    #endif
     #endif
 
     static int __glide_is_windows(void) {
@@ -291,6 +295,30 @@ c_raw! {
         DWORD n = GetModuleFileNameA(NULL, buf, sizeof(buf));
         if (n == 0 || n >= sizeof(buf)) { buf[0] = 0; return buf; }
         for (DWORD i = n; i > 0; i--) { if (buf[i-1] == '\\' || buf[i-1] == '/') { buf[i-1] = 0; return buf; } }
+        return "";
+    }
+    #elif defined(__APPLE__)
+    /* macOS has no /proc; the kernel hands back the exe path via
+       _NSGetExecutablePath (which may carry symlinks/.. — realpath it). */
+    static const char* __glide_exe_path(void) {
+        static char buf[1024];
+        char raw[1024];
+        uint32_t sz = sizeof(raw);
+        if (_NSGetExecutablePath(raw, &sz) != 0) { buf[0] = 0; return buf; }
+        if (realpath(raw, buf) == NULL) {
+            size_t n = strlen(raw);
+            if (n >= sizeof(buf)) n = sizeof(buf) - 1;
+            memcpy(buf, raw, n); buf[n] = 0;
+        }
+        return buf;
+    }
+    static const char* __glide_exe_dir(void) {
+        static char buf[1024];
+        const char* p = __glide_exe_path();
+        size_t n = strlen(p);
+        if (n >= sizeof(buf)) n = sizeof(buf) - 1;
+        memcpy(buf, p, n); buf[n] = 0;
+        for (size_t i = n; i > 0; i--) { if (buf[i-1] == '/') { buf[i-1] = 0; return buf; } }
         return "";
     }
     #else
