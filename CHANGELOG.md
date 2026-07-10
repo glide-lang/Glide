@@ -1,6 +1,39 @@
 # Changelog
 
-## 0.8.0 — 2026-07-08 (assets rebuilt 2026-07-09)
+## 0.9.0 — 2026-07-10
+
+Glide stops linking any third-party C library and starts carrying its own C
+toolchain. A `glide build` now needs nothing on the host — not OpenSSL, not a
+system compiler for a bundle install — and produces a fully-static, run-
+anywhere binary by default.
+
+- **The OpenSSL backend is gone.** `stdlib::net::tls` is a single pure-Glide
+  TLS 1.2/1.3 stack (1448 → 592 lines); nothing links `-lssl -lcrypto`, and the
+  per-process `GLIDE_TLS_BACKEND=openssl` fallback is retired. mail (SMTP/POP3/
+  IMAP), WebSocket and HTTP ride the pure-Glide stack unchanged.
+- **The C-backed HTTP/3 is dropped** — the old `stdlib::http::h3` pulled in
+  ngtcp2 + nghttp3 + OpenSSL's QUIC API, the last consumers of a third-party C
+  lib. The pure-Glide QUIC transport in `stdlib::net::quic` stays; HTTP/3
+  returns as a stdlib module once it is wired on top of it.
+- **Static-musl by default on Linux.** A bare `glide build` promotes to the
+  bundled musl sysroot, so the binary runs anywhere on the arch with no `.so` —
+  no `apt install glibc-static`, no static-glibc NSS caveats. `--dynamic` opts
+  back out; macOS keeps its unavoidable dynamic libSystem.
+- **Bundled zig as the embedded C backend.** A bundle release bakes the zig
+  toolchain into the binary and compiles the emitted C with it, so a fresh
+  install builds — and cross-builds, and links static musl — with no system cc
+  at all. From-source ("small") builds ship no zig and use the host cc.
+  `GLIDE_DEBUG_CC=1` prints the exact backend invocation.
+- **Generic type-argument diagnostics.** A generic struct named without its
+  `<...>` (`missing-type-args`) or with the wrong count (`type-arg-arity`) is
+  flagged at the annotation site, mirroring the impl-site check. A name that
+  also has a non-generic declaration (a local `struct Pair(...)` shadowing the
+  builtin `Pair<K,V>`) is left alone.
+- LSP: editing a file inside the auto-injected builtin set no longer gets a
+  second, header-only copy of every decl (phantom duplicate-definition /
+  missing-return diagnostics).
+
+
 
 Post-release rebuild of the 0.8.0 binaries with the fixes and one feature
 that landed right after the tag:
