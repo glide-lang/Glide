@@ -45,50 +45,41 @@ jobs:
           update: true
           install: >-
             mingw-w64-ucrt-x86_64-gcc
-            mingw-w64-ucrt-x86_64-openssl
             mingw-w64-ucrt-x86_64-python
             curl zip unzip tar gzip
 
       - name: Install build deps (Linux)
         # clang + lld drive cross/promoted builds against the sysroot's
-        # libc/ tree — the cross backend since the zig removal. libssl-dev
-        # links the emitted-C bootstrap against the host OpenSSL.
+        # libc/ tree — the cross backend since the zig removal. No libssl-dev:
+        # the 0.9.0 seed is pure-Glide and links no OpenSSL.
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang lld libssl-dev curl python3 python-is-python3
-
-      - name: Install build deps (macOS)
-        # Native build only (Apple clang compiles the emitted C); no lld — its
-        # presence would make the freestanding smoke think it can emit an
-        # x86_64 ELF kernel, which Apple clang can't.
-        if: matrix.os == 'macos-latest'
-        run: brew install openssl@3
+          sudo apt-get install -y build-essential clang lld curl python3 python-is-python3
 
       - name: Bootstrap the compiler from the released C
         # Glide is self-hosting; rather than seed from a previous *binary*
-        # (which can't compile syntax newer than itself — 0.8.0's receivers
-        # broke every older release), the release ships the compiler's own
-        # emitted C. Each platform rebuilds it with its native C compiler — no
-        # per-platform Glide seed, no bootstrap chicken-and-egg. The C is
-        # platform-independent (the emitted source carries the __APPLE__/_WIN32
-        # feature guards), so one file bootstraps every OS. BOOT_VER tracks the
-        # release the C was emitted from.
+        # (which can't compile syntax newer than itself), the release ships the
+        # compiler's own emitted C. Each platform rebuilds it with just its
+        # native C compiler — no OpenSSL (the seed is pure-Glide since 0.9.0),
+        # no per-platform Glide seed. The C is platform-independent (the emitted
+        # source carries the __APPLE__/_WIN32 feature guards), so one file
+        # bootstraps every OS. BOOT_VER tracks the release the C was emitted
+        # from; it must be >= the first pure-Glide release (0.9.0).
         run: |
           set -e
-          BOOT_VER=0.8.0
+          BOOT_VER=0.9.0
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${BOOT_VER}"
           curl -fL -o glide-boot.c "${base}/glide-bootstrap-${BOOT_VER}.c"
           CF="-O2 -w -fwrapv -fno-omit-frame-pointer -Wno-error=implicit-function-declaration"
           if [ "${{ runner.os }}" = "Windows" ]; then
-            gcc glide-boot.c -o glide.exe $CF -lssl -lcrypto -lws2_32 -lmswsock -ldbghelp -lpsapi -lbcrypt -lcrypt32 -lpthread -lm
+            gcc glide-boot.c -o glide.exe $CF -lws2_32 -lmswsock -ldbghelp -lpsapi -lbcrypt -lcrypt32 -lpthread -lm
             ./glide.exe version
           elif [ "${{ runner.os }}" = "macOS" ]; then
-            SSL="$(brew --prefix openssl@3)"
-            clang glide-boot.c -o glide $CF -I"$SSL/include" -L"$SSL/lib" -lssl -lcrypto -lpthread -lm
+            clang glide-boot.c -o glide $CF -lpthread -lm
             ./glide version
           else
-            cc glide-boot.c -o glide $CF -D_GNU_SOURCE -lssl -lcrypto -ldl -lpthread -lm
+            cc glide-boot.c -o glide $CF -D_GNU_SOURCE -ldl -lpthread -lm
             ./glide version
           fi
 
@@ -173,17 +164,18 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install build deps
-        # System libssl dev package: the UBSan run stays on the
-        # host-cc path (no sysroot), since sanitizer runtimes for the
-        # cross musl target aren't shipped.
+        # The UBSan run stays on the host-cc path (no sysroot) — sanitizer
+        # runtimes for the cross musl target aren't shipped. No libssl-dev:
+        # the boot binary is a self-contained musl-static 0.9.x and the pure-
+        # Glide test binaries link no OpenSSL.
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang lld libssl-dev curl python3 python-is-python3
+          sudo apt-get install -y build-essential clang lld curl python3 python-is-python3
 
       - name: Bootstrap compiler from a published release
         run: |
           set -e
-          BOOT_TAG=v0.8.0
+          BOOT_TAG=v0.9.0
           ver="${BOOT_TAG#v}"
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${BOOT_TAG}"
           mkdir -p .boot
@@ -201,8 +193,8 @@ jobs:
           # `-fsanitize` in the flags makes glide skip the static-musl sysroot
           # promotion (sanitizer runtimes resolve libc through dlsym(RTLD_NEXT),
           # which can't work in a fully-static binary), so the test binaries
-          # link dynamically against the system glibc + libssl-dev installed
-          # above — the environment clang's UBSan runtime actually supports.
+          # link dynamically against the system glibc — the environment clang's
+          # UBSan runtime actually supports that.
           export GLIDE_CFLAGS="-fsanitize=undefined -fno-sanitize-recover=undefined -g"
           export GLIDE_LDFLAGS="-fsanitize=undefined"
           ./glide test tests
