@@ -29,6 +29,8 @@ c_raw! {
     static int   __glide_embed_sysroot_len(const char* triple) { (void)triple; return 0; }
     static void* __glide_embed_src(void) { return (void*)0; }
     static int   __glide_embed_src_len(void) { return 0; }
+    static void* __glide_embed_zig(void) { return (void*)0; }
+    static int   __glide_embed_zig_len(void) { return 0; }
 }
 
 extern fn __glide_embed_sysroot(triple: string) -> *void;
@@ -38,6 +40,10 @@ extern fn __glide_embed_sysroot_len(triple: string) -> i32;
 extern fn __glide_embed_src() -> *void;
 
 extern fn __glide_embed_src_len() -> i32;
+
+extern fn __glide_embed_zig() -> *void;
+
+extern fn __glide_embed_zig_len() -> i32;
 
 // Pointer to the embedded sysroot tarball for `triple`, or null when
 // it isn't bundled in this build.
@@ -70,4 +76,20 @@ pub fn has_embedded_sysroot(triple: string) -> bool {
 // True when this glide binary ships an embedded `src/` tree.
 pub fn has_embedded_src() -> bool {
     return __glide_embed_src_len() > 0;
+}
+
+// Pointer to the embedded zig toolchain tarball (the C backend for the
+// emitted code), or null on non-bundle builds.
+pub fn embedded_zig() -> *void {
+    return __glide_embed_zig();
+}
+
+// Size in bytes of the embedded zig tarball, or 0 on non-bundle builds.
+pub fn embedded_zig_len() -> i32 {
+    return __glide_embed_zig_len();
+}
+
+// True when this glide binary ships an embedded zig toolchain.
+pub fn has_embedded_zig() -> bool {
+    return __glide_embed_zig_len() > 0;
 }

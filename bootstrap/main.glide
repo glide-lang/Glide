@@ -1904,8 +1904,14 @@ fn parse_program_into(stmts: *Vector<Stmt>, path: string, pdiags: *Vector<ParseD
 // Returns "" when nothing usable is found, so the caller can print a
 // targeted per-platform install hint.
 fn pick_cc_host(_needs_libs: bool) -> string {
+    // $CC always wins — the explicit escape hatch.
     let env: string = __glide_getenv("CC");
     if !env.eq("") { return env; }
+    // Bundle builds carry their own zig and use it as THE C backend, so every
+    // machine compiles the emitted C identically with zero system toolchain.
+    // Small (non-bundle) builds ship no zig and fall through to the host cc.
+    let zc: string = _bundled_zig_cc();
+    if !zc.eq("") { return zc; }
     if _have_on_path("cc") { return "cc"; }
     if _have_on_path("gcc") { return "gcc"; }
     if _have_on_path("clang") { return "clang"; }
@@ -1983,25 +1989,32 @@ fn pick_cc_for_target(triple: string, needs_libs: bool) -> !*CrossBackend {
     if tos.eq("macos") && !triple.eq(host) {
         return err("cross-compiling to macOS is not supported; build natively on a Mac (Apple clang).");
     }
-    // Tier 2: clang + the v2 sysroot's libc/ tree.
-    if _have_on_path("clang") && _sysroot_has_libc(triple) {
+    // Tier 2: clang — or the bundled `zig cc`, which IS clang with its own
+    // lld + compiler-rt — plus the v2 sysroot's libc/ tree. Prefer a system
+    // clang when present; otherwise drive the cross build with the embedded
+    // zig, so a bundle install cross-compiles with zero system toolchain.
+    let use_zig: bool = !_have_on_path("clang");
+    let cross_cc: string = if use_zig { _bundled_zig_cc() } else { "clang" };
+    if !cross_cc.eq("") && _sysroot_has_libc(triple) {
         let dir: string = _target_dir(triple);
         let mut extra: string = " --sysroot=\"".concat(dir).concat("/libc\" -B\"").concat(dir).concat("/libc/gcc\" -L\"").concat(dir).concat("/libc/gcc\" --rtlib=libgcc");
-        // The system GNU ld only links the host's own arch/OS; anything
-        // else needs lld. Same-arch same-OS (e.g. glibc host -> musl
-        // target) links fine with either, but prefer lld when present.
-        let foreign: bool = !_triple_arch(triple).eq(_triple_arch(host)) || !tos.eq(_target_os(host));
-        if _have_lld() {
-            extra = extra.concat(" -fuse-ld=lld");
-        } else {
-            if foreign {
-                return err("--target=".concat(triple).concat(" needs the lld linker for a foreign arch/OS.\n").concat(_clang_install_hint()));
+        // zig bundles lld and links any arch/OS itself; a system clang leans on
+        // the system linker, so it needs lld for a foreign arch/OS. Same-arch
+        // same-OS (glibc host -> musl target) links fine with either.
+        if !use_zig {
+            let foreign: bool = !_triple_arch(triple).eq(_triple_arch(host)) || !tos.eq(_target_os(host));
+            if _have_lld() {
+                extra = extra.concat(" -fuse-ld=lld");
+            } else {
+                if foreign {
+                    return err("--target=".concat(triple).concat(" needs the lld linker for a foreign arch/OS.\n").concat(_clang_install_hint()));
+                }
             }
         }
-        return ok(_mk_backend("clang", true, extra));
+        return ok(_mk_backend(cross_cc, true, extra));
     }
-    if !_have_on_path("clang") {
-        return err("--target needs clang (the cross C backend) on PATH.\n".concat(_clang_install_hint()));
+    if cross_cc.eq("") {
+        return err("--target needs clang (or a bundle build's embedded zig) as the cross C backend.\n".concat(_clang_install_hint()));
     }
     // clang is present but the sysroot lacks the libc/ tree (v1 layout).
     return err("the ".concat(triple).concat(" sysroot has no libc/ tree (pre-v2 layout). Refresh it:\n").concat("  glide target remove ").concat(triple).concat(" && glide target add ").concat(triple));
@@ -2050,21 +2063,60 @@ fn _maybe_install_embedded_src() {
     write_file(marker, GLIDE_VERSION);
 }
 
-// One-time migration: pre-zig-removal installs self-extracted a bundled
-// Zig toolchain into ~/.glide (and `glide install` copied one under
-// ~/.glide/bin). Reclaim the ~340MB — the C backend is the system
-// cc/clang now.
-fn _cleanup_legacy_zig() {
-    let home: !string = os_home_dir();
-    if !home.is_ok() { return; }
-    let d1: string = home.unwrap().concat("/.glide/runtime/zig");
-    if fs_is_dir(d1) {
-        fs_remove_dir_rec(d1);
-        println!("note: removed the legacy bundled zig toolchain at", d1);
-        println!("      (the C backend is the system cc/clang now)");
+// Bundle binaries ship the zig toolchain (the C backend) baked in. Extract
+// it to `~/.glide/runtime/zig/` on first run so pick_cc_host can compile the
+// emitted C with no system compiler — the "written in Glide, runs anywhere"
+// story extends to *building* it. Idempotent via a version marker; a no-op on
+// small (non-bundle) builds, which fall back to the system cc/clang. Also
+// reclaims the pre-relocation copy the old `glide install` dropped under
+// ~/.glide/bin/runtime/zig (the canonical home is ~/.glide/runtime/zig now).
+fn _maybe_install_embedded_zig() {
+    let home_r: !string = os_home_dir();
+    if !home_r.is_ok() { return; }
+    let home: string = home_r.unwrap();
+    let legacy: string = home.concat("/.glide/bin/runtime/zig");
+    if fs_is_dir(legacy) { fs_remove_dir_rec(legacy); }
+    if !has_embedded_zig() { return; }
+    let dest: string = home.concat("/.glide/runtime/zig");
+    let marker: string = dest.concat("/.glide_zig_version");
+    // Marker already matches → the toolchain for this version is in place.
+    if __glide_file_exists(marker) {
+        let v: string = read_file(marker).trim();
+        if v.eq(GLIDE_VERSION) { return; }
     }
-    let d2: string = home.unwrap().concat("/.glide/bin/runtime/zig");
-    if fs_is_dir(d2) { fs_remove_dir_rec(d2); }
+    let bytes_ptr: *void = embedded_zig();
+    let bytes_len: i32 = embedded_zig_len();
+    if bytes_ptr == null || bytes_len <= 0 { return; }
+    let archive_gz: string = __glide_string_from_buf(bytes_ptr, bytes_len);
+    let mut decoded_len: i32 = 0;
+    let raw: *void = gzip_decode(archive_gz, bytes_len, &decoded_len);
+    if raw == null || decoded_len <= 0 { return; }
+    let archive: string = __glide_string_from_buf(raw, decoded_len);
+    fs_remove_dir_rec(dest);
+    if !fs_mkdir_p(dest) {
+        free(raw);
+        return;
+    }
+    // strip-1 collapses the leading `zig/` directory in the tarball so the
+    // `zig` binary + `lib/` land directly under ~/.glide/runtime/zig/.
+    let extracted: i32 = tar_extract(archive, decoded_len, dest, 1);
+    free(raw);
+    if extracted < 0 {
+        fs_remove_dir_rec(dest);
+        return;
+    }
+    write_file(marker, GLIDE_VERSION);
+}
+
+// The bundled `zig cc` C-backend command (path quoted), or "" when this build
+// ships no zig — small builds then fall back to the system cc in pick_cc_host.
+fn _bundled_zig_cc() -> string {
+    let home_r: !string = os_home_dir();
+    if !home_r.is_ok() { return ""; }
+    let mut zbin: string = home_r.unwrap().concat("/.glide/runtime/zig/zig");
+    if __glide_is_windows() != 0 { zbin = zbin.concat(".exe"); }
+    if __glide_file_exists(zbin) { return "\"".concat(zbin).concat("\" cc"); }
+    return "";
 }
 
 // `command -v` / `where` thin wrapper. Returns true if the program
@@ -2687,7 +2739,10 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
         // hard-errors: there the user requested the cross pipeline.
         let hos: string = _target_os(host_triple);
         let native_ok: bool = (hos.eq("windows") || hos.eq("macos")) && !pick_cc_host(needs_any_lib).eq("");
-        let maybe_backend: bool = native_ok || _have_on_path("clang");
+        // The bundled `zig cc` drives the promoted cross build just like a
+        // system clang would, so a bundle install promotes with no system
+        // toolchain at all.
+        let maybe_backend: bool = native_ok || _have_on_path("clang") || !_bundled_zig_cc().eq("");
         if !host_triple.eq("") && _is_known_target(host_triple) && maybe_backend {
             // Auto-install the host sysroot on first use, same as the
             // explicit-target branch below. Soft-fail to the host-cc
@@ -2970,6 +3025,10 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     // outer wrap conflicts with cmd.exe's parsing when the inner paths are
     // also quoted, so skip it for the common case of an unquoted cc on PATH.
     if __glide_is_windows() != 0 && cc.starts_with("\"") { cmd = "\"".concat(cmd).concat("\""); }
+    // Escape hatch to see the exact C-backend invocation (which cc, which
+    // flags, which sysroot) — invaluable when the bundled zig / promotion
+    // picks a different toolchain than expected.
+    if !__glide_getenv("GLIDE_DEBUG_CC").eq("") { println!("[cc]", cmd); }
     let rc: i32 = __glide_shell(cmd);
     if rc != 0 {
         if !quiet { spinner_finish(false, ""); }
@@ -3818,7 +3877,7 @@ fn main() -> i32 {
     // installer script. Idempotent — the second run sees the marker
     // file and skips the extract.
     _maybe_install_embedded_src();
-    _cleanup_legacy_zig();
+    _maybe_install_embedded_zig();
     if argc < 2 {
         print_usage();
         return 1;
