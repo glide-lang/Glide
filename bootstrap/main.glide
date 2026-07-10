@@ -2622,9 +2622,15 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     // c_raw header include emits the contiguous `#include <…>` directive,
     // and the concatenated needle never appears whole in this source.
     let inc: string = "#include ".concat("<");
-    // zlib is gone: stdlib::compress is pure Glide (DEFLATE/inflate/CRC-32),
-    // so nothing emits <zlib.h> and the toolchain no longer links -lz. A user
-    // who hand-writes zlib in a c_raw block links it themselves via --ldflags.
+    // No stdlib module links a third-party C library any more: TLS 1.2/1.3
+    // (stdlib::net::tls) and compression (stdlib::compress) are pure Glide, so
+    // nothing emits <openssl/…>, <ngtcp2/…>, <nghttp3/…> or <zlib.h> and a
+    // plain build links only libc + pthread. The detection below survives as an
+    // escape hatch: a user who hand-writes one of these in a c_raw block still
+    // gets it auto-linked (or supplies the libs via --ldflags). The C-backed
+    // HTTP/3 module (the old stdlib::http::h3, which pulled ngtcp2 + nghttp3 +
+    // OpenSSL) was dropped; the pure-Glide QUIC transport in stdlib::net::quic
+    // stays, and HTTP/3 returns as a stdlib module once it's wired on top of it.
     let needs_ngtcp2: bool = emitted_c.contains(inc.concat("ngtcp2/"));
     let needs_nghttp3: bool = emitted_c.contains(inc.concat("nghttp3/"));
     let needs_h3: bool = needs_ngtcp2 || needs_nghttp3;

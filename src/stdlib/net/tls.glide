@@ -1,11 +1,8 @@
-// TLS 1.2 / 1.3 client and server, backed by OpenSSL.
+// TLS 1.2 / 1.3 client and server — a pure-Glide implementation, no OpenSSL.
 //
-// Build requires libssl + libcrypto on the link line — Glide adds
-// `-lssl -lcrypto` unconditionally; if OpenSSL isn't installed, the
-// link fails with the usual `cannot find -lssl` error.
-//
-// On Windows: `mingw-w64-ucrt-x86_64-openssl` (UCRT64 toolchain)
-// On Linux/macOS: `libssl-dev` / `openssl@3`
+// Links no third-party C libraries: the record layer, handshake, and X.509
+// verification are all Glide, riding the pure-Glide crypto primitives in
+// stdlib::crypto. Every build is fully static with no libssl/libcrypto.
 //
 // ```glide
 // import stdlib::net::tls::*;
@@ -22,8 +19,7 @@
 //
 // Caveats:
 //   * SNI is set automatically from the host name passed to connect().
-//   * System CA bundle is used for verification (SSL_CTX_set_default_
-//     verify_paths). Override via TlsConfig.ca_bundle.
+//   * The OS trust store is used for chain verification.
 //   * verify=false disables cert validation — never do this in prod.
 import stdlib::net::ip::*;
 import stdlib::net::dns::*;
@@ -31,19 +27,13 @@ import stdlib::net::tcp::*;
 import stdlib::net::listener::*;
 import stdlib::net::sys::*; // Stream trait — TlsStream is a Stream
 import stdlib::bytes::*; // ByteBuffer — O(n) read accumulation
-import stdlib::net::tls13::client::*; // pure-Glide TLS 1.3 backend
-import stdlib::net::tls12::client::*; // pure-Glide TLS 1.2 backend (legacy fallback)
-import stdlib::env::*; // GLIDE_TLS_BACKEND selector
+import stdlib::net::tls13::client::*; // TLS 1.3 backend
+import stdlib::net::tls12::client::*; // TLS 1.2 backend (legacy fallback)
 
 // ============================================================================
 // TLS backend scope — THE RULE
 // ============================================================================
-// TLS runs on the pure-Glide backend BY DEFAULT. OpenSSL is opt-out, selected
-// per-process with `GLIDE_TLS_BACKEND=openssl`. When you hit something the
-// pure-Glide backend does not cover, set that env var — do not silently
-// weaken security to work around it.
-//
-// The pure-Glide backend COVERS (and is the default for):
+// COVERS:
 //   * Client: TLS 1.3 and TLS 1.2, verifying or insecure, over connect().
 //     1.3 is tried first and falls back to 1.2 for 1.2-only servers.
 //   * Server: TLS 1.3 and TLS 1.2 (version-dispatched), ECDSA or RSA certs.
@@ -52,747 +42,20 @@ import stdlib::env::*; // GLIDE_TLS_BACKEND selector
 //   * Auth: ECDSA P-256/P-384 (verify), RSA PKCS#1-v1.5 + PSS (verify+sign).
 //   * X.509 chain verification against the OS trust store, RFC 6125 hostname.
 //
-// The pure-Glide backend does NOT implement (falls back to OpenSSL — set
-// GLIDE_TLS_BACKEND=openssl):
+// NOT IMPLEMENTED YET:
 //   * STARTTLS attach() to a TLS-1.2-ONLY server. attach() speaks 1.3 only
 //     (it cannot reconnect to retry a lower version on an in-use socket);
 //     1.3-capable STARTTLS servers — every modern mail host — work.
-//   * HTTP/3 / QUIC (stdlib::http::h3 is OpenSSL + ngtcp2 + nghttp3).
+//   * HTTP/3 / QUIC.
 //   * Client certificates (mTLS), session resumption / tickets / 0-RTT,
 //     and OCSP / CRL revocation checking.
 //
-// The pure-Glide backend WILL NOT implement (deliberately dropped as legacy
-// or insecure — use OpenSSL only if a peer truly requires them):
+// DELIBERATELY DROPPED (legacy or insecure):
 //   * TLS 1.0 / 1.1, SSLv3.
 //   * CBC cipher suites (MAC-then-encrypt), RC4, 3DES.
 //   * Static-RSA and finite-field (non-EC) DH key exchange, DSA.
 //   * TLS renegotiation.
 // ============================================================================
-c_raw! {
-    #ifndef GLIDE_NET_TLS_HELPERS_DEFINED
-    #define GLIDE_NET_TLS_HELPERS_DEFINED
-    #include <openssl/ssl.h>
-    #include <openssl/err.h>
-    #include <openssl/x509v3.h>
-    #ifdef _WIN32
-    #include <winsock2.h>
-    #include <ws2tcpip.h>
-    #include <wincrypt.h>
-    typedef SOCKET __glide_tls_sock;
-    #define __GLIDE_TLS_INVALID INVALID_SOCKET
-    #else
-    #include <sys/socket.h>
-    #include <netinet/in.h>
-    #include <unistd.h>
-    typedef int __glide_tls_sock;
-    #define __GLIDE_TLS_INVALID (-1)
-    #endif
-    #include <stdint.h>
-    #include <string.h>
-    #include <stdlib.h>
-
-    // Pull CA certs from the Windows ROOT + CA system stores into the
-    // OpenSSL X509_STORE. SSL_CTX_set_default_verify_paths alone is a
-    // no-op on MSYS2 / mingw because OpenSSL's compiled-in OPENSSLDIR
-    // (`/ucrt64/etc/ssl/`) ships empty — there's no `cert.pem` for it
-    // to load. Without this fallback every HTTPS verify on Windows
-    // returns "tls: connect failed", and the user is left configuring
-    // SSL_CERT_FILE by hand. Crypt32 is the path Rust (rustls-native-
-    // certs) and Go (crypto/x509 on Windows) take; OpenSSL itself
-    // doesn't because it stays portable. Bridging the two is one
-    // d2i_X509 per cert.
-    static void __glide_tls_load_win_certs(SSL_CTX* ctx) {
-        (void)ctx;
-        #ifdef _WIN32
-        if (ctx == NULL) return;
-        X509_STORE* store = SSL_CTX_get_cert_store(ctx);
-        if (store == NULL) return;
-        const wchar_t* names[2] = { L"ROOT", L"CA" };
-        for (int i = 0; i < 2; i++) {
-            HCERTSTORE sys = CertOpenSystemStoreW((HCRYPTPROV_LEGACY)0, names[i]);
-            if (sys == NULL) continue;
-            PCCERT_CONTEXT cc = NULL;
-            while ((cc = CertEnumCertificatesInStore(sys, cc)) != NULL) {
-                const unsigned char* p = cc->pbCertEncoded;
-                X509* x = d2i_X509(NULL, &p, (long)cc->cbCertEncoded);
-                if (x != NULL) {
-                    // Returns 0 when the cert is already present; that's
-                    // fine — silently ignore the duplicate.
-                    X509_STORE_add_cert(store, x);
-                    X509_free(x);
-                }
-            }
-            CertCloseStore(sys, 0);
-        }
-        #endif
-    }
-
-    // One-shot OpenSSL init. WSAStartup must run BEFORE any networking
-    // call on Windows, so it happens first. OPENSSL_init_ssl is
-    // idempotent in 1.1+; the sentinel just keeps the hot path cheap.
-    static int __glide_tls_init_done = 0;
-    static void __glide_tls_init(void) {
-        if (__glide_tls_init_done) return;
-        #ifdef _WIN32
-        WSADATA w; WSAStartup(MAKEWORD(2,2), &w);
-        #endif
-        OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS
-                       | OPENSSL_INIT_LOAD_CRYPTO_STRINGS, NULL);
-        __glide_tls_init_done = 1;
-    }
-
-    typedef struct __glide_tls_handle {
-        SSL_CTX*       ctx;
-        SSL*           ssl;
-        __glide_tls_sock sock;
-        char           last_err[256];
-    } __glide_tls_handle;
-
-    // Capture the latest OpenSSL error message into the handle. Pull
-    // from the error queue so subsequent ERR_get_error()s are clean.
-    static void __glide_tls_grab_err(__glide_tls_handle* h, const char* fallback) {
-        unsigned long e = ERR_get_error();
-        if (e != 0) {
-            const char* s = ERR_reason_error_string(e);
-            if (s == NULL) s = fallback;
-            strncpy(h->last_err, s, sizeof(h->last_err) - 1);
-            h->last_err[sizeof(h->last_err) - 1] = 0;
-        } else {
-            strncpy(h->last_err, fallback, sizeof(h->last_err) - 1);
-            h->last_err[sizeof(h->last_err) - 1] = 0;
-        }
-    }
-
-    // family / packed v4 / v6 hi/lo / port / hostname / verify / min_proto.
-    // min_proto: 0=TLS1.0, 1=TLS1.1, 2=TLS1.2, 3=TLS1.3
-    // Returns handle pointer (cast to void*) or NULL on failure. On
-    // failure, no resources leak — every error path releases what it
-    // built. The caller can call __glide_tls_last_err on a saved
-    // handle from a prior call to introspect; first-call failures
-    // surface only the rough cause.
-    // Comma-separated ALPN list -> wire-format prefix-length encoding
-    // expected by SSL_CTX_set_alpn_protos. Returns malloc'd buffer +
-    // length via out_len.
-    static unsigned char* __glide_tls_alpn_pack(const char* csv, int* out_len) {
-        if (csv == NULL || csv[0] == 0) { *out_len = 0; return NULL; }
-        size_t total = 0;
-        const char* p = csv;
-        while (*p) {
-            const char* q = strchr(p, ',');
-            size_t n = q ? (size_t)(q - p) : strlen(p);
-            if (n == 0 || n > 255) { *out_len = 0; return NULL; }
-            total += 1 + n;
-            if (!q) break;
-            p = q + 1;
-        }
-        unsigned char* out = (unsigned char*)malloc(total);
-        size_t i = 0;
-        p = csv;
-        while (*p) {
-            const char* q = strchr(p, ',');
-            size_t n = q ? (size_t)(q - p) : strlen(p);
-            out[i++] = (unsigned char)n;
-            memcpy(out + i, p, n);
-            i += n;
-            if (!q) break;
-            p = q + 1;
-        }
-        *out_len = (int)total;
-        return out;
-    }
-
-    // Wrap an already-connected raw socket fd in TLS. Used for
-    // STARTTLS upgrades and any protocol that negotiates over plain
-    // TCP first. Caller hands over the fd; on success we own it for
-    // the lifetime of the returned handle. On failure we close it
-    // and return NULL.
-    static void* __glide_tls_attach(int64_t fd, const char* hostname,
-                                     int verify, int min_proto,
-                                     const char* alpn_csv) {
-        __glide_tls_init();
-        const SSL_METHOD* m = TLS_client_method();
-        SSL_CTX* ctx = SSL_CTX_new(m);
-        if (ctx == NULL) return NULL;
-        SSL_CTX_set_default_verify_paths(ctx);
-        __glide_tls_load_win_certs(ctx);
-        if (!verify) SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
-        if (min_proto >= 2) SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
-        if (alpn_csv != NULL && alpn_csv[0] != 0) {
-            int alpn_len = 0;
-            unsigned char* alpn_buf = __glide_tls_alpn_pack(alpn_csv, &alpn_len);
-            if (alpn_buf != NULL) {
-                SSL_CTX_set_alpn_protos(ctx, alpn_buf, (unsigned int)alpn_len);
-                free(alpn_buf);
-            }
-        }
-        SSL* ssl = SSL_new(ctx);
-        if (ssl == NULL) {
-            SSL_CTX_free(ctx);
-            #ifdef _WIN32
-            closesocket((__glide_tls_sock)fd);
-            #else
-            close((__glide_tls_sock)fd);
-            #endif
-            return NULL;
-        }
-        if (hostname != NULL && hostname[0] != 0) {
-            SSL_set_tlsext_host_name(ssl, hostname);
-            if (verify) {
-                X509_VERIFY_PARAM* p = SSL_get0_param(ssl);
-                X509_VERIFY_PARAM_set_hostflags(p, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
-                X509_VERIFY_PARAM_set1_host(p, hostname, 0);
-            }
-        }
-        SSL_set_fd(ssl, (int)fd);
-        if (SSL_connect(ssl) != 1) {
-            SSL_free(ssl);
-            SSL_CTX_free(ctx);
-            #ifdef _WIN32
-            closesocket((__glide_tls_sock)fd);
-            #else
-            close((__glide_tls_sock)fd);
-            #endif
-            return NULL;
-        }
-        __glide_tls_handle* h = (__glide_tls_handle*)malloc(sizeof(__glide_tls_handle));
-        h->ctx = ctx; h->ssl = ssl; h->sock = (__glide_tls_sock)fd;
-        h->last_err[0] = 0;
-        return (void*)h;
-    }
-
-    static void* __glide_tls_connect(int family, int64_t v4,
-                                      int64_t v6_hi, int64_t v6_lo, int port,
-                                      const char* hostname, int verify,
-                                      int min_proto, const char* alpn_csv) {
-        __glide_tls_init();
-
-        // Build context + SSL up front so a transport failure can free both.
-        const SSL_METHOD* m = TLS_client_method();
-        SSL_CTX* ctx = SSL_CTX_new(m);
-        if (ctx == NULL) return NULL;
-        // Default bundle from system. POSIX picks /etc/ssl/certs/...
-        // or whatever OPENSSLDIR was compiled with. On Windows the
-        // mingw-w64-ucrt-x86_64-openssl pkg ships a bundle.
-        SSL_CTX_set_default_verify_paths(ctx);
-        __glide_tls_load_win_certs(ctx);
-        if (verify) {
-            // SSL_VERIFY_PEER is the only mode that combines correctly
-            // with X509_VERIFY_PARAM_set1_host below. Without it some
-            // TLS 1.3 servers send close_notify mid-stream after the
-            // handshake — observed against cloudflare/google/nghttp2
-            // when h2 was negotiated. SSL_VERIFY_NONE in the same
-            // configuration silently breaks the post-handshake state
-            // machine.
-            SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
-        } else {
-            SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
-        }
-        if (min_proto >= 2) {
-            SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
-        }
-        // Note: SSL_CTX_set_alpn_protos copies the buffer per OpenSSL
-        // docs, but in practice on some Windows builds the malloc'd
-        // buffer being freed before SSL_connect runs leaves the ALPN
-        // extension referencing freed memory. Stash the buffer on the
-        // CTX via SSL_CTX_set_ex_data so it lives until the CTX dies.
-        if (alpn_csv != NULL && alpn_csv[0] != 0) {
-            int alpn_len = 0;
-            unsigned char* alpn_buf = __glide_tls_alpn_pack(alpn_csv, &alpn_len);
-            if (alpn_buf != NULL) {
-                SSL_CTX_set_alpn_protos(ctx, alpn_buf, (unsigned int)alpn_len);
-                // Intentionally leak: this buffer is process-lived and
-                // tiny (a few bytes). Freeing has been observed to
-                // break the post-handshake state on TLS 1.3 servers.
-            }
-        }
-
-        // Open the underlying TCP socket directly — same code as net::tcp
-        // but inline so the TLS layer owns the lifetime end-to-end.
-        __glide_tls_sock s;
-        if (family == 6) {
-            s = socket(AF_INET6, SOCK_STREAM, 0);
-            if (s == __GLIDE_TLS_INVALID) { SSL_CTX_free(ctx); return NULL; }
-            struct sockaddr_in6 a;
-            memset(&a, 0, sizeof(a));
-            a.sin6_family = AF_INET6;
-            a.sin6_port = htons((uint16_t)port);
-            unsigned char* p = (unsigned char*)&a.sin6_addr;
-            for (int i = 0; i < 8; i++) p[i]   = (unsigned char)((v6_hi >> (56 - i*8)) & 0xff);
-            for (int i = 0; i < 8; i++) p[8+i] = (unsigned char)((v6_lo >> (56 - i*8)) & 0xff);
-            if (connect(s, (struct sockaddr*)&a, sizeof(a)) != 0) {
-                #ifdef _WIN32
-                closesocket(s);
-                #else
-                close(s);
-                #endif
-                SSL_CTX_free(ctx);
-                return NULL;
-            }
-        } else {
-            s = socket(AF_INET, SOCK_STREAM, 0);
-            if (s == __GLIDE_TLS_INVALID) { SSL_CTX_free(ctx); return NULL; }
-            struct sockaddr_in a;
-            memset(&a, 0, sizeof(a));
-            a.sin_family = AF_INET;
-            a.sin_port = htons((uint16_t)port);
-            a.sin_addr.s_addr = htonl((uint32_t)v4);
-            if (connect(s, (struct sockaddr*)&a, sizeof(a)) != 0) {
-                #ifdef _WIN32
-                closesocket(s);
-                #else
-                close(s);
-                #endif
-                SSL_CTX_free(ctx);
-                return NULL;
-            }
-        }
-
-        SSL* ssl = SSL_new(ctx);
-        if (ssl == NULL) {
-            #ifdef _WIN32
-            closesocket(s);
-            #else
-            close(s);
-            #endif
-            SSL_CTX_free(ctx);
-            return NULL;
-        }
-        // SNI — required for virtual-host TLS servers.
-        if (hostname != NULL && hostname[0] != 0) {
-            SSL_set_tlsext_host_name(ssl, hostname);
-            // Hostname verification — OpenSSL 1.0.2+. Without this the
-            // peer cert is accepted by chain alone, allowing a valid
-            // cert for any other host to MITM us.
-            if (verify) {
-                X509_VERIFY_PARAM* p = SSL_get0_param(ssl);
-                X509_VERIFY_PARAM_set_hostflags(p, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
-                X509_VERIFY_PARAM_set1_host(p, hostname, 0);
-            }
-        }
-        SSL_set_fd(ssl, (int)s);
-
-        if (SSL_connect(ssl) != 1) {
-            __glide_tls_handle* h = (__glide_tls_handle*)malloc(sizeof(__glide_tls_handle));
-            h->ctx = ctx; h->ssl = ssl; h->sock = s;
-            __glide_tls_grab_err(h, "tls: handshake failed");
-            // Caller will see NULL — but free only ssl/ctx/sock here, not h.
-            // We deliberately leak h's err buffer to the caller via a stash.
-            // Simpler path: just clean up and return NULL; error reporting
-            // for first-call failure is generic until we expose a thread-
-            // local last_error, which is not worth the runtime hooks now.
-            SSL_free(ssl);
-            #ifdef _WIN32
-            closesocket(s);
-            #else
-            close(s);
-            #endif
-            SSL_CTX_free(ctx);
-            free(h);
-            return NULL;
-        }
-
-        __glide_tls_handle* h = (__glide_tls_handle*)malloc(sizeof(__glide_tls_handle));
-        h->ctx = ctx; h->ssl = ssl; h->sock = s;
-        h->last_err[0] = 0;
-        return (void*)h;
-    }
-
-    static int64_t __glide_tls_write(void* hp, const char* data, int n) {
-        __glide_tls_handle* h = (__glide_tls_handle*)hp;
-        int rc = SSL_write(h->ssl, data, n);
-        return (int64_t)rc;
-    }
-
-    // Same as write but takes void* — for binary payloads that may
-    // contain NUL bytes (HTTP/2 frames, TLS records, etc.). The
-    // string-typed entry above truncates at the first NUL.
-    int64_t __glide_tls_write_raw(void* hp, void* data, int n) {
-        __glide_tls_handle* h = (__glide_tls_handle*)hp;
-        int rc = SSL_write(h->ssl, (const char*)data, n);
-        return (int64_t)rc;
-    }
-
-    int64_t __glide_tls_read(void* hp, void* buf, int max) {
-        __glide_tls_handle* h = (__glide_tls_handle*)hp;
-        int rc = SSL_read(h->ssl, (char*)buf, max);
-        return (int64_t)rc;
-    }
-
-    static void __glide_tls_close(void* hp) {
-        __glide_tls_handle* h = (__glide_tls_handle*)hp;
-        if (h == NULL) return;
-        SSL_shutdown(h->ssl);
-        SSL_free(h->ssl);
-        #ifdef _WIN32
-        closesocket(h->sock);
-        #else
-        close(h->sock);
-        #endif
-        // ctx may be null when this handle was produced by a listener;
-        // the listener owns the shared SSL_CTX and frees it on close.
-        if (h->ctx != NULL) SSL_CTX_free(h->ctx);
-        free(h);
-    }
-
-    static const char* __glide_tls_alpn(void* hp) {
-        __glide_tls_handle* h = (__glide_tls_handle*)hp;
-        const unsigned char* p = NULL;
-        unsigned int len = 0;
-        SSL_get0_alpn_selected(h->ssl, &p, &len);
-        if (p == NULL || len == 0) return "";
-        char* out = (char*)malloc((size_t)(len + 1));
-        memcpy(out, p, len);
-        out[len] = 0;
-        return out;
-    }
-
-    static int __glide_tls_version(void* hp) {
-        __glide_tls_handle* h = (__glide_tls_handle*)hp;
-        // SSL_version returns TLS1_VERSION (0x0301) ... TLS1_3_VERSION (0x0304)
-        return SSL_version(h->ssl);
-    }
-
-    static const char* __glide_tls_cipher(void* hp) {
-        __glide_tls_handle* h = (__glide_tls_handle*)hp;
-        const char* c = SSL_get_cipher_name(h->ssl);
-        if (c == NULL) return "";
-        return c;
-    }
-
-    // ---- server side ----
-
-    typedef struct __glide_tls_listener {
-        SSL_CTX*       ctx;
-        __glide_tls_sock listen_fd;
-    } __glide_tls_listener;
-
-    // Server-side ALPN preference list. Picked at handshake time by
-    // __glide_tls_server_alpn_select_cb from the client's offered
-    // protocols. Stored as the wire-format wire (1-byte length-prefixed)
-    // attached to the SSL_CTX via SSL_CTX_set_alpn_select_cb's `arg`.
-    typedef struct __glide_tls_alpn_pref {
-        unsigned char* wire;
-        int            wire_len;
-    } __glide_tls_alpn_pref;
-
-    static int __glide_tls_server_alpn_select_cb(SSL* ssl,
-                                                  const unsigned char** out,
-                                                  unsigned char* outlen,
-                                                  const unsigned char* in,
-                                                  unsigned int inlen,
-                                                  void* arg) {
-        (void)ssl;
-        __glide_tls_alpn_pref* pref = (__glide_tls_alpn_pref*)arg;
-        if (pref == NULL || pref->wire == NULL || pref->wire_len <= 0) {
-            return SSL_TLSEXT_ERR_NOACK;
-        }
-        // Walk our preference list (server's choice) and return the
-        // first one that's also in the client's list. This matches
-        // OpenSSL's `SSL_select_next_proto` "server preference" mode.
-        const unsigned char* p = pref->wire;
-        const unsigned char* p_end = pref->wire + pref->wire_len;
-        while (p < p_end) {
-            unsigned char plen = *p;
-            const unsigned char* pname = p + 1;
-            if (pname + plen > p_end) break;
-            const unsigned char* q = in;
-            while (q < in + inlen) {
-                unsigned char qlen = *q;
-                const unsigned char* qname = q + 1;
-                if (qname + qlen > in + inlen) break;
-                if (qlen == plen && memcmp(qname, pname, plen) == 0) {
-                    *out = qname;
-                    *outlen = qlen;
-                    return SSL_TLSEXT_ERR_OK;
-                }
-                q = qname + qlen;
-            }
-            p = pname + plen;
-        }
-        return SSL_TLSEXT_ERR_NOACK;
-    }
-
-    static void* __glide_tls_listen(int port, const char* cert_path,
-                                     const char* key_path,
-                                     const char* alpn_csv) {
-        __glide_tls_init();
-        SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
-        if (ctx == NULL) return NULL;
-        if (SSL_CTX_use_certificate_file(ctx, cert_path, SSL_FILETYPE_PEM) <= 0) {
-            SSL_CTX_free(ctx); return NULL;
-        }
-        if (SSL_CTX_use_PrivateKey_file(ctx, key_path, SSL_FILETYPE_PEM) <= 0) {
-            SSL_CTX_free(ctx); return NULL;
-        }
-        if (!SSL_CTX_check_private_key(ctx)) { SSL_CTX_free(ctx); return NULL; }
-
-        // Install ALPN select callback when csv non-empty. The pref
-        // wire-buffer is heap-allocated and intentionally leaked: it
-        // outlives every connection accepted on this listener (closed
-        // only at process exit alongside the listener).
-        if (alpn_csv != NULL && alpn_csv[0] != 0) {
-            int wire_len = 0;
-            unsigned char* wire = __glide_tls_alpn_pack(alpn_csv, &wire_len);
-            if (wire != NULL && wire_len > 0) {
-                __glide_tls_alpn_pref* pref =
-                    (__glide_tls_alpn_pref*)malloc(sizeof(*pref));
-                pref->wire = wire;
-                pref->wire_len = wire_len;
-                SSL_CTX_set_alpn_select_cb(ctx,
-                    __glide_tls_server_alpn_select_cb, (void*)pref);
-            }
-        }
-
-        __glide_tls_sock s = socket(AF_INET, SOCK_STREAM, 0);
-        if (s == __GLIDE_TLS_INVALID) { SSL_CTX_free(ctx); return NULL; }
-        int one = 1;
-        setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char*)&one, sizeof(one));
-        struct sockaddr_in a;
-        memset(&a, 0, sizeof(a));
-        a.sin_family = AF_INET;
-        a.sin_port = htons((uint16_t)port);
-        a.sin_addr.s_addr = htonl(0);
-        if (bind(s, (struct sockaddr*)&a, sizeof(a)) != 0
-            || listen(s, 128) != 0) {
-            #ifdef _WIN32
-            closesocket(s);
-            #else
-            close(s);
-            #endif
-            SSL_CTX_free(ctx);
-            return NULL;
-        }
-        __glide_tls_listener* l = (__glide_tls_listener*)malloc(sizeof(__glide_tls_listener));
-        l->ctx = ctx; l->listen_fd = s;
-        return (void*)l;
-    }
-
-    // Cap SSL_accept's internal reads/writes so a silent client (slowloris
-    // probe or scanner mid-handshake disconnect) can't park the accept
-    // loop forever. Applied after `accept()` returns the fresh fd.
-    static void __glide_tls_set_handshake_timeout(__glide_tls_sock c, int secs) {
-        #ifdef _WIN32
-        DWORD ms = (DWORD)(secs * 1000);
-        setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, (const char*)&ms, sizeof(ms));
-        setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, (const char*)&ms, sizeof(ms));
-        #else
-        struct timeval tv;
-        tv.tv_sec = secs;
-        tv.tv_usec = 0;
-        setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-        setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-        #endif
-    }
-
-    // Block on accept; wrap the new socket in SSL and run SSL_accept.
-    // Returns a __glide_tls_handle (compatible with read/write/close)
-    // or NULL on accept/handshake failure.
-    static void* __glide_tls_accept(void* lp) {
-        __glide_tls_listener* l = (__glide_tls_listener*)lp;
-        struct sockaddr_storage src;
-        socklen_t slen = sizeof(src);
-        __glide_tls_sock c = accept(l->listen_fd, (struct sockaddr*)&src, &slen);
-        if (c == __GLIDE_TLS_INVALID) return NULL;
-        __glide_tls_set_handshake_timeout(c, 5);
-        SSL* ssl = SSL_new(l->ctx);
-        if (ssl == NULL) {
-            #ifdef _WIN32
-            closesocket(c);
-            #else
-            close(c);
-            #endif
-            return NULL;
-        }
-        SSL_set_fd(ssl, (int)c);
-        if (SSL_accept(ssl) <= 0) {
-            SSL_free(ssl);
-            #ifdef _WIN32
-            closesocket(c);
-            #else
-            close(c);
-            #endif
-            return NULL;
-        }
-        // Clear the handshake-time read/write timeouts now that the
-        // payload phase begins; the handler may legitimately keep a
-        // keep-alive connection idle for tens of seconds.
-        {
-            #ifdef _WIN32
-            DWORD zero = 0;
-            setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, (const char*)&zero, sizeof(zero));
-            setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, (const char*)&zero, sizeof(zero));
-            #else
-            struct timeval zero = { .tv_sec = 0, .tv_usec = 0 };
-            setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &zero, sizeof(zero));
-            setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &zero, sizeof(zero));
-            #endif
-        }
-        // Reuse the same handle struct as client-side. ctx pointer is
-        // shared with the listener — DON'T free it on stream close;
-        // null it out so __glide_tls_close skips SSL_CTX_free.
-        __glide_tls_handle* h = (__glide_tls_handle*)malloc(sizeof(__glide_tls_handle));
-        h->ctx = NULL;       // shared with listener; not freed by stream
-        h->ssl = ssl;
-        h->sock = c;
-        h->last_err[0] = 0;
-        return (void*)h;
-    }
-
-    // TCP-only accept — returns the raw socket as an i64 (or -1 on
-    // failure). Companion to __glide_tls_accept_attach below. Lets the
-    // caller offload SSL_accept to a worker pthread so the accept loop
-    // never blocks on a slow / silent handshake.
-    static int64_t __glide_tls_accept_raw(void* lp) {
-        __glide_tls_listener* l = (__glide_tls_listener*)lp;
-        struct sockaddr_storage src;
-        socklen_t slen = sizeof(src);
-        __glide_tls_sock c = accept(l->listen_fd, (struct sockaddr*)&src, &slen);
-        if (c == __GLIDE_TLS_INVALID) return (int64_t)-1;
-        return (int64_t)c;
-    }
-
-    // Run SSL_accept on a previously TCP-accepted fd, reusing the
-    // listener's SSL_CTX (shared cert/key/ALPN state). Returns a
-    // stream handle on success, NULL on failure. The fd is closed
-    // by this fn when the handshake fails.
-    static void* __glide_tls_accept_attach(void* lp, int64_t fd) {
-        __glide_tls_listener* l = (__glide_tls_listener*)lp;
-        __glide_tls_sock c = (__glide_tls_sock)fd;
-        __glide_tls_set_handshake_timeout(c, 5);
-        SSL* ssl = SSL_new(l->ctx);
-        if (ssl == NULL) {
-            #ifdef _WIN32
-            closesocket(c);
-            #else
-            close(c);
-            #endif
-            return NULL;
-        }
-        SSL_set_fd(ssl, (int)c);
-        if (SSL_accept(ssl) <= 0) {
-            SSL_free(ssl);
-            #ifdef _WIN32
-            closesocket(c);
-            #else
-            close(c);
-            #endif
-            return NULL;
-        }
-        // Clear the timeouts the same way __glide_tls_accept does.
-        {
-            #ifdef _WIN32
-            DWORD zero = 0;
-            setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, (const char*)&zero, sizeof(zero));
-            setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, (const char*)&zero, sizeof(zero));
-            #else
-            struct timeval zero = { .tv_sec = 0, .tv_usec = 0 };
-            setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &zero, sizeof(zero));
-            setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &zero, sizeof(zero));
-            #endif
-        }
-        __glide_tls_handle* h = (__glide_tls_handle*)malloc(sizeof(__glide_tls_handle));
-        h->ctx = NULL;
-        h->ssl = ssl;
-        h->sock = c;
-        h->last_err[0] = 0;
-        return (void*)h;
-    }
-
-    // Wrap an already-accepted plain socket in TLS for the server
-    // side. Used by STARTTLS upgrades on protocols (SMTP, IMAP,
-    // POP3, FTP) that negotiate plaintext first and promote on
-    // demand. `cert_path` + `key_path` are PEM files.
-    static void* __glide_tls_server_attach(int64_t fd,
-                                            const char* cert_path,
-                                            const char* key_path) {
-        __glide_tls_init();
-        SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
-        if (ctx == NULL) return NULL;
-        if (SSL_CTX_use_certificate_file(ctx, cert_path, SSL_FILETYPE_PEM) <= 0) {
-            SSL_CTX_free(ctx); return NULL;
-        }
-        if (SSL_CTX_use_PrivateKey_file(ctx, key_path, SSL_FILETYPE_PEM) <= 0) {
-            SSL_CTX_free(ctx); return NULL;
-        }
-        SSL* ssl = SSL_new(ctx);
-        if (ssl == NULL) { SSL_CTX_free(ctx); return NULL; }
-        SSL_set_fd(ssl, (int)fd);
-        if (SSL_accept(ssl) <= 0) {
-            SSL_free(ssl);
-            SSL_CTX_free(ctx);
-            return NULL;
-        }
-        // Reuse the same handle struct; ctx is owned by this stream
-        // (created fresh per upgrade, no shared listener context).
-        __glide_tls_handle* h = (__glide_tls_handle*)malloc(sizeof(__glide_tls_handle));
-        h->ctx = ctx; h->ssl = ssl; h->sock = (__glide_tls_sock)fd;
-        h->last_err[0] = 0;
-        return (void*)h;
-    }
-
-    static void __glide_tls_listener_close(void* lp) {
-        __glide_tls_listener* l = (__glide_tls_listener*)lp;
-        if (l == NULL) return;
-        #ifdef _WIN32
-        closesocket(l->listen_fd);
-        #else
-        close(l->listen_fd);
-        #endif
-        SSL_CTX_free(l->ctx);
-        free(l);
-    }
-
-    // Apply send + receive timeouts on the underlying TCP socket.
-    // OpenSSL doesn't have its own timer, but SSL_read/SSL_write
-    // bottom out in send/recv which honour SO_RCVTIMEO / SO_SNDTIMEO.
-    static void __glide_tls_set_timeout(void* hp, int ms) {
-        __glide_tls_handle* h = (__glide_tls_handle*)hp;
-        #ifdef _WIN32
-        DWORD v = (DWORD)ms;
-        setsockopt(h->sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&v, sizeof(v));
-        setsockopt(h->sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&v, sizeof(v));
-        #else
-        struct timeval tv;
-        tv.tv_sec = ms / 1000;
-        tv.tv_usec = (ms % 1000) * 1000;
-        setsockopt(h->sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-        setsockopt(h->sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-        #endif
-    }
-    #endif
-}
-
-extern fn __glide_tls_connect(family: i32, v4: i64, v6_hi: i64, v6_lo: i64, port: i32, hostname: string, verify: i32, min_proto: i32, alpn_csv: string) -> *void;
-
-extern fn __glide_tls_attach(fd: i64, hostname: string, verify: i32, min_proto: i32, alpn_csv: string) -> *void;
-
-extern fn __glide_tls_write(h: *void, data: string, n: i32) -> i64;
-
-extern fn __glide_tls_write_raw(h: *void, data: *void, n: i32) -> i64;
-
-extern fn __glide_tls_read(h: *void, buf: *void, max: i32) -> i64;
-
-extern fn __glide_tls_close(h: *void);
-
-extern fn __glide_tls_alpn(h: *void) -> string;
-
-extern fn __glide_tls_version(h: *void) -> i32;
-
-extern fn __glide_tls_cipher(h: *void) -> string;
-
-extern fn __glide_tls_set_timeout(h: *void, ms: i32);
-
-extern fn __glide_tls_listen(port: i32, cert_path: string, key_path: string, alpn_csv: string) -> *void;
-
-extern fn __glide_tls_accept(listener: *void) -> *void;
-
-extern fn __glide_tls_accept_raw(listener: *void) -> i64;
-
-extern fn __glide_tls_accept_attach(listener: *void, fd: i64) -> *void;
-
-extern fn __glide_tls_listener_close(listener: *void);
-
-extern fn __glide_tls_server_attach(fd: i64, cert_path: string, key_path: string) -> *void;
 
 /// Configuration for an outbound TLS connection.
 pub struct TlsConfig {
@@ -851,22 +114,14 @@ impl TlsConfig {
 }
 
 pub struct TlsStream {
-    pub handle: *void, // OpenSSL SSL* (backend 0)
-    pub backend: i32, // 0 = OpenSSL, 1 = Glide TLS 1.3, 2 = Glide TLS 1.2
+    pub backend: i32, // 1 = Glide TLS 1.3, 2 = Glide TLS 1.2
     pub gconn: *TlsConn, // pure-Glide TLS 1.3 connection (backend 1)
     pub gconn12: *Tls12Conn, // pure-Glide TLS 1.2 connection (backend 2)
-}
-
-// The pure-Glide TLS 1.3 backend is the default for verifying clients.
-// Set GLIDE_TLS_BACKEND=openssl to force the OpenSSL backend instead.
-fn _tls_use_glide() -> bool {
-    return !env_get("GLIDE_TLS_BACKEND").eq("openssl");
 }
 
 // Wrap a Glide TLS 1.3 TlsConn as a TlsStream (backend 1).
 fn _tls_wrap_glide(g: *TlsConn) -> *TlsStream {
     let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
-    s.handle = null;
     s.backend = 1;
     s.gconn = g;
     s.gconn12 = null as *Tls12Conn;
@@ -876,7 +131,6 @@ fn _tls_wrap_glide(g: *TlsConn) -> *TlsStream {
 // Wrap a Glide TLS 1.2 connection as a TlsStream (backend 2).
 fn _tls_wrap_glide12(g: *Tls12Conn) -> *TlsStream {
     let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
-    s.handle = null;
     s.backend = 2;
     s.gconn = null as *TlsConn;
     s.gconn12 = g;
@@ -975,58 +229,24 @@ impl TlsStream {
     /// }
     /// ```
     pub fn connect(host: string, port: i32, cfg: *TlsConfig) -> !*TlsStream {
-        // Pure-Glide TLS 1.3 backend (default). Handles verifying and
-        // insecure clients; the handshake runs either way, only chain
-        // validation is gated by cfg.verify.
-        if _tls_use_glide() {
-            let ra: !*Vector<*IpAddr> = resolve(host);
-            if !ra.ok { return err(ra.err); }
-            if ra.val.len() == 0 { return err("tls: no addresses for ".concat(host)); }
-            let sa: *SocketAddr = SocketAddr::new(ra.val.get(0), port);
-            let st: !*TcpStream = TcpStream::connect(sa);
-            if !st.ok { return err(st.err); }
-            let g: !*TlsConn = tls13_attach(st.val, host, _tls_alpn_vec(cfg.alpn), cfg.verify);
-            if g.ok { return ok(_tls_wrap_glide(g.val)); }
-            // TLS 1.3 failed (e.g. a 1.2-only server): reconnect and try 1.2.
-            let st2: !*TcpStream = TcpStream::connect(sa);
-            if !st2.ok { return err(st2.err); }
-            let g12: !*Tls12Conn = tls12_attach(st2.val, host, cfg.verify);
-            if !g12.ok { return err(g12.err); }
-            return ok(_tls_wrap_glide12(g12.val));
-        }
-        let r: !*Vector<*IpAddr> = resolve(host);
-        if !r.ok { return err(r.err); }
-        let ips: *Vector<*IpAddr> = r.val;
-        if ips.len() == 0 { return err("tls: no addresses for ".concat(host)); }
-        let last_err: string = "tls: connect failed";
-        let mut verify_int: i32 = 0;
-        if cfg.verify { verify_int = 1; }
-        for let i: i32 = 0; i < ips.len(); i++ {
-            let ip: *IpAddr = ips.get(i);
-            let mut family: i32 = 4;
-            let mut v4: i64 = 0;
-            let mut hi: i64 = 0;
-            let mut lo: i64 = 0;
-            if ip.is_v4() {
-                family = 4;
-                v4 = ip.v4 as i64;
-            } else {
-                family = 6;
-                hi = ip.v6_hi;
-                lo = ip.v6_lo;
-            }
-            let h: *void = __glide_tls_connect(family, v4, hi, lo, port, host, verify_int, cfg.min_proto, cfg.alpn);
-            if h != null {
-                let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
-                s.handle = h;
-                s.backend = 0;
-                s.gconn = null as *TlsConn;
-                s.gconn12 = null as *Tls12Conn;
-                s.gconn12 = null as *Tls12Conn;
-                return ok(s);
-            }
-        }
-        return err(last_err);
+        // Pure-Glide TLS 1.3 backend. Handles verifying and insecure clients;
+        // the handshake runs either way, only chain validation is gated by
+        // cfg.verify. Falls back to the pure-Glide TLS 1.2 path for 1.2-only
+        // servers.
+        let ra: !*Vector<*IpAddr> = resolve(host);
+        if !ra.ok { return err(ra.err); }
+        if ra.val.len() == 0 { return err("tls: no addresses for ".concat(host)); }
+        let sa: *SocketAddr = SocketAddr::new(ra.val.get(0), port);
+        let st: !*TcpStream = TcpStream::connect(sa);
+        if !st.ok { return err(st.err); }
+        let g: !*TlsConn = tls13_attach(st.val, host, _tls_alpn_vec(cfg.alpn), cfg.verify);
+        if g.ok { return ok(_tls_wrap_glide(g.val)); }
+        // TLS 1.3 failed (e.g. a 1.2-only server): reconnect and try 1.2.
+        let st2: !*TcpStream = TcpStream::connect(sa);
+        if !st2.ok { return err(st2.err); }
+        let g12: !*Tls12Conn = tls12_attach(st2.val, host, cfg.verify);
+        if !g12.ok { return err(g12.err); }
+        return ok(_tls_wrap_glide12(g12.val));
     }
 
     /// Wrap an already-connected `TcpStream` in TLS — runs the TLS
@@ -1047,27 +267,12 @@ impl TlsStream {
     /// if r.ok { defer r.val.close(); /* now encrypted */ }
     /// ```
     pub fn attach(tcp: *TcpStream, hostname: string, cfg: *TlsConfig) -> !*TlsStream {
-        if _tls_use_glide() {
-            // The Glide backend keeps the TcpStream wrapper (it reads/writes
-            // through it), unlike the OpenSSL path which surrenders the fd.
-            let g: !*TlsConn = tls13_attach(tcp, hostname, _tls_alpn_vec(cfg.alpn), cfg.verify);
-            if !g.ok { return err(g.err); }
-            return ok(_tls_wrap_glide(g.val));
-        }
-        let fd: i64 = tcp.fd;
-        // Hand the fd off to TLS. Free only the wrapper struct so the
-        // socket isn't closed underneath us.
-        free(tcp as *void);
-        let mut verify_int: i32 = 0;
-        if cfg.verify { verify_int = 1; }
-        let h: *void = __glide_tls_attach(fd, hostname, verify_int, cfg.min_proto, cfg.alpn);
-        if h == null { return err("tls: attach handshake failed"); }
-        let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
-        s.handle = h;
-        s.backend = 0;
-        s.gconn = null as *TlsConn;
-        s.gconn12 = null as *Tls12Conn;
-        return ok(s);
+        // The Glide backend keeps the TcpStream wrapper (it reads/writes
+        // through it). attach() speaks TLS 1.3 only — it cannot reconnect on
+        // an in-use socket to retry a lower version.
+        let g: !*TlsConn = tls13_attach(tcp, hostname, _tls_alpn_vec(cfg.alpn), cfg.verify);
+        if !g.ok { return err(g.err); }
+        return ok(_tls_wrap_glide(g.val));
     }
 
     /// Write `data`. Returns bytes written (>0) or err. May write less
@@ -1080,10 +285,7 @@ impl TlsStream {
     /// ```
     pub fn write(self, data: string) -> !i32 {
         if self.backend == 1 { return tls_write(self.gconn, data); }
-        if self.backend == 2 { return tls12_write(self.gconn12, data); }
-        let n: i64 = __glide_tls_write(self.handle, data, data.len());
-        if n <= 0 { return err("tls: write failed"); }
-        return ok(n as i32);
+        return tls12_write(self.gconn12, data);
     }
 
     /// Write every byte of `data`, looping on partial writes.
@@ -1122,23 +324,12 @@ impl TlsStream {
             }
             return ok(r.val);
         }
-        if self.backend == 2 {
-            let r: !string = tls12_read(self.gconn12, max);
-            if !r.ok {
-                if r.err.contains("closed") { return ok(""); }
-                return err(r.err);
-            }
-            return ok(r.val);
+        let r: !string = tls12_read(self.gconn12, max);
+        if !r.ok {
+            if r.err.contains("closed") { return ok(""); }
+            return err(r.err);
         }
-        let buf: *u8 = malloc(max) as *u8;
-        let n: i64 = __glide_tls_read(self.handle, buf as *void, max);
-        if n < 0 {
-            free(buf as *void);
-            return err("tls: read failed");
-        }
-        let s: string = _bytes_to_string(buf, n as i32);
-        free(buf as *void);
-        return ok(s);
+        return ok(r.val);
     }
 
     /// Read until the peer closes the connection. Useful for HTTP/1.x
@@ -1178,30 +369,20 @@ impl TlsStream {
     /// ```
     pub fn alpn(self) -> string {
         if self.backend == 1 { return self.gconn.alpn; }
-        if self.backend == 2 { return ""; } // 1.2 backend does not negotiate ALPN here
-        let s: string = __glide_tls_alpn(self.handle);
-        if s.len() == 0 { return ""; }
-        return s;
+        return ""; // 1.2 backend does not negotiate ALPN here
     }
 
-    /// `2` for TLS 1.2, `3` for TLS 1.3, etc. Approximate — derives
-    /// from OpenSSL's SSL_version raw value.
+    /// `2` for TLS 1.2, `3` for TLS 1.3.
     ///
     /// ```glide
     /// if stream.version() < 3 { eprintln("not TLS 1.3"); }
     /// ```
     pub fn version(self) -> i32 {
         if self.backend == 1 { return 3; } // Glide TLS 1.3
-        if self.backend == 2 { return 2; } // Glide TLS 1.2
-        let v: i32 = __glide_tls_version(self.handle);
-        // 0x0303 = TLS 1.2, 0x0304 = TLS 1.3
-        if v == 771 { return 2; }
-        if v == 772 { return 3; }
-        return 0;
+        return 2; // Glide TLS 1.2
     }
 
-    /// Negotiated cipher suite name (OpenSSL form, e.g.
-    /// `TLS_AES_256_GCM_SHA384`).
+    /// Negotiated cipher suite name (e.g. `TLS_AES_128_GCM_SHA256`).
     ///
     /// ```glide
     /// println!("cipher:", stream.cipher());
@@ -1211,34 +392,26 @@ impl TlsStream {
             if self.gconn.aead == 3 { return "TLS_CHACHA20_POLY1305_SHA256"; }
             return "TLS_AES_128_GCM_SHA256";
         }
-        if self.backend == 2 { return "TLS_ECDHE_AES_128_GCM_SHA256"; }
-        return __glide_tls_cipher(self.handle);
+        return "TLS_ECDHE_AES_128_GCM_SHA256";
     }
 
-    /// Apply read + write timeouts on the underlying TCP socket.
-    /// SSL_read/SSL_write inherit SO_RCVTIMEO / SO_SNDTIMEO.
+    /// No-op: the pure-Glide backends manage their own socket timeouts.
     ///
     /// ```glide
-    /// stream.set_timeout_ms(10000);   // 10s for reads and writes
+    /// stream.set_timeout_ms(10000);
     /// ```
     pub fn set_timeout_ms(self, ms: i32) {
-        if self.backend != 0 { return; } // no-op for the Glide backends
-        __glide_tls_set_timeout(self.handle, ms);
     }
 }
 
 /// TlsStream is a Stream — lets ws / http / h2 dispatch every transport
-/// through one `*dyn Stream` instead of an `is_tls` branch. The fd-surrender
-/// seam (`attach`) is unchanged; these just delegate to the SSL_* layer.
+/// through one `*dyn Stream` instead of an `is_tls` branch.
 /// read_bytes/write_bytes are binary-safe (unlike the string `read`/`write`,
 /// which truncate at NUL) — h2 / TLS records rely on that.
 impl Stream for TlsStream {
     fn read_bytes(self, buf: *u8, max: i32) -> !i32 {
         if self.backend == 1 { return tls_read_into(self.gconn, buf as *void, max); }
-        if self.backend == 2 { return tls12_read_into(self.gconn12, buf as *void, max); }
-        let n: i64 = __glide_tls_read(self.handle, buf as *void, max);
-        if n < 0 { return err("tls: read_bytes failed"); }
-        return ok(n as i32);
+        return tls12_read_into(self.gconn12, buf as *void, max);
     }
 
     fn write_bytes(self, buf: *u8, n: i32) -> !i32 {
@@ -1247,14 +420,9 @@ impl Stream for TlsStream {
             if !w.ok { return err(w.err); }
             return ok(n);
         }
-        if self.backend == 2 {
-            let w: !i32 = tls12_write(self.gconn12, _bytes_to_string(buf, n));
-            if !w.ok { return err(w.err); }
-            return ok(n);
-        }
-        let raw_n: i64 = __glide_tls_write_raw(self.handle, buf as *void, n);
-        if raw_n <= 0 { return err("tls: write_bytes failed"); }
-        return ok(raw_n as i32);
+        let w: !i32 = tls12_write(self.gconn12, _bytes_to_string(buf, n));
+        if !w.ok { return err(w.err); }
+        return ok(n);
     }
 
     fn close(self) {
@@ -1263,32 +431,25 @@ impl Stream for TlsStream {
             free(self as *void);
             return;
         }
-        if self.backend == 2 {
-            tls12_close(self.gconn12);
-            free(self as *void);
-            return;
-        }
-        __glide_tls_close(self.handle);
+        tls12_close(self.gconn12);
         free(self as *void);
     }
 }
 
-/// Server-side listener: holds the SSL_CTX with cert+key plus the
-/// underlying TCP listening socket. `accept` blocks for the next
-/// client and returns a TlsStream after the handshake succeeds.
+/// Server-side listener: holds the server identity (cert chain + key)
+/// plus the underlying TCP listening socket. `accept` blocks for the
+/// next client and returns a TlsStream after the handshake succeeds.
 pub struct TlsListener {
-    handle: *void, // OpenSSL SSL_CTX + socket (backend 0)
-    backend: i32, // 0 = OpenSSL, 1 = pure-Glide TLS 1.3
-    glisten: *TcpListener, // backend 1
-    identity: *ServerIdentity, // backend 1: cert chain + key
-    salpn: *Vector<string>, // backend 1: offered ALPN protocols
+    glisten: *TcpListener, // listening socket
+    identity: *ServerIdentity, // cert chain + key
+    salpn: *Vector<string>, // offered ALPN protocols
 }
 
 impl TlsListener {
     /// Bind on `0.0.0.0:port`, load `cert_path` (PEM cert + chain) and
     /// `key_path` (PEM private key), and start listening. On any I/O
-    /// or cert error returns `err` with a generic message — call
-    /// `openssl errstr` against the OpenSSL log if you need detail.
+    /// or cert error returns `err` with a message describing the
+    /// failing step (bind, PEM parse, or key/cert mismatch).
     ///
     /// ```glide
     /// let r: !*TlsListener = TlsListener::bind(443, "fullchain.pem", "privkey.pem");
@@ -1318,28 +479,28 @@ impl TlsListener {
     /// }
     /// ```
     pub fn bind_alpn(port: i32, cert_path: string, key_path: string, alpn_csv: string) -> !*TlsListener {
-        if _tls_use_glide() {
-            let idr: !*ServerIdentity = tls13_load_identity(cert_path, key_path);
-            if !idr.ok { return err(idr.err); }
-            let lr: !*TcpListener = TcpListener::bind(port);
-            if !lr.ok { return err(lr.err); }
-            let l: *TlsListener = malloc(sizeof(TlsListener)) as *TlsListener;
-            l.handle = null;
-            l.backend = 1;
-            l.glisten = lr.val;
-            l.identity = idr.val;
-            l.salpn = _tls_alpn_vec(alpn_csv);
-            return ok(l);
-        }
-        let h: *void = __glide_tls_listen(port, cert_path, key_path, alpn_csv);
-        if h == null { return err("tls_listener: bind/cert/key failure"); }
+        let idr: !*ServerIdentity = tls13_load_identity(cert_path, key_path);
+        if !idr.ok { return err(idr.err); }
+        let lr: !*TcpListener = TcpListener::bind(port);
+        if !lr.ok { return err(lr.err); }
         let l: *TlsListener = malloc(sizeof(TlsListener)) as *TlsListener;
-        l.handle = h;
-        l.backend = 0;
-        l.glisten = null as *TcpListener;
-        l.identity = null as *ServerIdentity;
-        l.salpn = null as *Vector<string>;
+        l.glisten = lr.val;
+        l.identity = idr.val;
+        l.salpn = _tls_alpn_vec(alpn_csv);
         return ok(l);
+    }
+
+    // Run the server-side handshake on `stream` (version-dispatched by peeking
+    // the ClientHello) using this listener's identity + ALPN. Shared by
+    // `accept` and `attach`.
+    fn _handshake(self, stream: *TcpStream) -> !*TlsStream {
+        let ch: string = _tls_read_record(stream)?;
+        if _tls_ch_offers_13(ch) {
+            let g: *TlsConn = tls13_server_handshake_buffered(stream, self.identity.cert_chain, self.identity.key, self.identity.is_rsa, self.salpn, ch)?;
+            return ok(_tls_wrap_glide(g));
+        }
+        let g12: *Tls12Conn = tls12_server_handshake(stream, self.identity.cert_chain, self.identity.key, self.identity.is_rsa, ch)?;
+        return ok(_tls_wrap_glide12(g12));
     }
 
     /// Wait for the next client; run TLS handshake; return a stream
@@ -1353,30 +514,14 @@ impl TlsListener {
     /// }
     /// ```
     pub fn accept(self) -> !*TlsStream {
-        if self.backend == 1 {
-            let stream: *TcpStream = self.glisten.accept()?;
-            // Peek the ClientHello to pick the protocol version, then hand
-            // the already-read bytes to the matching server handshake.
-            let ch: string = _tls_read_record(stream)?;
-            if _tls_ch_offers_13(ch) {
-                let g: *TlsConn = tls13_server_handshake_buffered(stream, self.identity.cert_chain, self.identity.key, self.identity.is_rsa, self.salpn, ch)?;
-                return ok(_tls_wrap_glide(g));
-            }
-            let g12: *Tls12Conn = tls12_server_handshake(stream, self.identity.cert_chain, self.identity.key, self.identity.is_rsa, ch)?;
-            return ok(_tls_wrap_glide12(g12));
-        }
-        let h: *void = __glide_tls_accept(self.handle);
-        if h == null { return err("tls_listener: accept/handshake failure"); }
-        let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
-        s.handle = h;
-        s.backend = 0;
-        s.gconn = null as *TlsConn;
-        s.gconn12 = null as *Tls12Conn;
-        return ok(s);
+        // Peek the ClientHello to pick the protocol version, then hand the
+        // already-read bytes to the matching server handshake.
+        let stream: *TcpStream = self.glisten.accept()?;
+        return self._handshake(stream);
     }
 
-    /// TCP-only accept. Returns the raw socket fd, leaving SSL_accept
-    /// for the caller (typically on a worker pthread via `attach()`).
+    /// TCP-only accept. Returns the raw socket fd, leaving the TLS
+    /// handshake for the caller (typically on a worker pthread via `attach()`).
     /// Splitting the two means the accept loop never blocks on a
     /// slow or silent TLS handshake — a single misbehaving client
     /// can no longer hold up every queued connection.
@@ -1393,33 +538,29 @@ impl TlsListener {
     /// }
     /// ```
     pub fn accept_raw(self) -> !i64 {
-        let fd: i64 = __glide_tls_accept_raw(self.handle);
-        if fd < 0 { return err("tls_listener: tcp accept failed"); }
+        let stream: *TcpStream = self.glisten.accept()?;
+        let fd: i64 = stream.fd;
+        // Hand the fd to the caller; free only the wrapper so the socket
+        // stays open for the deferred `attach` handshake.
+        free(stream as *void);
         return ok(fd);
     }
 
     /// Complete the TLS handshake on a fd previously returned by
-    /// `accept_raw`. Reuses the listener's certificate context. The fd
-    /// is closed automatically on handshake failure.
+    /// `accept_raw`. Reuses the listener's certificate identity.
     pub fn attach(self, fd: i64) -> !*TlsStream {
-        let h: *void = __glide_tls_accept_attach(self.handle, fd);
-        if h == null { return err("tls_listener: handshake failed on attached fd"); }
-        let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
-        s.handle = h;
-        s.backend = 0;
-        s.gconn = null as *TlsConn;
-        s.gconn12 = null as *Tls12Conn;
-        return ok(s);
+        let stream: *TcpStream = TcpStream::from_fd(fd);
+        return self._handshake(stream);
     }
 
-    /// Close the TLS listener (cert context + listening socket).
+    /// Close the TLS listener (its listening socket).
     ///
     /// ```glide
     /// let l: *TlsListener = TlsListener::bind(443, "cert.pem", "key.pem").val;
     /// defer l.close();
     /// ```
     pub fn close(self) {
-        __glide_tls_listener_close(self.handle);
+        self.glisten.close();
         free(self as *void);
     }
 }
@@ -1437,12 +578,15 @@ impl TlsListener {
 /// if r.ok { defer r.val.close(); /* communicate over TLS */ }
 /// ```
 pub fn tls_attach_server(conn_fd: i32, cert_path: string, key_path: string) -> !*TlsStream {
-    let h: *void = __glide_tls_server_attach(conn_fd as i64, cert_path, key_path);
-    if h == null { return err("tls: server attach handshake failed"); }
-    let s: *TlsStream = malloc(sizeof(TlsStream)) as *TlsStream;
-    s.handle = h;
-    s.backend = 0;
-    s.gconn = null as *TlsConn;
-    s.gconn12 = null as *Tls12Conn;
-    return ok(s);
+    let idr: !*ServerIdentity = tls13_load_identity(cert_path, key_path);
+    if !idr.ok { return err(idr.err); }
+    let id: *ServerIdentity = idr.val;
+    let stream: *TcpStream = TcpStream::from_fd(conn_fd as i64);
+    let ch: string = _tls_read_record(stream)?;
+    if _tls_ch_offers_13(ch) {
+        let g: *TlsConn = tls13_server_handshake_buffered(stream, id.cert_chain, id.key, id.is_rsa, null as *Vector<string>, ch)?;
+        return ok(_tls_wrap_glide(g));
+    }
+    let g12: *Tls12Conn = tls12_server_handshake(stream, id.cert_chain, id.key, id.is_rsa, ch)?;
+    return ok(_tls_wrap_glide12(g12));
 }
