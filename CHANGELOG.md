@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.9.1 — 2026-07-10
+
+Toolchain cleanup: with the stdlib linking no third-party C library, the
+release stops building, bundling, and bootstrapping through OpenSSL/ngtcp2/
+nghttp3 entirely. Nothing in the shipped toolchain touches them any more.
+
+- **Sysroots carry only the target's `libc/` tree** (musl / mingw crt +
+  libgcc) — the OpenSSL/ngtcp2/nghttp3 `include/`+`lib/` are gone. The
+  Linux sysroot dropped from ~11 MB to ~6 MB, and building it no longer
+  needs Docker (the container only ever built the dead lib stack); it's a
+  plain Alpine-APK fetch now. `tools/bundle/` is removed.
+- **Pure-Glide bootstrap seed.** The release publishes `glide-bootstrap-
+  <ver>.c` — the compiler's own emitted C — and bootstraps future releases
+  from it with a plain `cc`, no `-lssl -lcrypto` / `libssl-dev` / brew or
+  MSYS2 openssl on any runner.
+- macOS sysroot is now empty (native builds use the system SDK; cross-to-
+  macOS is unsupported), kept only for artifact symmetry.
+- No compiler or language changes — a from-source build of 0.9.1 is
+  behaviourally identical to 0.9.0.
+
 ## 0.9.0 — 2026-07-10
 
 Glide stops linking any third-party C library and starts carrying its own C

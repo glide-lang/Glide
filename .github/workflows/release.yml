@@ -5,12 +5,12 @@ name: release
 # the GitHub release for the tag.
 #
 # Two phases:
-#   1. `sysroots` — each runner builds the sysroot for its native triple
-#      (the only way to get a working static OpenSSL / ngtcp2 / nghttp3
-#      bundle for Windows + macOS without painful cross-compile tricks).
-#      Each sysroot is uploaded both as a release asset (so users can
-#      `glide target add <triple>`) AND as a workflow artifact so the
-#      bundle job below can pull all four in.
+#   1. `sysroots` — each runner builds the sysroot for its native triple.
+#      Post-0.9 the sysroot is just the target's libc/ tree (musl / mingw
+#      crt + libgcc); the stdlib links no third-party C lib, so no more
+#      OpenSSL/ngtcp2/nghttp3. Each sysroot is uploaded both as a release
+#      asset (so users can `glide target add <triple>`) AND as a workflow
+#      artifact so the bundle job below can pull all four in.
 #   2. `release` — each runner builds the small glide binary + the
 #      fully-self-contained bundle binary. The bundle has every sysroot
 #      + the Glide stdlib baked in, so `glide build`
@@ -59,18 +59,8 @@ jobs:
           msystem: UCRT64
           update: true
           install: >-
-            mingw-w64-ucrt-x86_64-openssl
-            mingw-w64-ucrt-x86_64-ngtcp2
-            mingw-w64-ucrt-x86_64-nghttp3
+            mingw-w64-ucrt-x86_64-gcc
             tar gzip
-
-      - name: Setup macOS toolchain (macOS)
-        if: matrix.os == 'macos-latest'
-        run: |
-          set -e
-          brew update >/dev/null
-          brew install openssl@3
-          brew install nghttp3 ngtcp2 || true
 
       - name: Resolve version
         id: ver
@@ -124,7 +114,6 @@ jobs:
           update: true
           install: >-
             mingw-w64-ucrt-x86_64-gcc
-            mingw-w64-ucrt-x86_64-openssl
             zip unzip tar gzip
 
       - name: Resolve version
@@ -141,24 +130,22 @@ jobs:
       - name: Bootstrap the compiler from the released C
         # Self-hosting: rebuild the compiler from its own emitted C rather than a
         # previous *binary* seed (which can't compile syntax newer than itself).
-        # The C is platform-independent, so every runner rebuilds it with its
-        # native cc + OpenSSL — no per-platform seed. Matches ci.yml. BOOT_VER is
-        # the release the C was emitted from.
+        # The C is platform-independent, so every runner rebuilds it with just
+        # its native cc — no OpenSSL (the 0.9.0 seed is pure-Glide) and no
+        # per-platform seed. BOOT_VER is the release the C was emitted from; it
+        # must be >= the first pure-Glide release (0.9.0).
         run: |
           set -e
-          BOOT_VER=0.8.0
+          BOOT_VER=0.9.0
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${BOOT_VER}"
           curl -fL -o glide-boot.c "${base}/glide-bootstrap-${BOOT_VER}.c"
           CF="-O2 -w -fwrapv -fno-omit-frame-pointer -Wno-error=implicit-function-declaration"
           if [ "${{ runner.os }}" = "Windows" ]; then
-            gcc glide-boot.c -o glide.exe $CF -lssl -lcrypto -lws2_32 -lmswsock -ldbghelp -lpsapi -lbcrypt -lcrypt32 -lpthread -lm
+            gcc glide-boot.c -o glide.exe $CF -lws2_32 -lmswsock -ldbghelp -lpsapi -lbcrypt -lcrypt32 -lpthread -lm
           elif [ "${{ runner.os }}" = "macOS" ]; then
-            brew install openssl@3 >/dev/null
-            SSL="$(brew --prefix openssl@3)"
-            clang glide-boot.c -o glide $CF -I"$SSL/include" -L"$SSL/lib" -lssl -lcrypto -lpthread -lm
+            clang glide-boot.c -o glide $CF -lpthread -lm
           else
-            sudo apt-get update && sudo apt-get install -y libssl-dev
-            cc glide-boot.c -o glide $CF -D_GNU_SOURCE -lssl -lcrypto -ldl -lpthread -lm
+            cc glide-boot.c -o glide $CF -D_GNU_SOURCE -ldl -lpthread -lm
           fi
 
       - name: Package small release artifact
@@ -226,9 +213,9 @@ jobs:
       - name: Install host sysroot for the bundle build
         run: |
           set -e
-          # Building the bundle binary compiles main.glide, which links
-          # openssl / ngtcp2 / nghttp3. The plug-and-play host-build
-          # path needs the host triple's sysroot installed in
+          # Building the bundle binary compiles main.glide; the plug-and-play
+          # host-build path promotes to the static-musl sysroot, so it needs
+          # the host triple's sysroot installed in
           # <home>/.glide/targets/ — otherwise it tries to fetch it from the
           # release page, which 404s because THIS workflow is what
           # publishes it. Stage it from the artifact we already have so the
@@ -260,6 +247,18 @@ jobs:
             ./glide build bootstrap/main.glide -o dist/bundle/glide
           fi
           ls -lh dist/bundle/
+
+      - name: Emit the bootstrap seed for the next release
+        if: matrix.name == 'linux-x86_64'
+        run: |
+          set -e
+          # The pure-Glide compiler's own emitted C. Future releases bootstrap
+          # from this (BOOT_VER) with a plain cc — no OpenSSL. It's platform-
+          # independent, so only one runner emits the canonical copy. `./glide`
+          # is the seed that just self-hosted this build; emitting through it
+          # gives HEAD's C.
+          ./glide emit bootstrap/main.glide > "dist/glide-bootstrap-${{ steps.ver.outputs.version }}.c"
+          wc -l "dist/glide-bootstrap-${{ steps.ver.outputs.version }}.c"
 
       - name: Package bundle release artifact
         run: |
@@ -298,4 +297,5 @@ jobs:
             dist/glide-sysroot-${{ matrix.triple }}-${{ steps.ver.outputs.version }}.tar.gz
             dist/glide-bundle-${{ matrix.name }}-${{ steps.ver.outputs.version }}.tar.gz
             dist/glide-bundle-${{ matrix.name }}-${{ steps.ver.outputs.version }}.zip
+            dist/glide-bootstrap-${{ steps.ver.outputs.version }}.c
           fail_on_unmatched_files: false

@@ -98,7 +98,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: dist/glide-sysroot-x86_64-linux-musl-ci.tar.gz
-          key: sysroot-v2-${{ matrix.triple }}-${{ hashFiles('tools/build_sysroot.sh', 'tools/bundle/linux-x86_64-musl/Dockerfile', 'tools/bundle/linux-x86_64-musl/build.sh') }}
+          key: sysroot-v2-${{ matrix.triple }}-${{ hashFiles('tools/build_sysroot.sh') }}
 
       - name: Build linux sysroot v2 (Docker)
         # Built in-workflow instead of `glide target add`: the published

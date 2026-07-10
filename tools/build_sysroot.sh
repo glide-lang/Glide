@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Build a cross-compile sysroot tarball for a given target.
 #
-# Sysroot v2 layout:
-#   include/ lib/    third-party static libs + headers (openssl, ngtcp2,
-#                    nghttp3) — same role as v1, consumed by the
-#                    -I/-L link assembly in bootstrap/main.glide.
+# Sysroot layout (post-0.9: no third-party C libs — the stdlib links none):
 #   libc/            the target's C library + startup files + libgcc, so
 #                    a host clang can cross-compile with
 #                    `--target=<triple> --sysroot=<sr>/libc -B<sr>/libc/gcc`.
 #                    linux: musl tree (libc/usr/{include,lib}) from Alpine
 #                    APKs; windows: mingw-w64 tree (libc/{include,lib})
 #                    from MSYS2 packages. macOS has no libc/ — that target
-#                    only builds natively on a Mac (Apple clang).
+#                    only builds natively on a Mac (Apple clang), so its
+#                    sysroot is empty (kept only for artifact symmetry).
+#   include/ lib/    empty now. Until 0.9 they carried openssl/ngtcp2/
+#                    nghttp3; the stdlib's pure-Glide TLS/crypto retired them.
 #
 # Users opt in via `glide target add`, which downloads the tarball off
 # the Glide release page into ~/.glide/targets/<triple>/.
@@ -33,9 +33,8 @@ set -e
 VERSION="${VERSION:-0.3.1}"
 TARGET=""
 
-# Alpine release the linux libc/ tree comes from. Must match the digest
-# pinned in tools/bundle/linux-x86_64-musl/Dockerfile — libc.a and the
-# lib stack should be built by the same musl generation.
+# Alpine release the linux libc/ tree (musl + libgcc) comes from. Pinned so
+# libc.a and the crt/libgcc it links against are the same musl generation.
 ALPINE_VER="${ALPINE_VER:-v3.20}"
 MUSL_VER="1.2.5-r3"
 GCC_APK_VER="13.2.1_git20240309-r1"
@@ -88,11 +87,10 @@ _fetch_checked() {
 }
 
 # -------------------------------------------------------------------------
-# Linux (musl): the lib stack (openssl 3.5 + ngtcp2/nghttp3, all
-# static) is built inside the pinned Alpine container — Alpine gcc IS a
-# native musl toolchain, no cross shims needed. The libc/ tree (musl
-# headers + crt + libc.a + libgcc) comes from pinned Alpine APKs, which
-# are plain tar.gz — no Alpine environment needed to extract them.
+# Linux (musl): just the libc/ tree (musl headers + crt + libc.a + libgcc)
+# from pinned Alpine APKs, which are plain tar.gz — no Alpine environment
+# and no Docker needed (the container only ever built the now-retired
+# openssl/ngtcp2/nghttp3 lib stack).
 # -------------------------------------------------------------------------
 
 _stage_linux_libc() {
@@ -133,32 +131,6 @@ _stage_linux_libc() {
 
 build_linux_musl() {
     local arch="$1"
-    command -v docker >/dev/null 2>&1 || {
-        echo "linux-musl sysroots are built in a pinned Alpine container — docker is required." >&2
-        exit 1
-    }
-
-    local img="glide-bundle-linux-musl-${arch}"
-    local bundle_out="${STAGING}/bundle"
-    mkdir -p "$bundle_out"
-    echo ">> Building the static lib stack in Docker (${arch})"
-    if [ "$arch" = "$(uname -m)" ] || { [ "$arch" = "x86_64" ] && [ "$(uname -m)" = "amd64" ]; }; then
-        docker build -t "$img" "$REPO_ROOT/tools/bundle/linux-x86_64-musl"
-        docker run --rm -v "$(pwd)/$bundle_out:/out" "$img"
-    else
-        # Cross-arch via buildx + qemu emulation. Slow but works on any
-        # x86_64 host with Docker.
-        local platform="linux/arm64"
-        [ "$arch" = "x86_64" ] && platform="linux/amd64"
-        docker buildx build --platform "$platform" -t "$img" --load \
-            "$REPO_ROOT/tools/bundle/linux-x86_64-musl"
-        docker run --rm --platform "$platform" -v "$(pwd)/$bundle_out:/out" "$img"
-    fi
-
-    echo ">> Assembling sysroot"
-    cp -r "$bundle_out"/include/. "${SYSROOT}/include/"
-    cp "$bundle_out"/lib/*.a "${SYSROOT}/lib/"
-
     _stage_linux_libc "$arch"
 }
 
@@ -174,39 +146,20 @@ build_windows_gnu() {
         exit 1
     fi
     # Try UCRT64 first (modern, what the dev install uses), then MINGW64.
+    # Detect via the mingw crt (libmingw32.a) — the sysroot ships only the
+    # libc/ tree now, no third-party libs.
     local prefix=""
     for cand in /ucrt64 /mingw64 /c/msys64/ucrt64 /c/msys64/mingw64; do
-        if [ -f "$cand/lib/libssl.a" ] && [ -d "$cand/include/openssl" ]; then
+        if [ -f "$cand/lib/libmingw32.a" ] && [ -d "$cand/include" ]; then
             prefix="$cand"; break
         fi
     done
     if [ -z "$prefix" ]; then
-        echo "windows-gnu: no MSYS2 prefix found with libssl.a + openssl/." >&2
-        echo "   install: pacman -S mingw-w64-ucrt-x86_64-openssl" >&2
+        echo "windows-gnu: no MSYS2 mingw prefix found (libmingw32.a)." >&2
+        echo "   install: pacman -S mingw-w64-ucrt-x86_64-gcc" >&2
         exit 1
     fi
     echo ">> Staging from MSYS2 prefix: $prefix"
-
-    cp -r "$prefix/include/openssl" "${SYSROOT}/include/"
-
-    cp "$prefix/lib/libssl.a" "${SYSROOT}/lib/"
-    cp "$prefix/lib/libcrypto.a" "${SYSROOT}/lib/"
-
-    # HTTP/3 stack — ship when MSYS2 has the static .a + headers. The
-    # ngtcp2_crypto_ossl variant is the one stdlib::http::h3 links
-    # against (the gnutls flavour exists in the same package set but
-    # we never call it). Sysroot stays minimal when these are absent.
-    if [ -d "$prefix/include/ngtcp2" ] && [ -f "$prefix/lib/libngtcp2.a" ]; then
-        cp -r "$prefix/include/ngtcp2" "${SYSROOT}/include/"
-        cp "$prefix/lib/libngtcp2.a" "${SYSROOT}/lib/"
-        if [ -f "$prefix/lib/libngtcp2_crypto_ossl.a" ]; then
-            cp "$prefix/lib/libngtcp2_crypto_ossl.a" "${SYSROOT}/lib/"
-        fi
-    fi
-    if [ -d "$prefix/include/nghttp3" ] && [ -f "$prefix/lib/libnghttp3.a" ]; then
-        cp -r "$prefix/include/nghttp3" "${SYSROOT}/include/"
-        cp "$prefix/lib/libnghttp3.a" "${SYSROOT}/lib/"
-    fi
 
     # libc/ tree: mingw-w64 headers + crt + winpthreads + libgcc so a
     # host clang on Linux/mac can cross-compile to windows-gnu
@@ -237,10 +190,11 @@ build_windows_gnu() {
 }
 
 # -------------------------------------------------------------------------
-# macOS: take static libs from Homebrew's openssl@3 + zlib. Must run on
-# a Mac of the matching arch (no cross-bottle for openssl static libs).
-# No libc/ tree — the macOS target only builds natively (Apple clang);
-# cross-compiling TO macOS is not supported.
+# macOS: nothing to stage. The target builds natively (Apple clang) against
+# the system SDK, cross-to-macOS is unsupported, and the stdlib links no
+# third-party C lib — so the sysroot is empty. Kept only so the release
+# still produces an `aarch64-macos-none` artifact (symmetry with the other
+# triples; `glide target add` and the bundle embed stay happy).
 # -------------------------------------------------------------------------
 build_macos() {
     local arch="$1"
@@ -248,25 +202,7 @@ build_macos() {
         echo "macos: only aarch64/arm64 is wired (Apple Silicon)" >&2
         exit 1
     fi
-    if [ "$(uname -s)" != "Darwin" ]; then
-        echo "macos sysroot must be built ON a Mac (uname -s = $(uname -s))" >&2
-        exit 1
-    fi
-
-    local openssl_dir
-    openssl_dir="$(brew --prefix openssl@3 2>/dev/null || true)"
-
-    if [ -z "$openssl_dir" ] || [ ! -d "$openssl_dir/include/openssl" ] || [ ! -f "$openssl_dir/lib/libssl.a" ]; then
-        echo "macos: openssl@3 not installed via brew or static libs missing" >&2
-        echo "   brew install openssl@3" >&2
-        exit 1
-    fi
-    echo ">> Staging from Homebrew: $openssl_dir"
-
-    cp -r "$openssl_dir/include/openssl" "${SYSROOT}/include/"
-
-    cp "$openssl_dir/lib/libssl.a" "${SYSROOT}/lib/"
-    cp "$openssl_dir/lib/libcrypto.a" "${SYSROOT}/lib/"
+    echo ">> macOS sysroot is empty (native build, no third-party libs)"
 }
 
 # -------------------------------------------------------------------------
