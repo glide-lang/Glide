@@ -87,6 +87,31 @@ fn _lit_text(e: *Expr) -> string {
     return "value";
 }
 
+// Resolve a struct-literal name to its declaration, preferring one from the
+// current file. A local `struct Pair(a, b)` shadows the builtin `Pair<K,V>`,
+// but find_top_decl returns the first match (builtins are injected first), so
+// the literal's fields would be checked against the wrong struct. Falls back
+// to the first match when nothing local collides.
+fn _find_struct_lit_decl(t: *Typer, stmts: *Vector<Stmt>, name: string) -> *Stmt {
+    if stmts == null { return null; }
+    let mut first: *Stmt = null;
+    for let i: i32 = 0; i < stmts.len(); i++ {
+        let s: Stmt = stmts.get(i);
+        if s.kind == ST_STRUCT && s.name.eq(name) {
+            if s.origin != null && t.current_origin != null && s.origin.eq(t.current_origin) {
+                let p: *Stmt = malloc(sizeof(Stmt)) as *Stmt;
+                *p = s;
+                return p;
+            }
+            if first == null {
+                first = malloc(sizeof(Stmt)) as *Stmt;
+                *first = s;
+            }
+        }
+    }
+    return first;
+}
+
 // Walk an expression; for every `Struct { field: value }` literal, flag
 // unknown field names and literal values whose type can't match the field.
 fn _struct_lit_check_expr(t: *Typer, stmts: *Vector<Stmt>, e: *Expr) {
@@ -95,7 +120,7 @@ fn _struct_lit_check_expr(t: *Typer, stmts: *Vector<Stmt>, e: *Expr) {
         // A qualified literal (`pkg::MyStruct { ... }`) arrives with the full
         // `pkg::MyStruct` name; strip the module prefix so the struct decl is
         // actually found and its fields get checked (else it was skipped silently).
-        let sd: *Stmt = find_top_decl(stmts, t._strip_mod_prefix(e.str_val));
+        let sd: *Stmt = _find_struct_lit_decl(t, stmts, t._strip_mod_prefix(e.str_val));
         if sd != null && sd.kind == ST_STRUCT && sd.struct_fields != null {
             let nf: i32 = e.field_names.len();
             for let i: i32 = 0; i < nf; i++ {
