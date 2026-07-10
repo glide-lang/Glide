@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.9.2 — 2026-07-10
+
+Fixes and a friendlier install.
+
+- **Release binaries report the right version.** The packaged small binary
+  was the bootstrap *seed* (the previous release's compiler), so it reported
+  the seed's version — a 0.9.1 install printed `glide 0.9.0`. The release now
+  self-hosts from HEAD before packaging, so both the small and bundle binaries
+  are the actual release compiler.
+- **A local struct shadowing a builtin generic type-checks correctly.** A
+  `struct Pair(a, b)` collided with the builtin `Pair<K, V>`: the struct-
+  literal check resolved to the builtin's fields and rejected valid code.
+  It now prefers the declaration from the current file.
+- **One-line install.** `curl … | bash` (Linux/macOS) and `irm … | iex`
+  (Windows) resolve and fetch the latest release automatically; the installers
+  no longer hardcode a version. `--bundle` / `-Bundle` installs the self-
+  contained build. The README is rewritten as the entry point.
+
 ## 0.9.1 — 2026-07-10
 
 Toolchain cleanup: with the stdlib linking no third-party C library, the
