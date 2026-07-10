@@ -1148,6 +1148,30 @@ fn _emit_unknown_type(t: *Typer, n: string, line: i32, col: i32) {
     }
 }
 
+// The `<T, U>` spelling for a generic struct, built from its recorded param
+// names — shown in the "missing type arguments" error so the fix is obvious.
+fn _generic_args_hint(t: *Typer, name: string) -> string {
+    if !t.struct_type_params.contains(name) { return "<T>"; }
+    let parts: *Vector<string> = t.struct_type_params.get(name).split(",");
+    let mut out: string = "<";
+    for let i: i32 = 0; i < parts.len(); i++ {
+        if i > 0 { out = out.concat(", "); }
+        out = out.concat(parts.get(i));
+    }
+    out = out.concat(">");
+    parts.free();
+    return out;
+}
+
+// How many type parameters a generic struct declares (0 for non-generic).
+fn _generic_param_count(t: *Typer, name: string) -> i32 {
+    if !t.struct_type_params.contains(name) { return 0; }
+    let parts: *Vector<string> = t.struct_type_params.get(name).split(",");
+    let n: i32 = parts.len();
+    parts.free();
+    return n;
+}
+
 // Recursively flag any unknown named type inside an annotation. `dyn`
 // and fn-pointer shapes are skipped — trait names + fn-shape params live
 // outside the struct/primitive registries, so checking them would
@@ -1167,6 +1191,13 @@ fn _check_type_known(t: *Typer, ty: *Type, line: i32, col: i32) {
     if ty.kind == TY_NAMED {
         if !_is_known_type_name(t, ty.name) {
             _emit_unknown_type(t, ty.name, pl, pc);
+        } else if t.struct_generic.contains(ty.name) && !_is_current_type_param(t, ty.name) {
+            // A generic struct named without its `<...>` (`LinkedList` for
+            // `struct LinkedList<T>`) type-checks as the bare name, but codegen
+            // has no monomorphization to reach for and drops the raw template
+            // name into C as an undeclared type. Require the arguments — the
+            // annotation-site mirror of `impl-missing-type-params`.
+            t.err_code_range(pl, pc, ty.name.len(), "missing-type-args", "generic type `".concat(ty.name).concat("` is missing its type arguments — write `").concat(ty.name).concat(_generic_args_hint(t, ty.name)).concat("`"));
         } else {
             // Known but not imported here: a real declared struct loaded via
             // some other file still needs its own import to be named.
@@ -1196,6 +1227,17 @@ fn _check_type_known(t: *Typer, ty: *Type, line: i32, col: i32) {
     if ty.kind == TY_GENERIC {
         if !ty.name.eq("chan") && !t.structs.contains(ty.name) && !_is_current_type_param(t, ty.name) {
             _emit_unknown_type(t, ty.name, pl, pc);
+        } else if t.struct_type_params.contains(ty.name) {
+            // Exact arity: `Box<i32, i32>` for `struct Box<T>` monomorphizes to
+            // a C name built from the wrong arg list and dies at cc. Only user
+            // generic structs are judged — builtins, `chan`, and type params
+            // aren't in struct_type_params, so they stay permissive.
+            let want_n: i32 = _generic_param_count(t, ty.name);
+            let got_n: i32 = if ty.args != null { ty.args.len() } else { 0 };
+            if want_n != got_n {
+                let noun: string = if want_n == 1 { " type argument" } else { " type arguments" };
+                t.err_code_range(pl, pc, ty.name.len(), "type-arg-arity", "generic type `".concat(ty.name).concat("` takes ").concat(int_to_str(want_n)).concat(noun).concat(" but got ").concat(int_to_str(got_n)));
+            }
         }
         if ty.args != null {
             for let i: i32 = 0; i < ty.args.len(); i++ {

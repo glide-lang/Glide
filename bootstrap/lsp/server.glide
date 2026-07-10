@@ -1421,6 +1421,15 @@ fn run_analysis_and_publish(uri: string, text: string, state: *LspState) {
     }
     let stmts: *Vector<Stmt> = Vector::new();
     let loaded: *HashMap<bool> = HashMap::new();
+    // The focused buffer is the authoritative copy of `path` — mark it loaded
+    // up front so neither the builtins auto-inject below nor a self/cross
+    // import re-reads it from disk. Those disk reads are HEADER-ONLY (method
+    // bodies are brace-skipped), so editing a file that lives in the injected
+    // set itself (`src/builtins/box.glide`) would otherwise get a second,
+    // body-less copy of every decl: `duplicate-definition` on the struct plus
+    // phantom `missing-return` on each method whose stripped body "reaches the
+    // end without returning".
+    if !path.eq("") { loaded.insert(path, true); }
     // Auto-inject src/builtins/ so hover/goto/completion see the same set
     // of primitives `glide build` does. src/stdlib/ modules have to be
     // pulled in via the user file's own `import` statements.
