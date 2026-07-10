@@ -184,11 +184,39 @@ jobs:
           tar -czf dist/src-${{ steps.ver.outputs.version }}.tar.gz src
           ls -lh dist/src-${{ steps.ver.outputs.version }}.tar.gz
 
+      - name: Download and stage zig for embedding
+        shell: bash
+        run: |
+          set -e
+          # The bundle binary embeds the zig toolchain for ITS host triple and
+          # uses it as the C backend, so a fresh install builds the emitted C
+          # with no system compiler. zig 0.14.1 names archives arch-first
+          # (`zig-x86_64-linux-...`) and expands to a dir of that same name.
+          ZIG_VER=0.14.1
+          VER="${{ steps.ver.outputs.version }}"
+          case "${{ matrix.triple }}" in
+            x86_64-linux-musl)   ZID="zig-x86_64-linux-${ZIG_VER}";   EXT=tar.xz ;;
+            aarch64-linux-musl)  ZID="zig-aarch64-linux-${ZIG_VER}";  EXT=tar.xz ;;
+            aarch64-macos-none)  ZID="zig-aarch64-macos-${ZIG_VER}";  EXT=tar.xz ;;
+            x86_64-windows-gnu)  ZID="zig-x86_64-windows-${ZIG_VER}"; EXT=zip ;;
+            *) echo "no zig mapping for ${{ matrix.triple }}"; exit 1 ;;
+          esac
+          curl -fL -o "zigdl.${EXT}" "https://ziglang.org/download/${ZIG_VER}/${ZID}.${EXT}"
+          rm -rf zigstage && mkdir -p zigstage
+          if [ "$EXT" = zip ]; then unzip -q "zigdl.${EXT}" -d zigstage; else tar -xf "zigdl.${EXT}" -C zigstage; fi
+          # Rename <ZID>/ to zig/ so the tarball's leading dir strips (strip-1)
+          # straight to ~/.glide/runtime/zig/ on extraction.
+          mv "zigstage/${ZID}" zigstage/zig
+          mkdir -p dist
+          tar -C zigstage -czf "dist/zig-${VER}.tar.gz" zig
+          ls -lh "dist/zig-${VER}.tar.gz"
+
       - name: Generate embedded blobs
         run: |
           VER="${{ steps.ver.outputs.version }}"
           bash tools/gen_embedded_blobs.sh \
             --src=dist/src-${VER}.tar.gz \
+            --zig=dist/zig-${VER}.tar.gz \
             --sysroot=dist/glide-sysroot-x86_64-linux-musl-${VER}.tar.gz \
             --sysroot=dist/glide-sysroot-aarch64-linux-musl-${VER}.tar.gz \
             --sysroot=dist/glide-sysroot-x86_64-windows-gnu-${VER}.tar.gz \
