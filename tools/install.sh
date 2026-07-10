@@ -13,22 +13,38 @@
 
 set -e
 
-VERSION="${VERSION:-0.7.0}"
+VERSION="${VERSION:-}"
 ARCHIVE=""
+FLAVOR="glide"          # the small binary; --bundle installs the self-contained one
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/share/glide}"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
-DOWNLOAD_URL_BASE="${DOWNLOAD_URL_BASE:-https://github.com/glide-lang/Glide/releases/download/v${VERSION}}"
+DOWNLOAD_URL_BASE="${DOWNLOAD_URL_BASE:-}"
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --archive) ARCHIVE="$2"; shift 2 ;;
         --version) VERSION="$2"; shift 2 ;;
+        --bundle) FLAVOR="glide-bundle"; shift ;;
         --install-dir) INSTALL_DIR="$2"; shift 2 ;;
         --bin-dir) BIN_DIR="$2"; shift 2 ;;
         --url-base) DOWNLOAD_URL_BASE="$2"; shift 2 ;;
         *) echo "unknown arg: $1" >&2; exit 1 ;;
     esac
 done
+
+# Resolve the latest release when no version was given (and we're not
+# installing a local archive): follow the releases/latest redirect, which
+# lands on .../releases/tag/vX.Y.Z — no API token, no rate limit.
+if [ -z "$VERSION" ] && [ -z "$ARCHIVE" ]; then
+    VERSION="$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+        https://github.com/glide-lang/Glide/releases/latest 2>/dev/null | sed 's#.*/tag/v##')"
+    if [ -z "$VERSION" ]; then
+        echo "could not resolve the latest version; pass --version X.Y.Z" >&2
+        exit 1
+    fi
+    echo ">> Latest release: v$VERSION"
+fi
+: "${DOWNLOAD_URL_BASE:=https://github.com/glide-lang/Glide/releases/download/v${VERSION}}"
 
 case "$(uname -s)" in
     Linux*)  OS=linux ;;
@@ -41,7 +57,7 @@ case "$(uname -m)" in
     *) echo "unsupported arch: $(uname -m)" >&2; exit 1 ;;
 esac
 
-NAME="glide-${OS}-${ARCH}-${VERSION}"
+NAME="${FLAVOR}-${OS}-${ARCH}-${VERSION}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 

@@ -11,20 +11,29 @@
 # user PATH (no admin needed).
 
 param(
-    [string]$Version = "0.2.0",
+    [string]$Version = "",
     [string]$Archive = "",
+    [switch]$Bundle,
     [string]$InstallDir = "$env:LOCALAPPDATA\Programs\Glide",
     [string]$DownloadUrlBase = ""
 )
+
+$ErrorActionPreference = "Stop"
+
+# Resolve the latest release when no version was given (and not installing a
+# local archive) via the GitHub API.
+if (-not $Version -and -not $Archive) {
+    $Version = (Invoke-RestMethod "https://api.github.com/repos/glide-lang/Glide/releases/latest").tag_name -replace '^v', ''
+    Write-Host ">> Latest release: v$Version"
+}
 
 if (-not $DownloadUrlBase) {
     $DownloadUrlBase = "https://github.com/glide-lang/Glide/releases/download/v$Version"
 }
 
-$ErrorActionPreference = "Stop"
-
+$Flavor = if ($Bundle) { "glide-bundle" } else { "glide" }
 if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { $Arch = "aarch64" } else { $Arch = "x86_64" }
-$Name = "glide-windows-$Arch-$Version"
+$Name = "$Flavor-windows-$Arch-$Version"
 
 # 1. Acquire the archive.
 $Tmp = New-Item -ItemType Directory -Path ([System.IO.Path]::GetTempPath() + [System.Guid]::NewGuid())
