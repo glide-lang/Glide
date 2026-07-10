@@ -44,10 +44,12 @@ triple_from_tarball() {
     local base
     base="$(basename "$1")"
     base="${base#glide-sysroot-}"
-    # Strip the trailing -<version>.tar.gz. Version is anything after the
-    # last `-` before `.tar.gz`.
     base="${base%.tar.gz}"
-    base="${base%-*}"
+    # Strip the trailing `-<version>`. The version begins with a digit and no
+    # triple segment does, so cut from the first `-<digit>` — this also handles
+    # a dashed pre-release version (`0.9.0-rc1`), which `${base%-*}` mangled
+    # into `x86_64-linux-musl-0.9.0` (an invalid C symbol: embedded dots).
+    base="$(echo "$base" | sed -E 's/-[0-9].*$//')"
     echo "$base"
 }
 
