@@ -148,6 +148,19 @@ jobs:
             cc glide-boot.c -o glide $CF -D_GNU_SOURCE -ldl -lpthread -lm
           fi
 
+      - name: Self-host - rebuild the compiler from HEAD sources
+        # The bootstrap above builds the SEED (BOOT_VER's compiler). Rebuild
+        # from THIS checkout so the packaged binary is the RELEASE compiler —
+        # right --version, plus any compiler change made since the seed. Both
+        # build_release.sh (small) and the bundle build package ./glide, so do
+        # it once here. Windows can't overwrite the running exe → temp + move.
+        run: |
+          set -e
+          if [ "${{ runner.os }}" = "Windows" ]; then EXE=.exe; else EXE=; fi
+          ./glide$EXE build bootstrap/main.glide -o glide_head$EXE
+          ./glide_head$EXE version
+          mv -f glide_head$EXE glide$EXE
+
       - name: Package small release artifact
         run: VERSION="${{ steps.ver.outputs.version }}" bash tools/build_release.sh
 
