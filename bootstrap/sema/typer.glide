@@ -649,6 +649,10 @@ pub struct Typer {
     // _simple_field_ty substitute a concrete receiver's args into the raw
     // template field type.
     pub struct_type_params: *HashMap<string>,
+    // Names that have a NON-generic struct declaration. Used to suppress the
+    // generic type-arg checks when such a name also collides with a same-named
+    // generic (a local `struct Pair(...)` over the builtin `Pair<K,V>`).
+    pub struct_nongeneric: *HashMap<bool>,
     // Opaque `extern type Foo;` names. Registered in `structs` too (so `*Foo`
     // resolves), but by-value uses and struct literals are rejected — the C
     // side owns the definition and Glide never knows the size.
@@ -1191,7 +1195,7 @@ fn _check_type_known(t: *Typer, ty: *Type, line: i32, col: i32) {
     if ty.kind == TY_NAMED {
         if !_is_known_type_name(t, ty.name) {
             _emit_unknown_type(t, ty.name, pl, pc);
-        } else if t.struct_generic.contains(ty.name) && !_is_current_type_param(t, ty.name) {
+        } else if t.struct_generic.contains(ty.name) && !t.struct_nongeneric.contains(ty.name) && !_is_current_type_param(t, ty.name) {
             // A generic struct named without its `<...>` (`LinkedList` for
             // `struct LinkedList<T>`) type-checks as the bare name, but codegen
             // has no monomorphization to reach for and drops the raw template
@@ -1227,11 +1231,13 @@ fn _check_type_known(t: *Typer, ty: *Type, line: i32, col: i32) {
     if ty.kind == TY_GENERIC {
         if !ty.name.eq("chan") && !t.structs.contains(ty.name) && !_is_current_type_param(t, ty.name) {
             _emit_unknown_type(t, ty.name, pl, pc);
-        } else if t.struct_type_params.contains(ty.name) {
+        } else if t.struct_type_params.contains(ty.name) && !t.struct_nongeneric.contains(ty.name) {
             // Exact arity: `Box<i32, i32>` for `struct Box<T>` monomorphizes to
             // a C name built from the wrong arg list and dies at cc. Only user
             // generic structs are judged — builtins, `chan`, and type params
-            // aren't in struct_type_params, so they stay permissive.
+            // aren't in struct_type_params, so they stay permissive. A name that
+            // ALSO has a non-generic decl (local struct shadowing a builtin
+            // generic) is skipped — the maps can't tell the two apart.
             let want_n: i32 = _generic_param_count(t, ty.name);
             let got_n: i32 = if ty.args != null { ty.args.len() } else { 0 };
             if want_n != got_n {
@@ -1429,6 +1435,7 @@ impl Typer {
         t.struct_field_types = HashMap::new();
         t.struct_generic = HashMap::new();
         t.struct_type_params = HashMap::new();
+        t.struct_nongeneric = HashMap::new();
         t.extern_types = HashMap::new();
         t.scope = scope;
         t.module_scope = mscope;
@@ -2213,6 +2220,14 @@ pub fn pre_register(t: *Typer, program: *Vector<Stmt>) {
                         }
                     }
                 }
+            } else {
+                // A non-generic struct name. Record it so the missing-type-args
+                // / type-arg-arity checks skip it even when a same-named GENERIC
+                // exists (a local `struct Pair(...)` shadowing the builtin
+                // `Pair<K,V>`): the name-keyed maps can't hold both, so the only
+                // sound move is to not flag a collided name. Order-independent —
+                // the set is complete before any annotation is checked.
+                t.struct_nongeneric.insert(s.name, true);
             }
             // Borrow rule: reject `&T` / `&mut T` in struct fields. They would
             // require lifetimes to be sound; Glide's design picks `*T` instead.
