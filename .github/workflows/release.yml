@@ -257,6 +257,11 @@ jobs:
           # independent, so only one runner emits the canonical copy. `./glide`
           # is the seed that just self-hosted this build; emitting through it
           # gives HEAD's C.
+          #
+          # Restore the checked-in (stub) embed.glide first: "Generate embedded
+          # blobs" rewrote it with the ~45MB zig + sysroots as string literals,
+          # and a seed carrying those would be hundreds of MB and pointless.
+          git checkout -- bootstrap/cli/embed.glide
           ./glide emit bootstrap/main.glide > "dist/glide-bootstrap-${{ steps.ver.outputs.version }}.c"
           wc -l "dist/glide-bootstrap-${{ steps.ver.outputs.version }}.c"
 
