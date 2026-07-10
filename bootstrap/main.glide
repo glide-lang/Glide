@@ -2641,9 +2641,22 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     // the host's sysroot is already installed (or auto-fetchable), route
     // the build through the cross-compile pipeline with the host triple.
     // That gives bare `glide build` the same fully-static, self-contained
-    // artefact a cross build produces — no system gcc / `apt install
-    // libssl-dev` / MSYS2 dependency. The trigger is `needs_any_lib`,
-    // so a lib-free program still goes through the cheap native-cc path.
+    // artefact a cross build produces — no system gcc / MSYS2 dependency.
+    //
+    // On Linux this is the DEFAULT (not just for lib-heavy programs): the
+    // host triple is `*-linux-musl`, so promotion links against the bundled
+    // static musl sysroot and the binary runs anywhere on that arch with no
+    // `.so` — not even a host glibc `libc.a`. Without the promotion a bare
+    // build falls to host-cc `-static` against the host's glibc, which needs
+    // `glibc-static` installed and inherits static-glibc's NSS/getaddrinfo
+    // caveats. (Until TLS/HTTP went pure-Glide the trigger was `needs_any_lib`
+    // — only OpenSSL/ngtcp2 builds promoted; every other program silently got
+    // the glibc path.) win/mac keep the `needs_any_lib`-only trigger: their
+    // host tier isn't musl (Windows mingw / macOS can't static at all), so a
+    // lib-free program there gains nothing from the cross pipeline. `--dynamic`
+    // opts a lib-free Linux build back out to the cheap host-cc path. The
+    // whole block still soft-fails to host-cc when clang or the sysroot is
+    // missing, so a clang-less box keeps building.
     //
     // Stored as `eff_target` because Glide's codegen emits param + same-
     // named local as two declarations in one C scope, which gcc rejects.
@@ -2660,7 +2673,11 @@ fn run_build_q(src_path: string, out_path: string, target: string, then_run: boo
     // tests: those were the only promoted test binaries.)
     let sanitized: bool = user_cflags.contains("-fsanitize") || user_ldflags.contains("-fsanitize");
     let sanitizer_veto: bool = sanitized && _target_os(_host_triple()).eq("linux");
-    if eff_target.eq("") && needs_any_lib && !sanitizer_veto {
+    // Linux promotes by default (for the static-musl artefact); `--dynamic`
+    // keeps the glibc host-cc path. win/mac still promote only for libs.
+    let host_is_linux: bool = _target_os(_host_triple()).eq("linux");
+    let linux_default_static: bool = host_is_linux && __glide_want_dynamic() == 0;
+    if eff_target.eq("") && (needs_any_lib || linux_default_static) && !sanitizer_veto {
         let host_triple: string = _host_triple();
         // Promote only when a backend can actually drive the promoted
         // build (the native host toolchain on win/mac, or clang against
