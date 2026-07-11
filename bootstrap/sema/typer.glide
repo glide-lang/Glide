@@ -3561,6 +3561,34 @@ fn check_fn(t: *Typer, s: *Stmt) {
 // matches the inner type, the fix is to wrap it in `some(...)` / `ok(...)`.
 // Returns the diagnostic code that tells the LSP which constructor to apply
 // (it builds the actual edit from source); "" when no wrap applies.
+// `some(v)` / `ok(v)` / `err(v)` whose target is `?Box<T>` / `!Box<T>` / `?!Box<T>`
+// and whose payload `v` is a bare `T` (not already a `Box<...>`) auto-boxes it:
+// rewrite the argument to `Box::new(v)` in place. Codegen then selects the
+// `_Box_` constructor and the mono pass instantiates `Box<T>::new` — mirroring
+// the plain `field: Box<T> = v` value->Box coercion. A no-op unless the shape
+// matches exactly, so `some(existing_box)` and non-Box options are untouched.
+fn _box_wrap_opt_ctor(t: *Typer, val: *Expr, want: *Type) {
+    if val == null || want == null { return; }
+    if want.kind != TY_OPTION && want.kind != TY_RESULT && want.kind != TY_OPT_RESULT { return; }
+    let inner: *Type = want.inner;
+    if inner == null || inner.name == null || !inner.name.eq("Box") { return; }
+    if val.kind != EX_CALL || val.lhs == null || val.lhs.kind != EX_IDENT || val.lhs.str_val == null { return; }
+    let cn: string = val.lhs.str_val;
+    if !cn.eq("some") && !cn.eq("ok") && !cn.eq("err") { return; }
+    if val.args == null || val.args.len() != 1 { return; }
+    let ap: *Expr = __glide_palloc(sizeof(Expr)) as *Expr;
+    *ap = val.args.get(0);
+    let at: *Type = infer_expr(t, ap);
+    if at != null && at.name != null && at.name.eq("Box") { return; }   // already a Box
+    let bp: *Expr = expr_path("Box", "new", val.line, val.column);
+    let ba: *Vector<Expr> = Vector::new();
+    ba.push(*ap);
+    let bc: *Expr = expr_call(bp, ba);
+    let na: *Vector<Expr> = Vector::new();
+    na.push(*bc);
+    val.args = na;
+}
+
 fn _wrap_ctor_code(expected: *Type, got: *Type) -> string {
     if expected == null || got == null { return ""; }
     if expected.inner == null { return ""; }
@@ -4266,6 +4294,9 @@ fn check_let_or_const(t: *Typer, s: *Stmt) {
         is_auto_owned = true;
     }
     if s.let_value != null {
+        // `let x: ?Box<T> = some(v)` (v : T) auto-boxes the payload before the
+        // value is typed, so the some/ok inner matches the Box target.
+        _box_wrap_opt_ctor(t, s.let_value, final_ty);
         let val_ty: *Type = infer_expr(t, s.let_value);
         // Move on rebind: `let b = a` where a is a struct VALUE or an owned
         // pointer (struct-lit, explicit, or call-result owned) moves a; reading a
@@ -4586,6 +4617,9 @@ fn check_return(t: *Typer, s: *Stmt) {
         let n: string = e.operand.str_val;
         t.err_code_range(e.line, e.column, _arg_span(e), "return-borrow", "cannot return a borrow of `".concat(n).concat("` — borrows flow into calls, never out (it would dangle); return `*T` from an allocation, or a value"));
     }
+    // `return some(v)` / `return ok(v)` where the fn returns `?Box<T>` / `!Box<T>`
+    // (v : T) auto-boxes the payload before the returned value is typed.
+    _box_wrap_opt_ctor(t, e, t.current_ret);
     let vt: *Type = infer_expr(t, e);
     if t.current_ret == null {
         // Underline the returned VALUE (the offending token), not the first
@@ -5277,6 +5311,12 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         t.addr_ctx = t.addr_ctx + 1;
         let lt: *Type = infer_expr(t, e.lhs);
         t.addr_ctx = t.addr_ctx - 1;
+        // `self.field = some(v)` where the field is `?Box<T>` (v : T) auto-boxes
+        // the payload before the RHS is typed. `infer_expr` defers field types
+        // to codegen (returns null), so fall back to the one-level field lookup.
+        let mut _wlt: *Type = lt;
+        if _wlt == null { _wlt = _simple_field_ty(t, e.lhs); }
+        _box_wrap_opt_ctor(t, e.rhs, _wlt);
         let rt: *Type = infer_expr(t, e.rhs);
         // Second-class borrows: storing a borrow into a place that outlives
         // the statement (field / index / deref target) is an escape. Two forms
