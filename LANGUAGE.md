@@ -181,19 +181,21 @@ moves when you transfer it, and it frees itself at the end of its scope. You
 never write `malloc` / `free` for the common case, and the compiler catches
 use-after-move and double-free at compile time.
 
-> **Known gaps (in progress).** The ownership *checks* above are enforced, but
-> the reclamation side is not complete yet. Today: `string` values are never
-> freed; a value whose ownership moved into a callee is not auto-freed there,
-> and a value returned by a callee is not auto-freed by the caller (a bare
-> `let v = make();` leaks); reassigning an owned binding does not free the old
-> value; a binding OF builtin-container type (`let b = a;` where `a` is a
-> `Vector`/`HashMap`) escapes move tracking, so alias-after-move and
-> reassignment leaks are not caught; and a borrow coerced to `*T` at a call
-> site can escape the borrow checker.
+> **What auto-drops, and what stays manual.** Reclamation now matches the
+> checks. A local owned value that doesn't escape its scope is freed
+> automatically: builtin `Vector` / `HashMap` / `string` (including ephemeral
+> `concat` / `substring` results and `Vector<string>` elements), and an owned
+> struct literal bound through a pointer (`let p: *Point = Point { ... }`).
+> Ownership moves on return / store / pass to a free-fn `*T` param, and the new
+> owner drops it; a bare `let v = make()` does not leak; reassigning an owned
+> binding frees the old value first; and a manual `free()` of a tracked binding
+> is deduplicated, not a double-free. Still manual: `ByteBuffer` / `Arena` / raw
+> `malloc` (you free them yourself), and a *user* struct bound as a plain
+> `let p: *T = ctor()` opts into auto-drop with the `let p* = ...` marker.
+> One known hole: a borrow coerced to `*T` in a call argument can still be
+> stored into a container and outlive its source.
 > Separately, `glide check` / `glide build` report diagnostics for the entry
-> file — latent errors inside imported files may not all surface yet. For
-> long-lived processes, prefer arenas or explicit `free()` on hot paths until
-> these land.
+> file — latent errors inside imported files may not all surface yet.
 
 ### stack values
 
