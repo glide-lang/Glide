@@ -76,6 +76,35 @@ pub fn expand_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
         }
         cleaned.push(s);
     }
+    // A selective import of a declarative macro (`import mod::{my_macro}`)
+    // must not trip the loader's symbol check. `expand_macros` strips the
+    // `macro` def above, before `build_visibility` runs, so the name would
+    // look "not declared in the module". Drop any imported item that names a
+    // `pub` macro defined in the imported module — the macro's visibility is
+    // enforced by the expander itself. (Proc-macro items are recognised by
+    // the loader via their `@proc_*` attribute and are left in place.)
+    for let ii: i32 = 0; ii < cleaned.len(); ii++ {
+        let mut imp: Stmt = cleaned.get(ii);
+        if imp.kind != ST_IMPORT || imp.imported_items == null { continue; }
+        let keep: *Vector<string> = Vector::new();
+        for let ij: i32 = 0; ij < imp.imported_items.len(); ij++ {
+            let item: string = imp.imported_items.get(ij);
+            let mut is_pub_macro: bool = false;
+            if static_macros.contains(item) {
+                let d: Stmt = static_macros.get(item);
+                if d.is_pub && d.origin != null && imp.import_path != null
+                    && (d.origin.eq(imp.import_path)
+                        || _module_leaf(_macro_module_of(d.origin)).eq(_import_leaf(imp.import_path))) {
+                    is_pub_macro = true;
+                }
+            }
+            if !is_pub_macro { keep.push(item); }
+        }
+        if keep.len() != imp.imported_items.len() {
+            if keep.len() == 0 { imp.imported_items = null; } else { imp.imported_items = keep; }
+            cleaned.set(ii, imp);
+        }
+    }
     // Pre-pass: register PMK_FN_AST proc macros so `name!(args)` calls
     // can dispatch through them during the macro_rules pass. PMK_ATTR
     // and PMK_DERIVE are picked up by expand_proc_macros after.
