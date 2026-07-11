@@ -134,17 +134,21 @@ pub fn expand_macros(program: *Vector<Stmt>) -> *Vector<Stmt> {
         if leaf.eq("") { continue; }
         file_imports.insert(s.origin.concat("\n").concat(leaf), true);
     }
-    let mut fn_ast_interp: *Interp = null;
+    // Always build the interp so macro-visibility resolution has the call
+    // file's origin (`macro_cur_origin`) plus the import/collision maps, even
+    // in a program that only uses declarative macros. `register_fns` / program
+    // — needed to RUN a proc-macro body in the interpreter — are wired only
+    // when there actually is a function-like proc-macro.
+    let saved_arena: *void = __glide_palloc_get();
+    __glide_palloc_set(null);
+    let fn_ast_interp: *Interp = Interp::new();
     if has_fn_ast {
-        let saved_arena: *void = __glide_palloc_get();
-        __glide_palloc_set(null);
-        fn_ast_interp = Interp::new();
         fn_ast_interp.register_fns(cleaned);
         fn_ast_interp.program = cleaned;
-        fn_ast_interp.macro_name_mods = name_mods;
-        fn_ast_interp.macro_file_imports = file_imports;
-        __glide_palloc_set(saved_arena);
     }
+    fn_ast_interp.macro_name_mods = name_mods;
+    fn_ast_interp.macro_file_imports = file_imports;
+    __glide_palloc_set(saved_arena);
     expand_in_program(cleaned, static_macros, type_macros, proc_registry, fn_ast_interp);
     if fn_ast_interp != null && fn_ast_interp.diagnostics.len() > 0 {
         for let i: i32 = 0; i < fn_ast_interp.diagnostics.len(); i++ {
@@ -1156,6 +1160,15 @@ fn try_expand_call(call: *Expr, sm: *HashMap<Stmt>, tm: *Vector<TypeMacro>, pr: 
         // Body-less stub (`macro name!(matchers);`) — declared for docs / LSP
         // only. Skip expansion so codegen's native handling can fire.
         if def.then_body == null { return null; }
+        // Visibility: a `macro` defined in ANOTHER file must be `pub` to be
+        // used here. Same-file macros (private or not) are always in scope.
+        // Report a positioned error but still expand, so there is no confusing
+        // downstream `unknown-macro` cascade layered on top of it.
+        if it != null && it.macro_cur_origin != null && def.origin != null
+            && !def.origin.eq(it.macro_cur_origin) && !def.is_pub {
+            pass_diag(call.line, call.column, 1, "private-macro",
+                "macro `".concat(call.str_val).concat("!` is private to its defining file — mark it `pub macro` to use it from another file"));
+        }
         let no_recv: *Expr = null;
         return expand_with_def_recv(call, &def, no_recv);
     }
