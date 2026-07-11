@@ -5229,6 +5229,28 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         return inner;
     }
     if e.kind == EX_ASSIGN {
+        // `v[i] = x` where the container defines both `index` and `set(i, x)`
+        // dispatches to `set` (the write dual of `[]`->`index`). Rewrite to
+        // `v.set(i, x)` in place BEFORE the LHS index would otherwise be
+        // rewritten to `v.index(i)`. A struct without these keeps raw
+        // pointer-store semantics (the manual layer: `p[i] = x`).
+        if e.op_code == OP_ASSIGN && e.lhs != null && e.lhs.kind == EX_INDEX
+            && e.lhs.lhs != null && e.lhs.rhs != null && e.lhs.rhs.kind != EX_RANGE {
+            let _wb: *Type = strip_ptr(infer_expr(t, e.lhs.lhs));
+            if _wb != null && (_wb.kind == TY_NAMED || _wb.kind == TY_GENERIC)
+                && _wb.name != null && t.fns.contains(_wb.name.concat("_index"))
+                && t.fns.contains(_wb.name.concat("_set")) {
+                let _sm: *Expr = expr_member(e.lhs.lhs, "set");
+                _sm.line = e.line; _sm.column = e.column;
+                let _sa: *Vector<Expr> = Vector::new();
+                _sa.push(*e.lhs.rhs);
+                _sa.push(*e.rhs);
+                let _sc: *Expr = expr_call(_sm, _sa);
+                _sc.line = e.line; _sc.column = e.column;
+                *e = *_sc;
+                return infer_expr(t, e);
+            }
+        }
         // `c = ...` writes c, so clear any moved/consumed state on it first (the
         // LHS is a write target; c is valid again afterward). Avoids a false
         // use-after-move when reassigning a previously-moved variable.
@@ -6199,6 +6221,24 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         let _u5: *Type = infer_expr(t, e.rhs);
         if _u4 != null && _u4.kind == TY_SLICE {
             return _u4.inner; // slice[i] -> element type
+        }
+        // `[]` on a struct that defines an `index` method dispatches to it
+        // (like `+`->`add`, `<`->`cmp`), so `v[i]` is element access. Rewrite
+        // the node into `v.index(i)` in place and reuse method-call inference +
+        // codegen — a generic element type (`Vector<i32>` -> `i32`) resolves for
+        // free. A struct pointer WITHOUT an `index` method keeps raw pointer
+        // indexing (the manual layer: `p[i]` over a `malloc`'d `*T`).
+        let _ib: *Type = strip_ptr(_u4);
+        if _ib != null && (_ib.kind == TY_NAMED || _ib.kind == TY_GENERIC)
+            && _ib.name != null && t.fns.contains(_ib.name.concat("_index")) {
+            let _mem: *Expr = expr_member(e.lhs, "index");
+            _mem.line = e.line; _mem.column = e.column;
+            let _ia: *Vector<Expr> = Vector::new();
+            _ia.push(*e.rhs);
+            let _ic: *Expr = expr_call(_mem, _ia);
+            _ic.line = e.line; _ic.column = e.column;
+            *e = *_ic;
+            return infer_expr(t, e);
         }
         return null; // Need element type. Defer.
     }

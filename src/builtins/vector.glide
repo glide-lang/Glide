@@ -143,6 +143,13 @@ impl<T> Vector<T> {
         return self.data[i];
     }
 
+    /// Backs the `[]` index operator: `v[i]` desugars to `v.index(i)`, the same
+    /// way `a + b` desugars to `a.add(b)`. Element access, **no bounds check**
+    /// (like `get`); for a checked read take a slice first (`v.as_slice()[i]`).
+    fn index(self, i: i32) -> T {
+        return self.data[i];
+    }
+
     /// Overwrite the element at index `i`. **No bounds check** - writing
     /// past `len()` is undefined behaviour.
     ///
