@@ -197,9 +197,16 @@ pub struct Interp {
     //  - macro_file_imports: set of "<origin>\n<module-leaf>" pairs — does
     //    that file import that module (so a bare call can pick the imported
     //    one). Stays null outside the proc-macro pass.
+    //  - macro_sel_imports: "<origin>\n<macro-name>" — that file selectively
+    //    imported that macro (`import mod::{name}`).
+    //  - macro_wild_imports: "<origin>\n<module-leaf>" — that file wildcard-
+    //    imported that module (`import mod::*`). Together they gate whether a
+    //    cross-file `pub` macro is in scope (a plain `import mod;` is neither).
     pub macro_cur_origin: string,
     pub macro_name_mods: *HashMap<string>,
     pub macro_file_imports: *HashMap<bool>,
+    pub macro_sel_imports: *HashMap<bool>,
+    pub macro_wild_imports: *HashMap<bool>,
 }
 
 impl Interp {
@@ -225,6 +232,8 @@ impl Interp {
         it.macro_cur_origin = "";
         it.macro_name_mods = null;
         it.macro_file_imports = null;
+        it.macro_sel_imports = null;
+        it.macro_wild_imports = null;
         return it;
     }
 
