@@ -1,0 +1,51 @@
+import stdlib::testing::*;
+import stdlib::utf16::*;
+
+c_raw! {
+#include <stdint.h>
+static int wide_probe(uint16_t *text) {
+    return text[0] == 233 && text[1] == 0;
+}
+}
+extern fn wide_probe(text: *u16) -> i32;
+
+fn test_ascii_utf16_z() -> i32 {
+    let r: !*WideString = WideString::from_utf8("Hello");
+    assert!(r.is_ok());
+    let wide: *WideString = r.unwrap();
+    defer wide.free();
+    assert_eq!(wide.len, 5);
+    assert_eq!(wide.as_ptr()[0] as i32, 72);
+    assert_eq!(wide.as_ptr()[4] as i32, 111);
+    assert_eq!(wide.as_ptr()[5] as i32, 0);
+    return 0;
+}
+
+fn test_bmp_and_supplementary_codepoints() -> i32 {
+    let r: !*WideString = WideString::from_utf8("é中👋");
+    assert!(r.is_ok());
+    let wide: *WideString = r.unwrap();
+    defer wide.free();
+    assert_eq!(wide.len, 4);
+    assert_eq!(wide.data[0] as i32, 233);
+    assert_eq!(wide.data[1] as i32, 20013);
+    assert_eq!(wide.data[2] as i32, 55357); // high surrogate for U+1F44B
+    assert_eq!(wide.data[3] as i32, 56395); // low surrogate
+    assert_eq!(wide.data[4] as i32, 0);
+    return 0;
+}
+
+fn test_embedded_nul_is_rejected() -> i32 {
+    let r: !*WideString = WideString::from_utf8("a\x00b");
+    assert!(!r.is_ok());
+    return 0;
+}
+
+fn test_wide_pointer_ffi() -> i32 {
+    let r: !*WideString = WideString::from_utf8("é");
+    assert!(r.is_ok());
+    let wide: *WideString = r.unwrap();
+    defer wide.free();
+    assert_eq!(wide_probe(wide.as_ptr()), 1);
+    return 0;
+}

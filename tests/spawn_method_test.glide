@@ -1,0 +1,59 @@
+import stdlib::testing::*;
+
+struct Worker {
+    out: chan<i32>,
+    value: i32,
+}
+
+impl Worker {
+    fn run(self) {
+        let out: chan<i32> = self.out;
+        let value: i32 = self.value;
+        free(self as *void);
+        out.send(value);
+    }
+}
+
+// Worker.run takes ownership after spawn and releases this raw allocation.
+@allow("unfreed-alloc")
+fn new_worker(out: chan<i32>, value: i32) -> *Worker {
+    let w: *Worker = malloc(sizeof(Worker)) as *Worker;
+    w.out = out;
+    w.value = value;
+    return w;
+}
+
+struct Holder {
+    worker: *Worker,
+}
+
+fn test_spawn_method() -> i32 {
+    let c: chan<i32> = make_chan(1);
+    let w: *Worker = new_worker(c, 7);
+    spawn w.run();
+    let got: i32 = c.recv();
+    assert_eq!(got, 7);
+    c.close();
+    return 0;
+}
+
+fn test_spawn_thread_method() -> i32 {
+    let c: chan<i32> = make_chan(1);
+    let w: *Worker = new_worker(c, 11);
+    spawn_thread w.run();
+    let got: i32 = c.recv();
+    assert_eq!(got, 11);
+    c.close();
+    return 0;
+}
+
+fn test_method_on_field_receiver() -> i32 {
+    let c: chan<i32> = make_chan(1);
+    let w: *Worker = new_worker(c, 13);
+    let holder: Holder = Holder { worker: w };
+    spawn holder.worker.run();
+    let got: i32 = c.recv();
+    assert_eq!(got, 13);
+    c.close();
+    return 0;
+}

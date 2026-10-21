@@ -4555,9 +4555,49 @@ fn check_spawn(t: *Typer, s: *Stmt) {
     if s.expr_value == null { return; }
     let call: *Expr = s.expr_value;
     let _ret: *Type = infer_expr(t, call);
-    if call.args == null { return; }
     let mut kind: string = "spawn";
     if s.is_spawn_thread { kind = "spawn_thread"; }
+    // A method call needs a concrete free-function target before codegen's
+    // spawn-stub pre-pass. Capture `self` as argument zero so the existing
+    // stub handles it just like `spawn T_method(p)`.
+    if call.kind == EX_CALL && call.lhs != null && call.lhs.kind == EX_MEMBER
+        && call.lhs.lhs != null {
+        let receiver: *Expr = call.lhs.lhs;
+        let mut recv_ty: *Type = infer_expr(t, receiver);
+        if recv_ty == null { recv_ty = _simple_field_ty(t, receiver); }
+        let base: *Type = strip_ptr(recv_ty);
+        let method: string = call.lhs.field;
+        if base == null || base.kind != TY_NAMED || base.name == null
+            || method == null || method.eq("") {
+            t.err_code_range(call.line, call.column, 1, "spawn-method-receiver", "cannot resolve a concrete method receiver for `".concat(kind).concat("`; bind it to a named type first"));
+            return;
+        }
+        let name: string = base.name.concat("_").concat(method);
+        if !t.fns.contains(name) {
+            t.err_code_range(call.line, call.column, 1, "spawn-method-receiver", "cannot resolve `".concat(kind).concat("` target `").concat(name).concat("`"));
+            return;
+        }
+        let sig: FnSig = t.fns.get(name);
+        if sig.params == null || sig.params.len() == 0 {
+            t.err_code_range(call.line, call.column, 1, "spawn-method-receiver", "method `".concat(method).concat("` has no `self` parameter"));
+            return;
+        }
+        let self_param: Param = sig.params.get(0);
+        if !type_eq(self_param.ty, recv_ty) {
+            t.err_code_range(call.line, call.column, 1, "spawn-method-receiver", "`".concat(kind).concat("` must capture `self` by its declared type `").concat(type_to_string(self_param.ty)).concat("`; receiver has type `").concat(type_to_string(recv_ty)).concat("`"));
+            return;
+        }
+        let captured: *Vector<Expr> = Vector::new();
+        captured.push(*receiver);
+        if call.args != null {
+            for let ai: i32 = 0; ai < call.args.len(); ai++ {
+                captured.push(call.args.get(ai));
+            }
+        }
+        call.lhs = expr_ident(name, call.lhs.line, call.lhs.column);
+        call.args = captured;
+    }
+    if call.args == null { return; }
     for let i: i32 = 0; i < call.args.len(); i++ {
         let a: Expr = call.args.get(i);
         // A spawned task may run after this frame returns, so a borrow of a
@@ -5173,6 +5213,12 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         // overlap/alias checks judge it. Suppress the read-under-&mut check
         // while inferring the operand.
         let _is_addr_of: bool = e.op_code == UN_ADDR || e.op_code == UN_ADDR_MUT;
+        // Index inference can rewrite `v[i]` into `v.index(i)`. Keep its
+        // original base so the place check below still sees the index.
+        let mut _borrow_index_base: *Expr = null;
+        if _is_addr_of && e.operand != null && e.operand.kind == EX_INDEX {
+            _borrow_index_base = e.operand.lhs;
+        }
         if _is_addr_of { t.addr_ctx = t.addr_ctx + 1; }
         let inner: *Type = infer_expr(t, e.operand);
         if _is_addr_of { t.addr_ctx = t.addr_ctx - 1; }
@@ -5205,8 +5251,8 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
             // *Vector<T>) has no place to point at — indexing a container
             // desugars to `.get(i)`, which returns a COPY. Raw pointers and
             // slices index real memory and stay borrowable.
-            if e.operand != null && e.operand.kind == EX_INDEX && e.operand.lhs != null {
-                let _ib: *Type = strip_ptr(infer_expr(t, e.operand.lhs));
+            if _borrow_index_base != null {
+                let _ib: *Type = strip_ptr(infer_expr(t, _borrow_index_base));
                 if _ib != null && _ib.kind == TY_GENERIC {
                     t.err_code_range(e.line, e.column, _arg_span(e), "borrow-vector-element", "cannot borrow a container element — indexing yields a copy, not a place; read with `.get(i)`, write back with `.set(i, v)`");
                 }
@@ -5316,6 +5362,21 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         // to codegen (returns null), so fall back to the one-level field lookup.
         let mut _wlt: *Type = lt;
         if _wlt == null { _wlt = _simple_field_ty(t, e.lhs); }
+        // Diagnose a bare node before the optional Box auto-wrap rewrites it.
+        // The field requires Box<Node>, while the source supplies Node.
+        if _wlt != null && _wlt.kind == TY_OPTION && _wlt.inner != null
+            && _wlt.inner.kind == TY_GENERIC && _wlt.inner.name != null
+            && _wlt.inner.name.eq("Box") && e.rhs != null
+            && e.rhs.kind == EX_CALL && e.rhs.lhs != null
+            && e.rhs.lhs.kind == EX_IDENT && e.rhs.lhs.str_val != null
+            && e.rhs.lhs.str_val.eq("some") && e.rhs.args != null
+            && e.rhs.args.len() == 1 {
+            let _bare_node: Expr = e.rhs.args.get(0);
+            if _bare_node.kind == EX_STRUCT_LIT && _bare_node.str_val != null
+                && !_bare_node.str_val.eq("Box") {
+                t.err_code_range(_bare_node.line, _bare_node.column, _bare_node.str_val.len(), "wrapper-inner-mismatch", "`some(...)` here must wrap `".concat(type_to_string(_wlt.inner)).concat("`, but the value is a `").concat(_bare_node.str_val).concat("` literal — box the node: `some(Box::new(v))`") );
+            }
+        }
         _box_wrap_opt_ctor(t, e.rhs, _wlt);
         let rt: *Type = infer_expr(t, e.rhs);
         // Second-class borrows: storing a borrow into a place that outlives
@@ -5501,7 +5562,11 @@ pub fn infer_expr(t: *Typer, e: *Expr) -> *Type {
         // recv() return type so subsequent let-init inferences fire.
         if e.lhs != null && e.lhs.kind == EX_MEMBER && e.lhs.lhs != null {
             let mname: string = e.lhs.field;
-            let recv_ty: *Type = infer_expr(t, e.lhs.lhs);
+            let mut recv_ty: *Type = infer_expr(t, e.lhs.lhs);
+            // Plain field access is intentionally deferred by infer_expr.
+            // Method checks still need its declared type to validate arity,
+            // argument types, and the implicit self parameter.
+            if recv_ty == null { recv_ty = _simple_field_ty(t, e.lhs.lhs); }
             // Use-after-free: `<ident>.free()` consumes the receiver.
             // Mark AFTER recv_ty was read so the receiver's own EX_IDENT
             // check doesn't fire on this very call.

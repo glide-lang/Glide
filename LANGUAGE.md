@@ -664,6 +664,22 @@ c_raw! {
 extern fn now_ticks() -> i32;
 ```
 
+For Win32 functions that take `LPCWSTR`, `stdlib::utf16::WideString`
+converts Glide's UTF-8 `string` to a NUL-terminated UTF-16 buffer. Keep the
+wrapper alive for the duration of the call and release it afterward:
+
+```glide
+import stdlib::utf16::*;
+
+let text: *WideString = WideString::from_utf8("Olá 👋")?;
+defer text.free();
+// Pass text.as_ptr() to a Win32 FFI shim expecting a UTF-16 pointer.
+```
+
+When the shim includes `<windows.h>`, cast its `uint16_t*` argument to
+`LPCWSTR` inside C instead of redeclaring `MessageBoxW` with a different
+prototype.
+
 ## memory layout and ABI
 
 Glide compiles to C99 + pthread. Structs follow the C ABI: same layout as the
